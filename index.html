@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>厂商留库数据提交系统</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #f5f6fa; color: #333; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .card { background: #fff; border-radius: 8px; padding: 24px; box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 16px; }
+  h1, h2 { margin-bottom: 16px; }
+  h2 { font-size: 18px; }
+  input, select, textarea { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; margin-bottom: 12px; }
+  button { background: #1677ff; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  button:hover { background: #0958d9; }
+  button.secondary { background: #fff; color: #1677ff; border: 1px solid #1677ff; }
+  button.danger { background: #ff4d4f; }
+  button.small { padding: 4px 10px; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #eee; padding: 8px; text-align: left; }
+  th { background: #fafafa; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 180px; }
+  .msg { padding: 10px; border-radius: 4px; margin-bottom: 12px; }
+  .msg.ok { background: #f6ffed; color: #389e0d; border: 1px solid #b7eb8f; }
+  .msg.err { background: #fff2f0; color: #cf1322; border: 1px solid #ffccc7; }
+  .nav { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .nav button { background: #fff; color: #333; border: 1px solid #ddd; }
+  .nav button.active { background: #1677ff; color: #fff; border-color: #1677ff; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; border-bottom: 1px solid #eee; padding-bottom: 8px; }
+  .tabs button { background: transparent; color: #666; border: none; padding: 8px 14px; border-radius: 4px; }
+  .tabs button.active { background: #1677ff; color: #fff; }
+  .stat { display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; }
+  .stat.ok { background: #f6ffed; color: #389e0d; }
+  .stat.no { background: #fff2f0; color: #cf1322; }
+  .scroll { max-height: 400px; overflow: auto; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div id="app"></div>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
