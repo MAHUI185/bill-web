@@ -11,6 +11,7 @@ export async function renderAdmin(view, context) {
         <button data-t="progress" class="active">提报进度</button>
         <button data-t="bills">单据管理</button>
         <button data-t="vendors">厂商管理</button>
+        <button data-t="admins">管理员管理</button>
         <button data-t="base">基础数据</button>
         <button data-t="rules">提报规则</button>
         <button data-t="batches">导出批次</button>
@@ -36,6 +37,7 @@ async function renderTab(key) {
     if (key === 'progress') return renderProgress(v)
     if (key === 'bills') return renderBills(v)
     if (key === 'vendors') return renderVendors(v)
+    if (key === 'admins') return renderAdmins(v)
     if (key === 'base') return renderBase(v)
     if (key === 'rules') return renderRules(v)
     if (key === 'batches') return renderBatches(v)
@@ -103,12 +105,16 @@ async function renderBills(v) {
       <h2>Excel 导入单据</h2>
       <div class="row">
         <select id="imp-type">
-          <option value="in">入库单（VMI入库/DSP入库）</option>
-          <option value="out">出库单（VMI出库/DSP出库）</option>
+          <option value="vmi_in">VMI入库</option>
+          <option value="dsp_in">DSP入库</option>
+          <option value="vmi_out">VMI出库</option>
+          <option value="dsp_out">DSP出库</option>
         </select>
         <input id="imp-file" type="file" accept=".xlsx,.xls" />
         <button id="btn-import">开始导入</button>
+        <button type="button" class="secondary" id="btn-show-rule">查看填写规则</button>
       </div>
+      <div id="rule-display" style="display:none;margin-top:12px;padding:12px;background:#fafafa;border-radius:4px;white-space:pre-wrap;font-size:13px;line-height:1.8;"></div>
       <div id="import-msg"></div>
     </div>
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
@@ -137,16 +143,49 @@ async function renderBills(v) {
       </div>
     </div>`
 
+  // 查看规则
+  document.getElementById('btn-show-rule').onclick = async () => {
+    const type = document.getElementById('imp-type').value
+    const { data } = await ctx.supabase.from('import_rule')
+      .select('rule_text').eq('import_type', type).maybeSingle()
+    const el = document.getElementById('rule-display')
+    if (el.style.display === 'none') {
+      el.textContent = data?.rule_text || '暂无规则说明'
+      el.style.display = 'block'
+    } else {
+      el.style.display = 'none'
+    }
+  }
+
+  // 导入
   document.getElementById('btn-import').onclick = async () => {
     const file = document.getElementById('imp-file').files[0]
     if (!file) return document.getElementById('import-msg').innerHTML = ctx.msg('请选择文件', false)
-    const sheetType = document.getElementById('imp-type').value
+    const importType = document.getElementById('imp-type').value
     document.getElementById('import-msg').innerHTML = ctx.msg('导入中...', true)
     try {
       const buf = await file.arrayBuffer()
       const wb = XLSX.read(buf)
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+      // 按 Sheet 名匹配
+      const sheetMap = {
+        vmi_in: 'VMI入库', dsp_in: 'DSP入库',
+        vmi_out: 'VMI出库', dsp_out: 'DSP出库'
+      }
+      const sheetName = wb.SheetNames.find(n => n === sheetMap[importType]) ||
+                        wb.SheetNames.find(n => {
+                          const isOut = importType.endsWith('_out')
+                          return isOut ? (n.includes('出库') && !n.includes('说明'))
+                                       : (n.includes('入库') && !n.includes('说明'))
+                        }) || wb.SheetNames[0]
+      const ws = wb.Sheets[sheetName]
+      // 跳过第 3 行注释
+      const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false })
+      const rows = rawRows.filter((r, idx) => {
+        if (idx === 1) return false
+        const key = String(r['来源单号'] || r['配单类型'] || '')
+        if (key.includes('如上') || key.includes('固定') || key.includes('说明')) return false
+        return true
+      })
       const { data: { session } } = await ctx.supabase.auth.getSession()
       const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/import-bills`, {
         method: 'POST',
@@ -155,7 +194,7 @@ async function renderBills(v) {
           'Authorization': `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
-          sheet_type: sheetType,
+          import_type: importType,
           rows,
           operator_name: ctx.currentProfile?.vendor_name || 'admin'
         })
@@ -177,6 +216,7 @@ async function renderBills(v) {
     }
   }
 
+  // 导出
   document.getElementById('btn-export').onclick = async () => {
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/export-bills`, {
@@ -204,6 +244,7 @@ async function renderBills(v) {
     document.getElementById('export-msg').innerHTML = ctx.msg('导出成功', true)
   }
 
+  // 查询
   const search = async () => {
     let q = ctx.supabase.from('bill_order').select('*').order('id', { ascending: false }).limit(200)
     const kw = document.getElementById('b-search').value.trim()
@@ -339,6 +380,129 @@ async function renderVendors(v) {
   })
 }
 
+// ================= 3.5 管理员管理 =================
+async function renderAdmins(v) {
+  const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
+  const { data: admins } = await ctx.supabase.from('admin_users').select('*').order('created_at', { ascending: false })
+
+  v.innerHTML = `
+    <div class="card" style="box-shadow:none;padding:0 0 16px;">
+      <h2>创建管理员</h2>
+      <div class="row">
+        <input id="ad-login" placeholder="登录名（英文）*" />
+        <input id="ad-name" placeholder="姓名 *" />
+        <input id="ad-phone" placeholder="手机号" />
+        <input id="ad-pwd" placeholder="初始密码 *" />
+      </div>
+      <div class="row">
+        <select id="ad-role">
+          <option value="admin">管理员</option>
+          <option value="assistant">助理</option>
+          <option value="super_admin">超级管理员</option>
+        </select>
+        <select id="ad-wh" multiple style="height:80px;">
+          ${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}
+        </select>
+      </div>
+      <button id="btn-create-admin">创建管理员</button>
+      <div id="admin-create-msg"></div>
+    </div>
+    <div class="card" style="box-shadow:none;padding:0;">
+      <h2>管理员列表（${(admins||[]).length}）</h2>
+      <div class="scroll">
+        <table>
+          <tr><th>姓名</th><th>手机</th><th>角色</th><th>创建时间</th><th>操作</th></tr>
+          <tbody>${(admins||[]).map(a => `<tr>
+            <td>${a.name || ''}</td>
+            <td>${a.phone || ''}</td>
+            <td>${a.role === 'super_admin' ? '超管' : a.role === 'admin' ? '管理员' : '助理'}</td>
+            <td>${a.created_at ? new Date(a.created_at).toLocaleString() : ''}</td>
+            <td>
+              <button class="small secondary" data-act="role" data-id="${a.id}" data-role="${a.role}">改角色</button>
+              <button class="small secondary" data-act="pwd" data-id="${a.id}">重置密码</button>
+              <button class="small danger" data-act="del" data-id="${a.id}" data-name="${a.name||''}">删除</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`
+
+  document.getElementById('btn-create-admin').onclick = async () => {
+    const login = document.getElementById('ad-login').value.trim()
+    const name = document.getElementById('ad-name').value.trim()
+    const phone = document.getElementById('ad-phone').value.trim()
+    const pwd = document.getElementById('ad-pwd').value
+    const role = document.getElementById('ad-role').value
+    const whSel = Array.from(document.getElementById('ad-wh').selectedOptions).map(o => o.value)
+
+    if (!login || !name || !pwd) {
+      return document.getElementById('admin-create-msg').innerHTML = ctx.msg('登录名、姓名、密码必填', false)
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(login)) {
+      return document.getElementById('admin-create-msg').innerHTML = ctx.msg('登录名只能用字母、数字、下划线', false)
+    }
+
+    const { data: { session } } = await ctx.supabase.auth.getSession()
+    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-admin`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify({
+        login_name: login, password: pwd, name, phone, role,
+        warehouse_codes: whSel
+      })
+    })
+    const json = await res.json()
+    if (res.ok) {
+      document.getElementById('admin-create-msg').innerHTML = ctx.msg(
+        `创建成功，登录邮箱：${json.email}`, true)
+      renderTab('admins')
+    } else {
+      document.getElementById('admin-create-msg').innerHTML = ctx.msg(json.error, false)
+    }
+  }
+
+  v.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.id
+      const act = b.dataset.act
+      if (act === 'role') {
+        const input = prompt('输入新角色：super_admin / admin / assistant', b.dataset.role)
+        if (!input) return
+        if (!['super_admin','admin','assistant'].includes(input)) return alert('角色不合法')
+        const { error } = await ctx.supabase.from('admin_users').update({ role: input }).eq('id', id)
+        alert(error ? error.message : '已修改')
+        if (!error) renderTab('admins')
+      }
+      if (act === 'pwd') {
+        const pwd = prompt('输入新密码（至少 6 位）')
+        if (!pwd || pwd.length < 6) return alert('密码太短')
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/reset-password`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({ user_id: id, new_password: pwd })
+        })
+        alert(res.ok ? '重置成功' : '重置失败：' + await res.text())
+      }
+      if (act === 'del') {
+        if (id === ctx.currentUser.id) return alert('不能删除自己')
+        if (!confirm(`确定删除管理员「${b.dataset.name}」？`)) return
+        const { error } = await ctx.supabase.from('admin_users').delete().eq('id', id)
+        if (error) return alert(error.message)
+        await ctx.supabase.from('vendor_profile').delete().eq('id', id)
+        alert('已删除')
+        renderTab('admins')
+      }
+    }
+  })
+}
+
 // ================= 4. 基础数据 =================
 async function renderBase(v) {
   v.innerHTML = `
@@ -348,6 +512,7 @@ async function renderBase(v) {
       <button data-t="store">门店</button>
       <button data-t="mode">物流方式</button>
       <button data-t="product">商品主数据</button>
+      <button data-t="map">仓位映射</button>
     </div>
     <div id="base-view"></div>`
   document.querySelectorAll('#base-tabs button').forEach(b => {
@@ -368,6 +533,7 @@ async function renderBaseSub(key) {
   if (key === 'store') return renderStore(v)
   if (key === 'mode') return renderMode(v)
   if (key === 'product') return renderProduct(v)
+  if (key === 'map') return renderMap(v)
 }
 
 async function renderWh(v) {
@@ -586,6 +752,41 @@ async function renderProduct(v) {
   })
 }
 
+async function renderMap(v) {
+  const { data } = await ctx.supabase.from('location_warehouse_map').select('*').order('location_code')
+  v.innerHTML = `
+    <div class="row">
+      <input id="mp-loc" placeholder="仓位代码 * 如 01" />
+      <input id="mp-wh" placeholder="仓库代码 * 如 2608" />
+      <input id="mp-name" placeholder="仓库名称 如 济南冻仓" />
+      <button id="btn-mp-add">新增</button>
+    </div>
+    <div id="mp-msg"></div>
+    <table><tr><th>仓位代码</th><th>仓库代码</th><th>仓库名称</th><th>状态</th><th>操作</th></tr>
+      <tbody>${(data||[]).map(r=>`<tr>
+        <td>${r.location_code}</td><td>${r.warehouse_code}</td><td>${r.warehouse_name||''}</td>
+        <td>${r.status===1?'启用':'停用'}</td>
+        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+      </tr>`).join('')}</tbody></table>`
+  document.getElementById('btn-mp-add').onclick = async () => {
+    const { error } = await ctx.supabase.from('location_warehouse_map').insert({
+      location_code: document.getElementById('mp-loc').value.trim(),
+      warehouse_code: document.getElementById('mp-wh').value.trim(),
+      warehouse_name: document.getElementById('mp-name').value.trim() || null
+    })
+    document.getElementById('mp-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    if (!error) renderBaseSub('map')
+  }
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除？')) return
+      const { error } = await ctx.supabase.from('location_warehouse_map').delete().eq('id', b.dataset.del)
+      if (error) return alert(error.message)
+      renderBaseSub('map')
+    }
+  })
+}
+
 // ================= 5. 提报规则 =================
 async function renderRules(v) {
   v.innerHTML = `
@@ -737,18 +938,78 @@ async function renderBatches(v) {
 
 // ================= 7. 操作日志 =================
 async function renderLogs(v) {
-  const { data } = await ctx.supabase.from('operation_log').select('*').order('id', { ascending: false }).limit(200)
+  const { data: ops } = await ctx.supabase.from('operation_log')
+    .select('*').order('id', { ascending: false }).limit(200)
+  const { data: edits } = await ctx.supabase.from('vendor_edit_log')
+    .select('*').order('id', { ascending: false }).limit(200)
+
   v.innerHTML = `
-    <div class="scroll">
-      <table><tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th><th>详情</th></tr>
-        <tbody>${(data||[]).map(r=>`<tr>
-          <td>${new Date(r.created_at).toLocaleString()}</td>
-          <td>${r.operator_name||''}</td>
-          <td>${r.action}</td>
-          <td>${r.target||''}</td>
-          <td style="font-size:11px;">${JSON.stringify(r.detail||{})}</td>
-        </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody></table>
-    </div>`
+    <div class="tabs" id="log-tabs">
+      <button data-t="op" class="active">操作日志</button>
+      <button data-t="edit">厂商修改记录</button>
+    </div>
+    <div id="log-view"></div>`
+
+  const renderOp = () => {
+    document.getElementById('log-view').innerHTML = `
+      <div class="scroll">
+        <table><tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th><th>详情</th></tr>
+          <tbody>${(ops||[]).map(r=>`<tr>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+            <td>${r.operator_name||''}</td>
+            <td>${r.action}</td>
+            <td>${r.target||''}</td>
+            <td style="font-size:11px;">${JSON.stringify(r.detail||{})}</td>
+          </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody></table>
+      </div>`
+  }
+
+  const renderEdit = () => {
+    document.getElementById('log-view').innerHTML = `
+      <div class="scroll">
+        <table><tr><th>时间</th><th>单据ID</th><th>厂编</th><th>修改字段</th><th>操作</th></tr>
+          <tbody>${(edits||[]).map(r=>`<tr>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+            <td>${r.bill_id}</td>
+            <td>${r.vendor_code||''}</td>
+            <td style="font-size:11px;">${(r.changed_fields||[]).join(', ')}</td>
+            <td><button class="small secondary" data-detail="${r.id}">详情</button></td>
+          </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody></table>
+      </div>`
+
+    document.querySelectorAll('[data-detail]').forEach(btn => {
+      btn.onclick = () => {
+        const id = Number(btn.dataset.detail)
+        const r = (edits||[]).find(x => x.id === id)
+        if (!r) return
+        const before = r.before_data || {}
+        const after = r.after_data || {}
+        const fields = r.changed_fields || []
+        let html = `<div class="card" style="margin-top:12px;"><h2>修改详情 #${r.bill_id}</h2><table>
+          <tr><th>字段</th><th>修改前</th><th>修改后</th></tr>`
+        fields.forEach(f => {
+          html += `<tr>
+            <td>${f}</td>
+            <td style="color:#cf1322;">${JSON.stringify(before[f] ?? '')}</td>
+            <td style="color:#389e0d;">${JSON.stringify(after[f] ?? '')}</td>
+          </tr>`
+        })
+        html += `</table></div>`
+        document.getElementById('log-view').insertAdjacentHTML('beforeend', html)
+      }
+    })
+  }
+
+  document.querySelectorAll('#log-tabs button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#log-tabs button').forEach(x => x.classList.remove('active'))
+      b.classList.add('active')
+      if (b.dataset.t === 'op') renderOp()
+      else renderEdit()
+    }
+  })
+
+  renderOp()
 }
 
 // ================= 8. 系统配置 =================
