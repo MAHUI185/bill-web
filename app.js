@@ -185,6 +185,7 @@ async function renderFill(view) {
 
   function renderInTable() {
     const tbody = document.getElementById('in-body')
+    if (!tbody) return
     tbody.innerHTML = inRows.map((r, i) => `<tr>
       <td><input data-i="${i}" data-f="source_no" value="${r.source_no}" style="width:120px;margin:0;" /></td>
       <td>
@@ -240,6 +241,7 @@ async function renderFill(view) {
 
   function renderOutTable() {
     const tbody = document.getElementById('out-body')
+    if (!tbody) return
     tbody.innerHTML = outRows.map((r, i) => {
       const autoSource = (r.owner_code && r.pick_date)
         ? r.owner_code + r.pick_date.replace(/-/g, '')
@@ -300,6 +302,7 @@ async function renderFill(view) {
 
   function renderPreview() {
     const box = document.getElementById('preview-box')
+    if (!box) return
     const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
     const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
     box.innerHTML = `
@@ -330,25 +333,30 @@ async function renderFill(view) {
       </div>`
   }
 
-  document.getElementById('btn-add-in').onclick = () => {
+  const btnAddIn = document.getElementById('btn-add-in')
+  if (btnAddIn) btnAddIn.onclick = () => {
     inRows.push(newInRow())
     renderInTable()
     renderPreview()
   }
-  document.getElementById('btn-add-out').onclick = () => {
+
+  const btnAddOut = document.getElementById('btn-add-out')
+  if (btnAddOut) btnAddOut.onclick = () => {
     outRows.push(newOutRow())
     renderOutTable()
     renderPreview()
   }
 
-  document.getElementById('btn-clear-all').onclick = () => {
+  const btnClear = document.getElementById('btn-clear-all')
+  if (btnClear) btnClear.onclick = () => {
     if (!confirm('确定清空所有已填内容？')) return
     inRows = [newInRow()]
     outRows = [newOutRow()]
     render()
   }
 
-  document.getElementById('btn-submit-all').onclick = async () => {
+  const btnSubmit = document.getElementById('btn-submit-all')
+  if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
     const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
     const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
