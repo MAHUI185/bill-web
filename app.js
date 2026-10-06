@@ -173,19 +173,95 @@ async function renderMy(view) {
   const { data } = await supabase.from('bill_order')
     .select('*').eq('vendor_id', currentUser.id)
     .order('id', { ascending: false }).limit(100)
+
   view.innerHTML = `
     <div class="card">
       <h2>我的单据</h2>
+      <div id="my-msg"></div>
       <table>
-        <tr><th>ID</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th></tr>
+        <tr>
+          <th>ID</th><th>类型</th><th>商品</th><th>数量</th>
+          <th>仓库</th><th>已导出</th><th>时间</th><th>操作</th>
+        </tr>
         ${(data||[]).map(b => `<tr>
-          <td>${b.id}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
-          <td>${b.quantity}</td><td>${b.warehouse_code}</td>
+          <td>${b.id}</td>
+          <td>${b.bill_type}</td>
+          <td>${b.product_code}</td>
+          <td>${b.quantity}</td>
+          <td>${b.warehouse_code}</td>
           <td>${b.exported ? '是' : '否'}</td>
           <td>${new Date(b.created_at).toLocaleString()}</td>
+          <td>
+            ${b.exported
+              ? '<span style="color:#999;font-size:12px;">已导出不可改</span>'
+              : `<button class="small secondary" data-edit="${b.id}">修改</button>`}
+          </td>
         </tr>`).join('')}
       </table>
-    </div>`
+    </div>
+    <div id="edit-panel"></div>`
+
+  view.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.onclick = () => {
+      const id = Number(btn.dataset.edit)
+      const bill = (data||[]).find(x => x.id === id)
+      if (!bill) return
+      const panel = document.getElementById('edit-panel')
+      panel.innerHTML = `
+        <div class="card">
+          <h2>修改单据 #${id}</h2>
+          <div class="row">
+            <input id="e-source" placeholder="来源单号" value="${bill.source_no||''}" />
+            <input id="e-product" placeholder="商品代码" value="${bill.product_code||''}" />
+            <input id="e-spec" placeholder="包装规格" value="${bill.spec||''}" />
+          </div>
+          <div class="row">
+            <input id="e-qty" type="number" placeholder="数量" value="${bill.quantity||''}" />
+            <input id="e-price" type="number" placeholder="单价" value="${bill.price||''}" />
+            <input id="e-owner" placeholder="货主代码" value="${bill.owner_code||''}" />
+          </div>
+          <div class="row">
+            <input id="e-effective" type="date" value="${bill.effective_date||''}" />
+            <input id="e-arrival" type="date" value="${bill.arrival_date||''}" />
+            <input id="e-remark" placeholder="备注" value="${bill.remark||''}" />
+          </div>
+          <div class="row">
+            <input id="e-remark2" placeholder="商品备注" value="${bill.product_remark||''}" />
+            <input id="e-process" placeholder="整单加工" value="${bill.whole_process||''}" />
+          </div>
+          <button id="btn-save-edit">保存修改</button>
+          <button class="secondary" id="btn-cancel-edit">取消</button>
+        </div>`
+
+      document.getElementById('btn-save-edit').onclick = async () => {
+        const patch = {
+          source_no: document.getElementById('e-source').value,
+          product_code: document.getElementById('e-product').value,
+          spec: document.getElementById('e-spec').value,
+          quantity: Number(document.getElementById('e-qty').value),
+          price: Number(document.getElementById('e-price').value) || null,
+          owner_code: document.getElementById('e-owner').value,
+          effective_date: document.getElementById('e-effective').value || null,
+          arrival_date: document.getElementById('e-arrival').value || null,
+          remark: document.getElementById('e-remark').value,
+          product_remark: document.getElementById('e-remark2').value,
+          whole_process: document.getElementById('e-process').value
+        }
+        const { error } = await supabase.from('bill_order')
+          .update(patch).eq('id', id)
+        if (error) {
+          document.getElementById('my-msg').innerHTML = msg(error.message, false)
+          return
+        }
+        document.getElementById('my-msg').innerHTML = msg('修改成功', true)
+        renderMy(view)
+      }
+
+      document.getElementById('btn-cancel-edit').onclick = () => {
+        panel.innerHTML = ''
+      }
+    }
+  })
 }
 
 init()
