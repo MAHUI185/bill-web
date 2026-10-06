@@ -144,7 +144,7 @@ async function renderFill(view) {
           <table>
             <thead>
               <tr>
-                <th>来源单号</th><th>单据类型</th><th>供应商代码</th><th>货主代码</th>
+                <th>来源单号(自动)</th><th>单据类型</th><th>供应商代码</th><th>货主代码</th>
                 <th>仓位</th><th>物流模式</th><th>商品代码</th><th>包装规格</th>
                 <th>数量</th><th>单价</th><th>到货日期</th><th>整单加工</th><th>操作</th>
               </tr>
@@ -160,7 +160,7 @@ async function renderFill(view) {
             <thead>
               <tr>
                 <th>配单类型</th><th>货主代码</th><th>门店代码</th><th>物流方式</th>
-                <th>仓位</th><th>配货日期</th><th>来源单号(自动)</th><th>入库订单单号</th>
+                <th>仓位</th><th>配货日期</th><th>来源单号</th><th>入库订单单号</th>
                 <th>商品代码</th><th>包装规格</th><th>数量</th><th>单价</th><th>组别</th><th>操作</th>
               </tr>
             </thead>
@@ -186,8 +186,13 @@ async function renderFill(view) {
   function renderInTable() {
     const tbody = document.getElementById('in-body')
     if (!tbody) return
-    tbody.innerHTML = inRows.map((r, i) => `<tr>
-      <td><input data-i="${i}" data-f="source_no" value="${r.source_no}" style="width:120px;margin:0;" /></td>
+    tbody.innerHTML = inRows.map((r, i) => {
+      const autoSource = (r.owner_code && r.arrival_date)
+        ? r.owner_code + r.arrival_date.replace(/-/g, '')
+        : ''
+      if (autoSource) r.source_no = autoSource
+      return `<tr>
+      <td><span style="font-size:12px;color:#666;">${autoSource || '-'}</span></td>
       <td>
         <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
           <option ${r.bill_type==='VMI存储'?'selected':''}>VMI存储</option>
@@ -218,13 +223,17 @@ async function renderFill(view) {
         </select>
       </td>
       <td><button class="small danger" data-del-in="${i}">删除</button></td>
-    </tr>`).join('')
+    </tr>`
+    }).join('')
 
     tbody.querySelectorAll('input,select').forEach(el => {
       el.oninput = el.onchange = () => {
         const i = Number(el.dataset.i)
         const f = el.dataset.f
         inRows[i][f] = el.value
+        if (f === 'owner_code' || f === 'arrival_date') {
+          renderInTable()
+        }
         renderPreview()
       }
     })
@@ -242,50 +251,41 @@ async function renderFill(view) {
   function renderOutTable() {
     const tbody = document.getElementById('out-body')
     if (!tbody) return
-    tbody.innerHTML = outRows.map((r, i) => {
-      const autoSource = (r.owner_code && r.pick_date)
-        ? r.owner_code + r.pick_date.replace(/-/g, '')
-        : ''
-      if (autoSource) r.source_no = autoSource
-      return `<tr>
-        <td>
-          <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
-            <option ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
-            <option ${r.bill_type==='DSP出货'?'selected':''}>DSP出货</option>
-          </select>
-        </td>
-        <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:100px;margin:0;" /></td>
-        <td><input data-i="${i}" data-f="store_code" value="${r.store_code}" style="width:100px;margin:0;" /></td>
-        <td>
-          <select data-i="${i}" data-f="logistics_mode" style="width:110px;margin:0;">
-            ${(modes||[]).map(m => `<option value="${m.mode_code}" ${r.logistics_mode===m.mode_code?'selected':''}>${m.mode_name}</option>`).join('')}
-          </select>
-        </td>
-        <td>
-          <select data-i="${i}" data-f="location_code" style="width:90px;margin:0;">
-            ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
-          </select>
-        </td>
-        <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:130px;margin:0;" /></td>
-        <td><span style="font-size:12px;color:#666;">${autoSource || '-'}</span></td>
-        <td><input data-i="${i}" data-f="inbound_order_no" value="${r.inbound_order_no}" style="width:110px;margin:0;" /></td>
-        <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:100px;margin:0;" /></td>
-        <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:90px;margin:0;" /></td>
-        <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:70px;margin:0;" /></td>
-        <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:70px;margin:0;" /></td>
-        <td><input data-i="${i}" data-f="group_name" value="${r.group_name}" style="width:70px;margin:0;" /></td>
-        <td><button class="small danger" data-del-out="${i}">删除</button></td>
-      </tr>`
-    }).join('')
+    tbody.innerHTML = outRows.map((r, i) => `<tr>
+      <td>
+        <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
+          <option ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
+          <option ${r.bill_type==='DSP出货'?'selected':''}>DSP出货</option>
+        </select>
+      </td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:100px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="store_code" value="${r.store_code}" style="width:100px;margin:0;" /></td>
+      <td>
+        <select data-i="${i}" data-f="logistics_mode" style="width:110px;margin:0;">
+          ${(modes||[]).map(m => `<option value="${m.mode_code}" ${r.logistics_mode===m.mode_code?'selected':''}>${m.mode_name}</option>`).join('')}
+        </select>
+      </td>
+      <td>
+        <select data-i="${i}" data-f="location_code" style="width:90px;margin:0;">
+          ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
+        </select>
+      </td>
+      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:130px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="source_no" value="${r.source_no}" style="width:130px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="inbound_order_no" value="${r.inbound_order_no}" style="width:110px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:100px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:90px;margin:0;" /></td>
+      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:70px;margin:0;" /></td>
+      <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:70px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="group_name" value="${r.group_name}" style="width:70px;margin:0;" /></td>
+      <td><button class="small danger" data-del-out="${i}">删除</button></td>
+    </tr>`).join('')
 
     tbody.querySelectorAll('input,select').forEach(el => {
       el.oninput = el.onchange = () => {
         const i = Number(el.dataset.i)
         const f = el.dataset.f
         outRows[i][f] = el.value
-        if (f === 'owner_code' || f === 'pick_date') {
-          renderOutTable()
-        }
         renderPreview()
       }
     })
@@ -304,7 +304,7 @@ async function renderFill(view) {
     const box = document.getElementById('preview-box')
     if (!box) return
     const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
-    const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
+    const validOut = outRows.filter(r => r.source_no && r.product_code && r.quantity)
     box.innerHTML = `
       <div style="margin-bottom:12px;">
         <strong>入库 ${validIn.length} 条：</strong>
@@ -359,7 +359,7 @@ async function renderFill(view) {
   if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
     const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
-    const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
+    const validOut = outRows.filter(r => r.source_no && r.product_code && r.quantity)
     if (validIn.length === 0 && validOut.length === 0) {
       return msgEl.innerHTML = msg('请至少填写一条单据', false)
     }
