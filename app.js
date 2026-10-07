@@ -103,7 +103,6 @@ function addOneDay(d) {
   return dt.toISOString().slice(0, 10)
 }
 
-// 单据类型 → 物流模式 映射
 function getModeByType(billType) {
   if (billType === 'VMI存储') return 'UNIFY'
   if (billType === 'DSP入库') return 'LIKECROSS'
@@ -125,15 +124,14 @@ async function renderFill(view) {
     return {
       source_no: '', bill_type: 'VMI存储', vendor_code: currentProfile?.vendor_code || '',
       owner_code: '', location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      product_code: '', spec: '', quantity: '', price: '',
-      arrival_date: ''
+      product_code: '', spec: '', quantity: '', arrival_date: ''
     }
   }
   function newOutRow() {
     return {
       bill_type: 'VMI出库', owner_code: '', store_code: '',
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      pick_date: '', product_code: '', spec: '', quantity: '', price: ''
+      pick_date: '', product_code: '', spec: '', quantity: ''
     }
   }
 
@@ -150,7 +148,7 @@ async function renderFill(view) {
               <tr>
                 <th>来源单号(自动)</th><th>单据类型</th><th>供应商代码</th><th>货主代码</th>
                 <th>仓位</th><th>商品代码</th><th>包装规格</th>
-                <th>数量</th><th>单价</th><th>到货日期</th><th>操作</th>
+                <th>数量</th><th>到货日期</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="in-body"></tbody>
@@ -165,7 +163,7 @@ async function renderFill(view) {
               <tr>
                 <th>配单类型</th><th>货主代码</th><th>门店代码</th>
                 <th>仓位</th><th>配货日期</th>
-                <th>商品代码</th><th>包装规格</th><th>数量</th><th>单价</th><th>操作</th>
+                <th>商品代码</th><th>包装规格</th><th>数量</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="out-body"></tbody>
@@ -213,7 +211,6 @@ async function renderFill(view) {
       <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:120px;margin:0;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:80px;margin:0;" /></td>
       <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" style="width:140px;margin:0;" /></td>
       <td><button class="small danger" data-del-in="${i}">删除</button></td>
     </tr>`
@@ -268,7 +265,6 @@ async function renderFill(view) {
       <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:120px;margin:0;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:80px;margin:0;" /></td>
       <td><button class="small danger" data-del-out="${i}">删除</button></td>
     </tr>`).join('')
 
@@ -371,7 +367,7 @@ async function renderFill(view) {
       product_code: r.product_code,
       spec: r.spec,
       quantity: Number(r.quantity),
-      price: Number(r.price) || null,
+      price: 1,
       arrival_date: r.arrival_date || null,
       effective_date: addOneDay(r.arrival_date),
       whole_process: 'NO',
@@ -400,7 +396,7 @@ async function renderFill(view) {
       product_code: r.product_code,
       spec: r.spec,
       quantity: Number(r.quantity),
-      price: Number(r.price) || null,
+      price: 1,
       group_name: null,
       split_flag: null,
       split_desc: null,
@@ -474,7 +470,6 @@ async function renderMy(view) {
           </div>
           <div class="row">
             <input id="e-qty" type="number" placeholder="数量" value="${bill.quantity||''}" />
-            <input id="e-price" type="number" placeholder="单价" value="${bill.price||''}" />
             <input id="e-owner" placeholder="货主代码" value="${bill.owner_code||''}" />
           </div>
           <div class="row">
@@ -492,7 +487,6 @@ async function renderMy(view) {
           product_code: document.getElementById('e-product').value,
           spec: document.getElementById('e-spec').value,
           quantity: Number(document.getElementById('e-qty').value),
-          price: Number(document.getElementById('e-price').value) || null,
           owner_code: document.getElementById('e-owner').value,
           effective_date: document.getElementById('e-effective').value || null,
           arrival_date: document.getElementById('e-arrival').value || null,
