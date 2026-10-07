@@ -103,11 +103,18 @@ function addOneDay(d) {
   return dt.toISOString().slice(0, 10)
 }
 
+// 单据类型 → 物流模式 映射
+function getModeByType(billType) {
+  if (billType === 'VMI存储') return 'UNIFY'
+  if (billType === 'DSP入库') return 'LIKECROSS'
+  if (billType === 'VMI出库') return 'LIKECROSS'
+  if (billType === 'DSP出货') return 'LIKECROSS'
+  return 'UNIFY'
+}
+
 async function renderFill(view) {
   const { data: whs } = await supabase.from('vendor_warehouse')
     .select('warehouse_code').eq('vendor_id', currentUser.id)
-  const { data: modes } = await supabase.from('logistics_mode_config')
-    .select('mode_code, mode_name').eq('status', 1)
   const { data: locs } = await supabase.from('location_config')
     .select('warehouse_code, location_code').eq('status', 1)
 
@@ -118,18 +125,15 @@ async function renderFill(view) {
     return {
       source_no: '', bill_type: 'VMI存储', vendor_code: currentProfile?.vendor_code || '',
       owner_code: '', location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      logistics_mode: 'UNIFY',
       product_code: '', spec: '', quantity: '', price: '',
-      arrival_date: '', whole_process: 'NO'
+      arrival_date: ''
     }
   }
   function newOutRow() {
     return {
       bill_type: 'VMI出库', owner_code: '', store_code: '',
-      logistics_mode: 'LIKECROSS',
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      pick_date: '', source_no: '', inbound_order_no: '',
-      product_code: '', spec: '', quantity: '', price: '', group_name: ''
+      pick_date: '', product_code: '', spec: '', quantity: '', price: ''
     }
   }
 
@@ -145,8 +149,8 @@ async function renderFill(view) {
             <thead>
               <tr>
                 <th>来源单号(自动)</th><th>单据类型</th><th>供应商代码</th><th>货主代码</th>
-                <th>仓位</th><th>物流模式</th><th>商品代码</th><th>包装规格</th>
-                <th>数量</th><th>单价</th><th>到货日期</th><th>整单加工</th><th>操作</th>
+                <th>仓位</th><th>商品代码</th><th>包装规格</th>
+                <th>数量</th><th>单价</th><th>到货日期</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="in-body"></tbody>
@@ -159,9 +163,9 @@ async function renderFill(view) {
           <table>
             <thead>
               <tr>
-                <th>配单类型</th><th>货主代码</th><th>门店代码</th><th>物流方式</th>
-                <th>仓位</th><th>配货日期</th><th>来源单号</th><th>入库订单单号</th>
-                <th>商品代码</th><th>包装规格</th><th>数量</th><th>单价</th><th>组别</th><th>操作</th>
+                <th>配单类型</th><th>货主代码</th><th>门店代码</th>
+                <th>仓位</th><th>配货日期</th>
+                <th>商品代码</th><th>包装规格</th><th>数量</th><th>单价</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="out-body"></tbody>
@@ -199,29 +203,18 @@ async function renderFill(view) {
           <option ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" style="width:140px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" style="width:120px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:120px;margin:0;" /></td>
       <td>
-        <select data-i="${i}" data-f="location_code" style="width:90px;margin:0;">
+        <select data-i="${i}" data-f="location_code" style="width:80px;margin:0;">
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td>
-        <select data-i="${i}" data-f="logistics_mode" style="width:130px;margin:0;">
-          ${(modes||[]).map(m => `<option value="${m.mode_code}" ${r.logistics_mode===m.mode_code?'selected':''}>${m.mode_name}</option>`).join('')}
-        </select>
-      </td>
-      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:120px;margin:0;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:80px;margin:0;" /></td>
       <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" style="width:140px;margin:0;" /></td>
-      <td>
-        <select data-i="${i}" data-f="whole_process" style="width:80px;margin:0;">
-          <option ${r.whole_process==='NO'?'selected':''}>NO</option>
-          <option ${r.whole_process==='YES'?'selected':''}>YES</option>
-        </select>
-      </td>
       <td><button class="small danger" data-del-in="${i}">删除</button></td>
     </tr>`
     }).join('')
@@ -264,26 +257,18 @@ async function renderFill(view) {
           <option ${r.bill_type==='DSP出货'?'selected':''}>DSP出货</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:140px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="store_code" value="${r.store_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:120px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="store_code" value="${r.store_code}" style="width:120px;margin:0;" /></td>
       <td>
-        <select data-i="${i}" data-f="logistics_mode" style="width:130px;margin:0;">
-          ${(modes||[]).map(m => `<option value="${m.mode_code}" ${r.logistics_mode===m.mode_code?'selected':''}>${m.mode_name}</option>`).join('')}
-        </select>
-      </td>
-      <td>
-        <select data-i="${i}" data-f="location_code" style="width:90px;margin:0;">
+        <select data-i="${i}" data-f="location_code" style="width:80px;margin:0;">
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
       <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:140px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="source_no" value="${r.source_no}" style="width:140px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="inbound_order_no" value="${r.inbound_order_no}" style="width:140px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:120px;margin:0;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:80px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="group_name" value="${r.group_name}" style="width:80px;margin:0;" /></td>
       <td><button class="small danger" data-del-out="${i}">删除</button></td>
     </tr>`).join('')
 
@@ -310,7 +295,7 @@ async function renderFill(view) {
     const box = document.getElementById('preview-box')
     if (!box) return
     const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
-    const validOut = outRows.filter(r => r.source_no && r.product_code && r.quantity)
+    const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
     box.innerHTML = `
       <div style="margin-bottom:12px;">
         <strong>入库 ${validIn.length} 条：</strong>
@@ -328,10 +313,10 @@ async function renderFill(view) {
         <strong>出库 ${validOut.length} 条：</strong>
         ${validOut.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px;">
-          <tr><th>配单类型</th><th>货主</th><th>门店</th><th>来源单号</th><th>商品</th><th>规格</th><th>数量</th><th>配货日期</th><th>到效日期</th></tr>
+          <tr><th>配单类型</th><th>货主</th><th>门店</th><th>商品</th><th>规格</th><th>数量</th><th>配货日期</th><th>到效日期</th></tr>
           ${validOut.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
-            <td>${r.source_no}</td><td>${r.product_code}</td><td>${r.spec}</td>
+            <td>${r.product_code}</td><td>${r.spec}</td>
             <td>${r.quantity}</td><td>${r.pick_date || '-'}</td>
             <td>${r.pick_date ? addOneDay(r.pick_date) : '-'}</td>
           </tr>`).join('')}
@@ -365,7 +350,7 @@ async function renderFill(view) {
   if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
     const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
-    const validOut = outRows.filter(r => r.source_no && r.product_code && r.quantity)
+    const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
     if (validIn.length === 0 && validOut.length === 0) {
       return msgEl.innerHTML = msg('请至少填写一条单据', false)
     }
@@ -382,14 +367,21 @@ async function renderFill(view) {
       vendor_code: r.vendor_code,
       owner_code: r.owner_code,
       location_code: r.location_code,
-      logistics_mode: r.logistics_mode,
+      logistics_mode: getModeByType(r.bill_type),
       product_code: r.product_code,
       spec: r.spec,
       quantity: Number(r.quantity),
       price: Number(r.price) || null,
       arrival_date: r.arrival_date || null,
       effective_date: addOneDay(r.arrival_date),
-      whole_process: r.whole_process,
+      whole_process: 'NO',
+      product_remark: null,
+      remark: null,
+      split_flag: null,
+      split_desc: null,
+      tare_dimension: null,
+      tare_value: null,
+      route: null,
       submitter_type: 'vendor'
     }))
 
@@ -397,19 +389,21 @@ async function renderFill(view) {
       vendor_id: currentUser.id,
       warehouse_code: defaultWh,
       bill_type: r.bill_type,
-      source_no: r.source_no,
+      source_no: null,
       owner_code: r.owner_code,
       store_code: r.store_code,
       location_code: r.location_code,
-      logistics_mode: r.logistics_mode,
+      logistics_mode: getModeByType(r.bill_type),
       pick_date: r.pick_date || null,
       effective_date: addOneDay(r.pick_date),
-      inbound_order_no: r.inbound_order_no,
+      inbound_order_no: null,
       product_code: r.product_code,
       spec: r.spec,
       quantity: Number(r.quantity),
       price: Number(r.price) || null,
-      group_name: r.group_name || null,
+      group_name: null,
+      split_flag: null,
+      split_desc: null,
       submitter_type: 'vendor',
       vendor_code: r.owner_code
     }))
@@ -488,10 +482,6 @@ async function renderMy(view) {
             <input id="e-arrival" type="date" value="${bill.arrival_date||''}" />
             <input id="e-remark" placeholder="备注" value="${bill.remark||''}" />
           </div>
-          <div class="row">
-            <input id="e-remark2" placeholder="商品备注" value="${bill.product_remark||''}" />
-            <input id="e-process" placeholder="整单加工" value="${bill.whole_process||''}" />
-          </div>
           <button id="btn-save-edit">保存修改</button>
           <button class="secondary" id="btn-cancel-edit">取消</button>
         </div>`
@@ -506,9 +496,7 @@ async function renderMy(view) {
           owner_code: document.getElementById('e-owner').value,
           effective_date: document.getElementById('e-effective').value || null,
           arrival_date: document.getElementById('e-arrival').value || null,
-          remark: document.getElementById('e-remark').value,
-          product_remark: document.getElementById('e-remark2').value,
-          whole_process: document.getElementById('e-process').value
+          remark: document.getElementById('e-remark').value
         }
         const { error } = await supabase.from('bill_order')
           .update(patch).eq('id', id)
