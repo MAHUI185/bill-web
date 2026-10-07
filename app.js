@@ -199,23 +199,23 @@ async function renderFill(view) {
           <option ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" style="width:100px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:100px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:140px;margin:0;" /></td>
       <td>
         <select data-i="${i}" data-f="location_code" style="width:90px;margin:0;">
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
       <td>
-        <select data-i="${i}" data-f="logistics_mode" style="width:110px;margin:0;">
+        <select data-i="${i}" data-f="logistics_mode" style="width:130px;margin:0;">
           ${(modes||[]).map(m => `<option value="${m.mode_code}" ${r.logistics_mode===m.mode_code?'selected':''}>${m.mode_name}</option>`).join('')}
         </select>
       </td>
-      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:100px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:90px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:70px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:70px;margin:0;" /></td>
-      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" style="width:130px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
+      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
+      <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:80px;margin:0;" /></td>
+      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" style="width:140px;margin:0;" /></td>
       <td>
         <select data-i="${i}" data-f="whole_process" style="width:80px;margin:0;">
           <option ${r.whole_process==='NO'?'selected':''}>NO</option>
@@ -258,10 +258,10 @@ async function renderFill(view) {
           <option ${r.bill_type==='DSP出货'?'selected':''}>DSP出货</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:100px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="store_code" value="${r.store_code}" style="width:100px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="store_code" value="${r.store_code}" style="width:140px;margin:0;" /></td>
       <td>
-        <select data-i="${i}" data-f="logistics_mode" style="width:110px;margin:0;">
+        <select data-i="${i}" data-f="logistics_mode" style="width:130px;margin:0;">
           ${(modes||[]).map(m => `<option value="${m.mode_code}" ${r.logistics_mode===m.mode_code?'selected':''}>${m.mode_name}</option>`).join('')}
         </select>
       </td>
@@ -270,14 +270,14 @@ async function renderFill(view) {
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:130px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="source_no" value="${r.source_no}" style="width:130px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="inbound_order_no" value="${r.inbound_order_no}" style="width:110px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:100px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:90px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:70px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:70px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="group_name" value="${r.group_name}" style="width:70px;margin:0;" /></td>
+      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="source_no" value="${r.source_no}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="inbound_order_no" value="${r.inbound_order_no}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
+      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
+      <td><input type="number" data-i="${i}" data-f="price" value="${r.price}" style="width:80px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="group_name" value="${r.group_name}" style="width:80px;margin:0;" /></td>
       <td><button class="small danger" data-del-out="${i}">删除</button></td>
     </tr>`).join('')
 
