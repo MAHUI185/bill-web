@@ -192,7 +192,7 @@ async function renderFill(view) {
         : ''
       if (autoSource) r.source_no = autoSource
       return `<tr>
-      <td><span style="font-size:12px;color:#666;">${autoSource || '-'}</span></td>
+      <td class="td-source"><span style="font-size:12px;color:#666;">${autoSource || '-'}</span></td>
       <td>
         <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
           <option ${r.bill_type==='VMI存储'?'selected':''}>VMI存储</option>
@@ -232,7 +232,13 @@ async function renderFill(view) {
         const f = el.dataset.f
         inRows[i][f] = el.value
         if (f === 'owner_code' || f === 'arrival_date') {
-          renderInTable()
+          const r = inRows[i]
+          const autoSource = (r.owner_code && r.arrival_date)
+            ? r.owner_code + r.arrival_date.replace(/-/g, '')
+            : ''
+          r.source_no = autoSource
+          const td = el.closest('tr').querySelector('.td-source')
+          if (td) td.innerHTML = `<span style="font-size:12px;color:#666;">${autoSource || '-'}</span>`
         }
         renderPreview()
       }
