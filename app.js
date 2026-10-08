@@ -171,7 +171,7 @@ async function renderFill(view) {
           <table>
             <thead>
               <tr>
-                <th>来源单号(自动)</th><th>单据类型</th><th>供应商代码</th><th>货主代码</th>
+                <th>单据类型</th><th>供应商代码</th><th>货主代码</th>
                 <th>仓位</th><th>商品代码</th><th>包装规格</th>
                 <th>数量</th><th>到货日期</th><th>操作</th>
               </tr>
@@ -214,12 +214,12 @@ async function renderFill(view) {
     const tbody = document.getElementById('in-body')
     if (!tbody) return
     tbody.innerHTML = inRows.map((r, i) => {
+      // ★ 自动计算来源单号（隐藏，不显示，但提交时写入）
       const autoSource = (r.owner_code && r.arrival_date)
         ? r.owner_code + r.arrival_date.replace(/-/g, '')
         : ''
       if (autoSource) r.source_no = autoSource
       return `<tr>
-      <td class="td-source"><span style="font-size:12px;color:#666;">${autoSource || '-'}</span></td>
       <td>
         <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
           <option ${r.bill_type==='VMI存储'?'selected':''}>VMI存储</option>
@@ -246,14 +246,12 @@ async function renderFill(view) {
         const i = Number(el.dataset.i)
         const f = el.dataset.f
         inRows[i][f] = el.value
+        // ★ 自动计算 source_no（不再更新页面元素）
         if (f === 'owner_code' || f === 'arrival_date') {
           const r = inRows[i]
-          const autoSource = (r.owner_code && r.arrival_date)
+          r.source_no = (r.owner_code && r.arrival_date)
             ? r.owner_code + r.arrival_date.replace(/-/g, '')
             : ''
-          r.source_no = autoSource
-          const td = el.closest('tr').querySelector('.td-source')
-          if (td) td.innerHTML = `<span style="font-size:12px;color:#666;">${autoSource || '-'}</span>`
         }
         renderPreview()
       }
