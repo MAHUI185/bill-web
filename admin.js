@@ -143,7 +143,6 @@ async function renderBills(v) {
       </div>
     </div>`
 
-  // 查看规则
   document.getElementById('btn-show-rule').onclick = async () => {
     const type = document.getElementById('imp-type').value
     const { data } = await ctx.supabase.from('import_rule')
@@ -157,7 +156,6 @@ async function renderBills(v) {
     }
   }
 
-  // 导入
   document.getElementById('btn-import').onclick = async () => {
     const file = document.getElementById('imp-file').files[0]
     if (!file) return document.getElementById('import-msg').innerHTML = ctx.msg('请选择文件', false)
@@ -166,7 +164,6 @@ async function renderBills(v) {
     try {
       const buf = await file.arrayBuffer()
       const wb = XLSX.read(buf)
-      // 按 Sheet 名匹配
       const sheetMap = {
         vmi_in: 'VMI入库', dsp_in: 'DSP入库',
         vmi_out: 'VMI出库', dsp_out: 'DSP出库'
@@ -178,7 +175,6 @@ async function renderBills(v) {
                                        : (n.includes('入库') && !n.includes('说明'))
                         }) || wb.SheetNames[0]
       const ws = wb.Sheets[sheetName]
-      // 跳过第 3 行注释
       const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false })
       const rows = rawRows.filter((r, idx) => {
         if (idx === 1) return false
@@ -216,7 +212,6 @@ async function renderBills(v) {
     }
   }
 
-  // 导出
   document.getElementById('btn-export').onclick = async () => {
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/export-bills`, {
@@ -244,7 +239,6 @@ async function renderBills(v) {
     document.getElementById('export-msg').innerHTML = ctx.msg('导出成功', true)
   }
 
-  // 查询
   const search = async () => {
     let q = ctx.supabase.from('bill_order').select('*').order('id', { ascending: false }).limit(200)
     const kw = document.getElementById('b-search').value.trim()
@@ -270,7 +264,10 @@ async function renderBills(v) {
 // ================= 3. 厂商管理 =================
 async function renderVendors(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
-  const { data: vps } = await ctx.supabase.from('vendor_profile').select('*').order('created_at', { ascending: false })
+  const { data: vps } = await ctx.supabase.from('vendor_profile')
+    .select('*')
+    .eq('account_type', 'vendor')
+    .order('created_at', { ascending: false })
   const { data: vws } = await ctx.supabase.from('vendor_warehouse').select('*')
   const vwMap = {}
   ;(vws||[]).forEach(x => { (vwMap[x.vendor_id] ||= []).push(x.warehouse_code) })
@@ -308,8 +305,9 @@ async function renderVendors(v) {
             <td>
               <button class="small secondary" data-act="grant" data-id="${p.id}" data-code="${p.vendor_code}">授权</button>
               <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
+              <button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>
             </td>
-          </tr>`).join('')}</tbody>
+          </tr>`).join('') || '<tr><td colspan="7">无数据</td></tr>'}</tbody>
         </table>
       </div>
     </div>`
@@ -344,7 +342,9 @@ async function renderVendors(v) {
   v.querySelectorAll('button[data-act]').forEach(b => {
     b.onclick = async () => {
       const id = b.dataset.id
-      if (b.dataset.act === 'grant') {
+      const act = b.dataset.act
+
+      if (act === 'grant') {
         const code = b.dataset.code
         const cur = (vwMap[id]||[]).join(',')
         const input = prompt(`输入授权仓库代码（逗号分隔），当前：${cur}`, cur)
@@ -362,7 +362,8 @@ async function renderVendors(v) {
         alert(res.ok ? '授权成功' : '授权失败：' + await res.text())
         if (res.ok) renderTab('vendors')
       }
-      if (b.dataset.act === 'reset') {
+
+      if (act === 'reset') {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
@@ -376,11 +377,29 @@ async function renderVendors(v) {
         })
         alert(res.ok ? '重置成功' : '重置失败：' + await res.text())
       }
+
+      if (act === 'del') {
+        const code = b.dataset.code
+        if (!confirm(`确定删除厂商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 厂商档案\n- 仓库授权\n\n此操作不可撤销！`)) return
+
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-vendor`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({ vendor_id: id })
+        })
+        const json = await res.json()
+        alert(res.ok ? '已删除' : '删除失败：' + (json.error || '未知错误'))
+        if (res.ok) renderTab('vendors')
+      }
     }
   })
 }
 
-// ================= 3.5 管理员管理 =================
+// ================= 4. 管理员管理 =================
 async function renderAdmins(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data: admins } = await ctx.supabase.from('admin_users').select('*').order('created_at', { ascending: false })
@@ -427,20 +446,43 @@ async function renderAdmins(v) {
       </div>
     </div>`
 
-  document.getElementById('btn-create-admin').onclick = async () => {
-    const login = document.getElementById('ad-login').value.trim()
-    const name = document.getElementById('ad-name').value.trim()
-    const phone = document.getElementById('ad-phone').value.trim()
-    const pwd = document.getElementById('ad-pwd').value
-    const role = document.getElementById('ad-role').value
-    const whSel = Array.from(document.getElementById('ad-wh').selectedOptions).map(o => o.value)
+  const btn = document.getElementById('btn-create-admin')
+  if (!btn) return
 
-    if (!login || !name || !pwd) {
-      return document.getElementById('admin-create-msg').innerHTML = ctx.msg('登录名、姓名、密码必填', false)
+  btn.onclick = async () => {
+    const elLogin = document.getElementById('ad-login')
+    const elName = document.getElementById('ad-name')
+    const elPhone = document.getElementById('ad-phone')
+    const elPwd = document.getElementById('ad-pwd')
+    const elRole = document.getElementById('ad-role')
+    const elWh = document.getElementById('ad-wh')
+    const msgEl = document.getElementById('admin-create-msg')
+
+    if (!elLogin || !elName || !elPwd) {
+      msgEl.innerHTML = ctx.msg('表单元素异常，请刷新页面', false)
+      return
     }
+
+    const login = (elLogin.value || '').trim()
+    const name = (elName.value || '').trim()
+    const phone = (elPhone?.value || '').trim()
+    const pwd = elPwd.value || ''
+    const role = elRole?.value || 'admin'
+    const whSel = elWh ? Array.from(elWh.selectedOptions).map(o => o.value) : []
+
+    if (!login) { msgEl.innerHTML = ctx.msg('请填写登录名', false); return }
+    if (!name) { msgEl.innerHTML = ctx.msg('请填写姓名', false); return }
+    if (!pwd) { msgEl.innerHTML = ctx.msg('请填写初始密码', false); return }
     if (!/^[a-zA-Z0-9_]+$/.test(login)) {
-      return document.getElementById('admin-create-msg').innerHTML = ctx.msg('登录名只能用字母、数字、下划线', false)
+      msgEl.innerHTML = ctx.msg('登录名只能用字母、数字、下划线', false)
+      return
     }
+    if (pwd.length < 6) {
+      msgEl.innerHTML = ctx.msg('密码至少 6 位', false)
+      return
+    }
+
+    msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-admin`, {
@@ -456,11 +498,10 @@ async function renderAdmins(v) {
     })
     const json = await res.json()
     if (res.ok) {
-      document.getElementById('admin-create-msg').innerHTML = ctx.msg(
-        `创建成功，登录邮箱：${json.email}`, true)
+      msgEl.innerHTML = ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
       renderTab('admins')
     } else {
-      document.getElementById('admin-create-msg').innerHTML = ctx.msg(json.error, false)
+      msgEl.innerHTML = ctx.msg(json.error || '创建失败', false)
     }
   }
 
@@ -503,7 +544,7 @@ async function renderAdmins(v) {
   })
 }
 
-// ================= 4. 基础数据 =================
+// ================= 5. 基础数据 =================
 async function renderBase(v) {
   v.innerHTML = `
     <div class="tabs" id="base-tabs">
@@ -787,7 +828,7 @@ async function renderMap(v) {
   })
 }
 
-// ================= 5. 提报规则 =================
+// ================= 6. 提报规则 =================
 async function renderRules(v) {
   v.innerHTML = `
     <div class="tabs" id="rule-tabs">
@@ -922,7 +963,7 @@ async function renderBypass(v) {
   })
 }
 
-// ================= 6. 导出批次 =================
+// ================= 7. 导出批次 =================
 async function renderBatches(v) {
   const { data } = await ctx.supabase.from('export_batch_detail').select('*').order('id', { ascending: false }).limit(100)
   v.innerHTML = `
@@ -936,7 +977,7 @@ async function renderBatches(v) {
       </tr>`).join('') || '<tr><td colspan="8">无数据</td></tr>'}</tbody></table>`
 }
 
-// ================= 7. 操作日志 =================
+// ================= 8. 操作日志 =================
 async function renderLogs(v) {
   const { data: ops } = await ctx.supabase.from('operation_log')
     .select('*').order('id', { ascending: false }).limit(200)
@@ -1012,7 +1053,7 @@ async function renderLogs(v) {
   renderOp()
 }
 
-// ================= 8. 系统配置 =================
+// ================= 9. 系统配置 =================
 async function renderSys(v) {
   const { data: cfgs } = await ctx.supabase.from('system_config').select('*').order('config_key')
   const { data: vers } = await ctx.supabase.from('version_history').select('*').order('id', { ascending: false }).limit(50)
