@@ -320,6 +320,9 @@ async function renderFill(view) {
       </div>`
   }
 
+  // ★★★ 关键：先渲染 HTML，再绑定按钮 ★★★
+  render()
+
   const btnAddIn = document.getElementById('btn-add-in')
   if (btnAddIn) btnAddIn.onclick = () => {
     inRows.push(newInRow())
@@ -418,8 +421,6 @@ async function renderFill(view) {
     outRows = [newOutRow()]
     setTimeout(() => render(), 800)
   }
-
-  render()
 }
 
 async function renderMy(view) {
