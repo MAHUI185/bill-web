@@ -123,7 +123,7 @@ async function renderBills(v) {
         <select id="exp-wh">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
         <input id="exp-start" type="date" />
         <input id="exp-end" type="date" />
-        <button id="btn-export">导出 CSV</button>
+        <button id="btn-export">导出</button>
         <label style="display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;min-width:auto;">
           <input type="checkbox" id="exp-include" style="width:auto;margin:0;" />
           包含已导出
