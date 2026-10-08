@@ -239,7 +239,7 @@ async function renderBills(v) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `export_${Date.now()}.csv`
+    a.download = `export_${Date.now()}.xlsx`
     a.click()
     document.getElementById('export-msg').innerHTML = ctx.msg('导出成功', true)
   }
