@@ -12,6 +12,11 @@ function msg(text, ok = true) {
 }
 
 async function init() {
+  // ★ 维护模式检查
+  const { data: cfg } = await supabase.from('system_config')
+    .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
+  if (cfg?.config_value === 'true') return renderMaintenance()
+
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) return renderLogin()
   currentUser = session.user
@@ -26,6 +31,26 @@ async function loadProfile() {
   const { data: admin } = await supabase.from('admin_users')
     .select('role').eq('id', currentUser.id).maybeSingle()
   isAdmin = !!admin
+}
+
+// ★ 维护页
+function renderMaintenance() {
+  app.innerHTML = `
+    <div class="card" style="max-width:400px;margin:80px auto;text-align:center;">
+      <h1>系统维护中</h1>
+      <p style="margin:16px 0;color:#666;">系统正在部署更新，暂时无法提交数据，请稍后再试。</p>
+      <button id="btn-retry">刷新</button>
+    </div>`
+  document.getElementById('btn-retry').onclick = () => location.reload()
+  // 每 10 秒自动检查，部署完自动放行
+  const timer = setInterval(async () => {
+    const { data } = await supabase.from('system_config')
+      .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
+    if (data?.config_value !== 'true') {
+      clearInterval(timer)
+      location.reload()
+    }
+  }, 10000)
 }
 
 function renderLogin() {
@@ -348,6 +373,14 @@ async function renderFill(view) {
   const btnSubmit = document.getElementById('btn-submit-all')
   if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
+
+    // ★ 提交前检查维护模式
+    const { data: cfg } = await supabase.from('system_config')
+      .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
+    if (cfg?.config_value === 'true') {
+      return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
+    }
+
     const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
     const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
     if (validIn.length === 0 && validOut.length === 0) {
