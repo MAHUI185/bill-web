@@ -124,6 +124,10 @@ async function renderBills(v) {
         <input id="exp-start" type="date" />
         <input id="exp-end" type="date" />
         <button id="btn-export">导出 CSV</button>
+        <label style="display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;min-width:auto;">
+          <input type="checkbox" id="exp-include" style="width:auto;margin:0;" />
+          包含已导出
+        </label>
       </div>
       <div id="export-msg"></div>
     </div>
@@ -223,7 +227,8 @@ async function renderBills(v) {
       body: JSON.stringify({
         warehouse_code: document.getElementById('exp-wh').value,
         start_date: document.getElementById('exp-start').value,
-        end_date: document.getElementById('exp-end').value
+        end_date: document.getElementById('exp-end').value,
+        include_exported: document.getElementById('exp-include')?.checked || false
       })
     })
     if (!res.ok) {
