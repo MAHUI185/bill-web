@@ -463,20 +463,41 @@ async function renderMy(view) {
       const panel = document.getElementById('edit-panel')
       panel.innerHTML = `
         <div class="card">
-          <h2>修改单据 #${id}</h2>
+          <h2>修改单据</h2>
+          <input id="e-source" type="hidden" value="${bill.source_no||''}" />
           <div class="row">
-            <input id="e-source" placeholder="来源单号" value="${bill.source_no||''}" />
-            <input id="e-product" placeholder="商品代码" value="${bill.product_code||''}" />
-            <input id="e-spec" placeholder="包装规格" value="${bill.spec||''}" />
+            <div>
+              <label>商品代码</label>
+              <input id="e-product" value="${bill.product_code||''}" />
+            </div>
+            <div>
+              <label>包装规格</label>
+              <input id="e-spec" value="${bill.spec||''}" />
+            </div>
+            <div>
+              <label>数量</label>
+              <input id="e-qty" type="number" value="${bill.quantity||''}" />
+            </div>
           </div>
           <div class="row">
-            <input id="e-qty" type="number" placeholder="数量" value="${bill.quantity||''}" />
-            <input id="e-owner" placeholder="货主代码" value="${bill.owner_code||''}" />
+            <div>
+              <label>货主代码</label>
+              <input id="e-owner" value="${bill.owner_code||''}" />
+            </div>
+            <div>
+              <label>到货日期</label>
+              <input id="e-arrival" type="date" value="${bill.arrival_date||''}" />
+            </div>
+            <div>
+              <label>订单到效日期</label>
+              <input id="e-effective" type="date" value="${bill.effective_date||''}" />
+            </div>
           </div>
           <div class="row">
-            <input id="e-effective" type="date" value="${bill.effective_date||''}" />
-            <input id="e-arrival" type="date" value="${bill.arrival_date||''}" />
-            <input id="e-remark" placeholder="备注" value="${bill.remark||''}" />
+            <div style="flex:3;">
+              <label>备注</label>
+              <input id="e-remark" value="${bill.remark||''}" />
+            </div>
           </div>
           <button id="btn-save-edit">保存修改</button>
           <button class="secondary" id="btn-cancel-edit">取消</button>
