@@ -12,7 +12,6 @@ function msg(text, ok = true) {
 }
 
 async function init() {
-  // ★ 维护模式检查
   const { data: cfg } = await supabase.from('system_config')
     .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
   if (cfg?.config_value === 'true') return renderMaintenance()
@@ -33,7 +32,6 @@ async function loadProfile() {
   isAdmin = !!admin
 }
 
-// ★ 维护页
 function renderMaintenance() {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;text-align:center;">
@@ -127,11 +125,12 @@ function addOneDay(d) {
   return dt.toISOString().slice(0, 10)
 }
 
+// ★ 改动 3：映射更新
 function getModeByType(billType) {
-  if (billType === 'VMI存储') return 'UNIFY'
+  if (billType === 'VMI入库') return 'UNIFY'
   if (billType === 'DSP入库') return 'LIKECROSS'
   if (billType === 'VMI出库') return 'LIKECROSS'
-  if (billType === 'DSP出货') return 'LIKECROSS'
+  if (billType === 'DSP出库') return 'LIKECROSS'
   return 'UNIFY'
 }
 
@@ -144,9 +143,10 @@ async function renderFill(view) {
   let inRows = [newInRow()]
   let outRows = [newOutRow()]
 
+  // ★ 改动 2：入库默认值
   function newInRow() {
     return {
-      source_no: '', bill_type: 'VMI存储', vendor_code: currentProfile?.vendor_code || '',
+      source_no: '', bill_type: 'VMI入库', vendor_code: currentProfile?.vendor_code || '',
       owner_code: '', location_code: (locs && locs[0]) ? locs[0].location_code : '',
       product_code: '', spec: '', quantity: '', arrival_date: ''
     }
@@ -220,7 +220,7 @@ async function renderFill(view) {
       return `<tr>
       <td>
         <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
-          <option ${r.bill_type==='VMI存储'?'selected':''}>VMI存储</option>
+          <option ${r.bill_type==='VMI入库'?'selected':''}>VMI入库</option>
           <option ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
         </select>
       </td>
@@ -271,7 +271,7 @@ async function renderFill(view) {
       <td>
         <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
           <option ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
-          <option ${r.bill_type==='DSP出货'?'selected':''}>DSP出货</option>
+          <option ${r.bill_type==='DSP出库'?'selected':''}>DSP出库</option>
         </select>
       </td>
       <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:120px;margin:0;" /></td>
@@ -339,7 +339,6 @@ async function renderFill(view) {
       </div>`
   }
 
-  // ★★★ 关键：先渲染 HTML，再绑定按钮 ★★★
   render()
 
   const btnAddIn = document.getElementById('btn-add-in')
@@ -368,7 +367,6 @@ async function renderFill(view) {
   if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
 
-    // ★ 提交前检查维护模式
     const { data: cfg } = await supabase.from('system_config')
       .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
     if (cfg?.config_value === 'true') {
