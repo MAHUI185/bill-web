@@ -42,7 +42,6 @@ function renderMaintenance() {
       <button id="btn-retry">刷新</button>
     </div>`
   document.getElementById('btn-retry').onclick = () => location.reload()
-  // 每 10 秒自动检查，部署完自动放行
   const timer = setInterval(async () => {
     const { data } = await supabase.from('system_config')
       .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
@@ -214,7 +213,6 @@ async function renderFill(view) {
     const tbody = document.getElementById('in-body')
     if (!tbody) return
     tbody.innerHTML = inRows.map((r, i) => {
-      // ★ 自动计算来源单号（隐藏，不显示，但提交时写入）
       const autoSource = (r.owner_code && r.arrival_date)
         ? r.owner_code + r.arrival_date.replace(/-/g, '')
         : ''
@@ -246,7 +244,6 @@ async function renderFill(view) {
         const i = Number(el.dataset.i)
         const f = el.dataset.f
         inRows[i][f] = el.value
-        // ★ 自动计算 source_no（不再更新页面元素）
         if (f === 'owner_code' || f === 'arrival_date') {
           const r = inRows[i]
           r.source_no = (r.owner_code && r.arrival_date)
@@ -320,11 +317,11 @@ async function renderFill(view) {
         <strong>入库 ${validIn.length} 条：</strong>
         ${validIn.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px;">
-          <tr><th>来源单号</th><th>单据类型</th><th>商品</th><th>规格</th><th>数量</th><th>到货日期</th><th>订单到效日期</th></tr>
+          <tr><th>单据类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>规格</th><th>数量</th><th>到货日期</th></tr>
           ${validIn.map(r => `<tr>
-            <td>${r.source_no}</td><td>${r.bill_type}</td><td>${r.product_code}</td>
-            <td>${r.spec}</td><td>${r.quantity}</td><td>${r.arrival_date || '-'}</td>
-            <td>${r.arrival_date ? addOneDay(r.arrival_date) : '-'}</td>
+            <td>${r.bill_type}</td><td>${r.vendor_code}</td><td>${r.owner_code}</td>
+            <td>${r.location_code}</td><td>${r.product_code}</td><td>${r.spec}</td>
+            <td>${r.quantity}</td><td>${r.arrival_date || '-'}</td>
           </tr>`).join('')}
         </table>`}
       </div>
@@ -332,12 +329,11 @@ async function renderFill(view) {
         <strong>出库 ${validOut.length} 条：</strong>
         ${validOut.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px;">
-          <tr><th>配单类型</th><th>货主</th><th>门店</th><th>商品</th><th>规格</th><th>数量</th><th>配货日期</th><th>到效日期</th></tr>
+          <tr><th>配单类型</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>规格</th><th>数量</th></tr>
           ${validOut.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
-            <td>${r.product_code}</td><td>${r.spec}</td>
-            <td>${r.quantity}</td><td>${r.pick_date || '-'}</td>
-            <td>${r.pick_date ? addOneDay(r.pick_date) : '-'}</td>
+            <td>${r.location_code}</td><td>${r.pick_date || '-'}</td>
+            <td>${r.product_code}</td><td>${r.spec}</td><td>${r.quantity}</td>
           </tr>`).join('')}
         </table>`}
       </div>`
