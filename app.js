@@ -6,12 +6,14 @@ const app = document.getElementById('app')
 let currentUser = null
 let currentProfile = null
 let isAdmin = false
+let currentRole = null          // ★ 新增
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
 }
 
 async function init() {
+  // ★ 维护模式检查
   const { data: cfg } = await supabase.from('system_config')
     .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
   if (cfg?.config_value === 'true') return renderMaintenance()
@@ -30,8 +32,10 @@ async function loadProfile() {
   const { data: admin } = await supabase.from('admin_users')
     .select('role').eq('id', currentUser.id).maybeSingle()
   isAdmin = !!admin
+  currentRole = admin?.role || null          // ★ 新增
 }
 
+// ★ 维护页
 function renderMaintenance() {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;text-align:center;">
@@ -109,7 +113,7 @@ async function renderView(key) {
     try {
       const mod = await import('./admin.js')
       await mod.renderAdmin(view, {
-        supabase, currentUser, currentProfile, isAdmin, msg, SUPABASE_URL
+        supabase, currentUser, currentProfile, isAdmin, currentRole, msg, SUPABASE_URL   // ★ 加 currentRole
       })
     } catch (e) {
       console.error('管理后台加载失败', e)
@@ -125,7 +129,6 @@ function addOneDay(d) {
   return dt.toISOString().slice(0, 10)
 }
 
-// ★ 改动 3：映射更新
 function getModeByType(billType) {
   if (billType === 'VMI入库') return 'UNIFY'
   if (billType === 'DSP入库') return 'LIKECROSS'
@@ -143,7 +146,6 @@ async function renderFill(view) {
   let inRows = [newInRow()]
   let outRows = [newOutRow()]
 
-  // ★ 改动 2：入库默认值
   function newInRow() {
     return {
       source_no: '', bill_type: 'VMI入库', vendor_code: currentProfile?.vendor_code || '',

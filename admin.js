@@ -48,6 +48,11 @@ async function renderTab(key) {
   }
 }
 
+// 判断是否超管
+function isSuper() {
+  return ctx.currentRole === 'super_admin'
+}
+
 // ================= 1. 提报进度 =================
 async function renderProgress(v) {
   const { data } = await ctx.supabase.from('vendor_report_status').select('*')
@@ -269,10 +274,18 @@ async function renderBills(v) {
 // ================= 3. 厂商管理 =================
 async function renderVendors(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
-  const { data: vps } = await ctx.supabase.from('vendor_profile')
+  const { data: vpsRaw } = await ctx.supabase.from('vendor_profile')
     .select('*')
     .eq('account_type', 'vendor')
     .order('created_at', { ascending: false })
+
+  // ★ 双保险：排除管理员账号
+  const { data: adminList } = await ctx.supabase.from('admin_users').select('id')
+  const adminIdSet = new Set((adminList||[]).map(a => a.id))
+  const vps = (vpsRaw||[]).filter(p =>
+    !adminIdSet.has(p.id) && !(p.vendor_code || '').startsWith('ADMIN_')
+  )
+
   const { data: vws } = await ctx.supabase.from('vendor_warehouse').select('*')
   const vwMap = {}
   ;(vws||[]).forEach(x => { (vwMap[x.vendor_id] ||= []).push(x.warehouse_code) })
@@ -296,11 +309,11 @@ async function renderVendors(v) {
       <div id="vendor-msg"></div>
     </div>
     <div class="card" style="box-shadow:none;padding:0;">
-      <h2>厂商列表（${(vps||[]).length}）</h2>
+      <h2>厂商列表（${vps.length}）</h2>
       <div class="scroll">
         <table>
           <tr><th>厂编</th><th>名称</th><th>联系人</th><th>手机</th><th>授权仓库</th><th>状态</th><th>操作</th></tr>
-          <tbody>${(vps||[]).map(p => `<tr>
+          <tbody>${vps.map(p => `<tr>
             <td>${p.vendor_code||''}</td>
             <td>${p.vendor_name||''}</td>
             <td>${p.contact_name||''}</td>
@@ -310,7 +323,7 @@ async function renderVendors(v) {
             <td>
               <button class="small secondary" data-act="grant" data-id="${p.id}" data-code="${p.vendor_code}">授权</button>
               <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
-              <button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>
+              ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
             </td>
           </tr>`).join('') || '<tr><td colspan="7">无数据</td></tr>'}</tbody>
         </table>
@@ -444,7 +457,7 @@ async function renderAdmins(v) {
             <td>
               <button class="small secondary" data-act="role" data-id="${a.id}" data-role="${a.role}">改角色</button>
               <button class="small secondary" data-act="pwd" data-id="${a.id}">重置密码</button>
-              <button class="small danger" data-act="del" data-id="${a.id}" data-name="${a.name||''}">删除</button>
+              ${isSuper() ? `<button class="small danger" data-act="del" data-id="${a.id}" data-name="${a.name||''}">删除</button>` : ''}
             </td>
           </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody>
         </table>
@@ -596,7 +609,7 @@ async function renderWh(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.warehouse_code}</td><td>${r.warehouse_name}</td><td>${r.region||''}</td>
         <td>${r.status===1?'启用':'停用'}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-w-add').onclick = async () => {
     const { error } = await ctx.supabase.from('warehouse').insert({
@@ -633,7 +646,7 @@ async function renderLoc(v) {
         <td>${r.warehouse_name||r.warehouse_code}</td>
         <td>${r.location_code}</td><td>${r.location_name||''}</td><td>${r.bill_count||0}</td>
         <td>${r.status===1?'启用':'停用'}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-l-add').onclick = async () => {
     const { error } = await ctx.supabase.from('location_config').insert({
@@ -670,7 +683,7 @@ async function renderStore(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.warehouse_name||''}</td><td>${r.store_code}</td><td>${r.store_name||''}</td>
         <td>${r.bill_count||0}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-s-add').onclick = async () => {
     const { error } = await ctx.supabase.from('store_config').insert({
@@ -706,7 +719,7 @@ async function renderMode(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.mode_code}</td><td>${r.mode_name}</td><td>${r.sort_order||0}</td>
         <td>${r.bill_count||0}</td><td>${r.status===1?'启用':'停用'}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-m-add').onclick = async () => {
     const { error } = await ctx.supabase.from('logistics_mode_config').insert({
@@ -749,7 +762,7 @@ async function renderProduct(v) {
             <td>${r.warehouse_code||''}</td><td>${r.product_code}</td><td>${r.product_name||''}</td>
             <td>${r.spec||''}</td><td>${r.default_vendor_code||''}</td>
             <td>${r.default_location_code||''}</td><td>${r.default_logistics_mode||''}</td>
-            <td><button class="small danger" data-del="${r.id}">删除</button></td>
+            <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
           </tr>`).join('')}</tbody></table>
       </div>
     </div>`
@@ -812,7 +825,7 @@ async function renderMap(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.location_code}</td><td>${r.warehouse_code}</td><td>${r.warehouse_name||''}</td>
         <td>${r.status===1?'启用':'停用'}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-mp-add').onclick = async () => {
     const { error } = await ctx.supabase.from('location_warehouse_map').insert({
@@ -875,7 +888,7 @@ async function renderDeadline(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.vendor_code||'（全部）'}</td><td>${r.warehouse_code||'（全部）'}</td>
         <td>${r.day_type}</td><td>${r.config_value}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-d-add').onclick = async () => {
     const { error } = await ctx.supabase.from('deadline_config').insert({
@@ -910,7 +923,7 @@ async function renderHoliday(v) {
     <table><tr><th>日期</th><th>说明</th><th>操作</th></tr>
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.holiday_date}</td><td>${r.description||''}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-h-add').onclick = async () => {
     const { error } = await ctx.supabase.from('holiday_config').insert({
@@ -945,7 +958,7 @@ async function renderBypass(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.vendor_code}</td><td>${r.warehouse_code||'（全部）'}</td>
         <td>${r.bypass_date}</td><td>${r.reason||''}</td>
-        <td><button class="small danger" data-del="${r.id}">删除</button></td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-b-add').onclick = async () => {
     const { error } = await ctx.supabase.from('bypass_list').insert({
@@ -1075,7 +1088,7 @@ async function renderSys(v) {
         <tbody>${(cfgs||[]).map(r=>`<tr>
           <td>${r.config_key}</td><td>${r.config_value||''}</td>
           <td>${new Date(r.updated_at).toLocaleString()}</td>
-          <td><button class="small danger" data-del="${r.id}">删除</button></td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
         </tr>`).join('')}</tbody></table>
     </div>
     <div class="card" style="box-shadow:none;padding:0;">
