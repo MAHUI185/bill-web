@@ -6,7 +6,7 @@ const app = document.getElementById('app')
 let currentUser = null
 let currentProfile = null
 let isAdmin = false
-let currentRole = null          // ★ 新增
+let currentRole = null
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
@@ -32,7 +32,7 @@ async function loadProfile() {
   const { data: admin } = await supabase.from('admin_users')
     .select('role').eq('id', currentUser.id).maybeSingle()
   isAdmin = !!admin
-  currentRole = admin?.role || null          // ★ 新增
+  currentRole = admin?.role || null
 }
 
 // ★ 维护页
@@ -77,10 +77,12 @@ function renderLogin() {
 
 function renderMain() {
   app.innerHTML = `
-    <div class="card">
-      <h1>厂商留库数据提交系统</h1>
-      <p>当前用户：${currentProfile?.vendor_name || currentUser.email} ${isAdmin ? '（管理员）' : ''}</p>
-      <button class="secondary" id="btn-logout">退出登录</button>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+      <div>
+        <h1 style="margin-bottom:4px;">厂商留库数据提交系统</h1>
+        <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${isAdmin ? '（管理员）' : ''}</p>
+      </div>
+      <button class="secondary" id="btn-logout" style="flex:0 0 auto;">退出登录</button>
     </div>
     <div class="nav" id="nav"></div>
     <div id="view"></div>`
@@ -113,7 +115,7 @@ async function renderView(key) {
     try {
       const mod = await import('./admin.js')
       await mod.renderAdmin(view, {
-        supabase, currentUser, currentProfile, isAdmin, currentRole, msg, SUPABASE_URL   // ★ 加 currentRole
+        supabase, currentUser, currentProfile, isAdmin, currentRole, msg, SUPABASE_URL
       })
     } catch (e) {
       console.error('管理后台加载失败', e)
