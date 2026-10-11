@@ -549,6 +549,7 @@ async function renderFill(view) {
     render()
   }
 
+  // ★ 提交：逐行校验，不完整则拒绝
   const btnSubmit = document.getElementById('btn-submit-all')
   if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
@@ -559,11 +560,47 @@ async function renderFill(view) {
       return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
     }
 
-    const validIn = inRows.filter(r => r.product_code && r.quantity)
-    const validOut = outRows.filter(r => r.product_code && r.quantity)
-    if (validIn.length === 0 && validOut.length === 0) {
-      return msgEl.innerHTML = msg('请至少填写一条单据', false)
+    // ★ 逐行校验
+    const errors = []
+
+    inRows.forEach((r, idx) => {
+      const missing = []
+      if (!r.location_code) missing.push('仓位')
+      if (!r.product_code) missing.push('商品代码')
+      if (!r.spec) missing.push('包装规格')
+      if (!r.quantity) missing.push('数量')
+      if (!r.arrival_date) missing.push('到货日期')
+      if (missing.length) {
+        errors.push(`入库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
+      }
+    })
+
+    outRows.forEach((r, idx) => {
+      const missing = []
+      if (!r.location_code) missing.push('仓位')
+      if (!r.product_code) missing.push('商品代码')
+      if (!r.spec) missing.push('包装规格')
+      if (!r.quantity) missing.push('数量')
+      if (!r.pick_date) missing.push('配货日期')
+      if (r.bill_type === 'DSP出库' && !r.store_code) missing.push('门店代码')
+      if (missing.length) {
+        errors.push(`出库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
+      }
+    })
+
+    if (errors.length) {
+      msgEl.innerHTML = `<div class="msg err">
+        <strong>提交失败，以下行数据不完整：</strong>
+        <div style="margin-top:8px;font-size:13px;line-height:1.8;">
+          ${errors.map(e => `<div>${e}</div>`).join('')}
+        </div>
+      </div>`
+      return
     }
+
+    // ★ 校验通过，全量提交
+    const validIn = inRows
+    const validOut = outRows
 
     let vendorAuthId
     if (isLogistics) {
