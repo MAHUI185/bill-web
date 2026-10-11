@@ -186,7 +186,8 @@ async function renderFill(view) {
     selectedVendor = { vendor_code: currentProfile?.vendor_code || '', vendor_name: currentProfile?.vendor_name || '' }
   }
 
-  const myVendorCode = selectedVendor.vendor_code
+  // ★ let，切厂商时更新
+  let myVendorCode = selectedVendor.vendor_code
 
   let myWhs = []
   if (isLogistics) {
@@ -310,6 +311,7 @@ async function renderFill(view) {
       vs.onchange = async () => {
         const vc = vs.value
         selectedVendor = myVendors.find(v => v.vendor_code === vc)
+        myVendorCode = vc                           // ★ 更新
         productList = await loadProducts(vc)
         inRows = [newInRowForVendor(vc)]
         outRows = [newOutRowForVendor(vc)]
@@ -470,7 +472,7 @@ async function renderFill(view) {
 
         if (f === 'bill_type') {
           r.bill_type = el.value
-          const f2 = calcOutFields(el.value, myVendorCode)
+          const f2 = calcOutFields(el.value, myVendorCode)   // ★ 用最新的 myVendorCode
           r.owner_code = f2.owner_code
           r.store_code = f2.store_code
           renderOutTable()
@@ -549,7 +551,6 @@ async function renderFill(view) {
     render()
   }
 
-  // ★ 提交：逐行校验，不完整则拒绝
   const btnSubmit = document.getElementById('btn-submit-all')
   if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
@@ -598,7 +599,6 @@ async function renderFill(view) {
       return
     }
 
-    // ★ 校验通过，全量提交
     const validIn = inRows
     const validOut = outRows
 
