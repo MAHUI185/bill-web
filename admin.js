@@ -456,28 +456,22 @@ async function renderLogistics(v) {
       <h2>物流商列表（${(vps||[]).length}）</h2>
       <div class="scroll">
         <table>
-          <tr><th>编号</th><th>名称</th><th style="min-width:260px;">负责厂商</th><th>状态</th><th>操作</th></tr>
+          <tr><th>编号</th><th>名称</th><th>负责厂商</th><th>状态</th><th>操作</th></tr>
           <tbody>${(vps||[]).map(p => `<tr>
             <td>${p.vendor_code||''}</td>
             <td>${p.vendor_name||''}</td>
-            <td style="font-size:12px;">
-              ${(lvMap[p.id]||[]).map(vc => `
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                  <span>${vc}</span>
-                  <button class="small danger" data-act="del-vendor" data-id="${p.id}" data-vcode="${vc}">删除</button>
-                </div>
-              `).join('') || '<div style="color:#999;">无</div>'}
-              <button class="small secondary" data-act="add-vendor" data-id="${p.id}">+ 新增负责厂商</button>
-            </td>
+            <td style="font-size:12px;color:#666;">${(lvMap[p.id]||[]).join(', ')||'-'}</td>
             <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">停用</span>'}</td>
             <td>
+              <button class="small secondary" data-act="manage-vendors" data-id="${p.id}" data-code="${p.vendor_code}">管理厂商</button>
               <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
               ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
             </td>
           </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody>
         </table>
       </div>
-    </div>`
+    </div>
+    <div id="modal-root"></div>`
 
   document.getElementById('btn-create-logistics').onclick = async () => {
     const msgEl = document.getElementById('lg-msg')
@@ -522,54 +516,54 @@ async function renderLogistics(v) {
       const id = b.dataset.id
       const act = b.dataset.act
 
-      // ★ 新增负责厂商
-      if (act === 'add-vendor') {
-        const cur = lvMap[id] || []
-        const avail = (allVendors||[]).filter(v => !cur.includes(v.vendor_code))
-        if (!avail.length) return alert('没有可添加的厂商')
+      // ★ 管理厂商（弹窗）
+      if (act === 'manage-vendors') {
+        const code = b.dataset.code
+        const current = new Set(lvMap[id] || [])
+        const modal = document.getElementById('modal-root')
+        modal.innerHTML = `
+          <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;">
+            <div style="background:#fff;border-radius:8px;padding:24px;max-width:560px;width:90%;max-height:80vh;display:flex;flex-direction:column;">
+              <h2 style="margin-bottom:16px;">管理负责厂商 · ${code}</h2>
+              <div style="flex:1;overflow:auto;border:1px solid #eee;border-radius:4px;padding:12px;margin-bottom:16px;">
+                ${(allVendors||[]).map(v => `
+                  <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #f5f5f5;cursor:pointer;">
+                    <input type="checkbox" class="chk-vendor" value="${v.vendor_code}"
+                           ${current.has(v.vendor_code)?'checked':''}
+                           style="width:auto;margin:0;" />
+                    <span style="font-size:13px;">${v.vendor_code}${v.vendor_name?' - '+v.vendor_name:''}</span>
+                  </label>
+                `).join('') || '<div style="color:#999;">无厂商</div>'}
+              </div>
+              <div style="display:flex;justify-content:flex-end;gap:8px;">
+                <button class="secondary" id="btn-modal-cancel">取消</button>
+                <button id="btn-modal-save">保存</button>
+              </div>
+            </div>
+          </div>`
 
-        const list = avail.map((v, i) => `${i+1}. ${v.vendor_code} - ${v.vendor_name||''}`).join('\n')
-        const input = prompt(`选择要添加的厂商（输入序号，多个用逗号分隔）：\n\n${list}`)
-        if (input === null) return
+        document.getElementById('btn-modal-cancel').onclick = () => { modal.innerHTML = '' }
 
-        const idxs = input.split(',').map(s => Number(s.trim()) - 1).filter(n => n >= 0 && n < avail.length)
-        if (!idxs.length) return alert('未选择有效厂商')
+        document.getElementById('btn-modal-save').onclick = async () => {
+          const checks = modal.querySelectorAll('.chk-vendor:checked')
+          const finalCodes = Array.from(checks).map(c => c.value)
 
-        const newCodes = idxs.map(i => avail[i].vendor_code)
-        const finalCodes = [...cur, ...newCodes]
-
-        const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify({ logistics_id: id, vendor_codes: finalCodes })
-        })
-        alert(res.ok ? `已添加 ${newCodes.length} 个厂商` : '添加失败：' + await res.text())
-        if (res.ok) renderTab('logistics')
-        return
-      }
-
-      // ★ 删除负责厂商
-      if (act === 'del-vendor') {
-        const vcode = b.dataset.vcode
-        if (!confirm(`确定删除负责厂商「${vcode}」？`)) return
-        const cur = lvMap[id] || []
-        const finalCodes = cur.filter(c => c !== vcode)
-
-        const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify({ logistics_id: id, vendor_codes: finalCodes })
-        })
-        alert(res.ok ? '已删除' : '删除失败：' + await res.text())
-        if (res.ok) renderTab('logistics')
+          const { data: { session } } = await ctx.supabase.auth.getSession()
+          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ logistics_id: id, vendor_codes: finalCodes })
+          })
+          if (res.ok) {
+            modal.innerHTML = ''
+            renderTab('logistics')
+          } else {
+            alert('保存失败：' + await res.text())
+          }
+        }
         return
       }
 
