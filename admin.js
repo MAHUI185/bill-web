@@ -424,12 +424,10 @@ async function renderLogistics(v) {
     .eq('account_type', 'logistics')
     .order('created_at', { ascending: false })
 
-  // 查所有物流商的关联厂商
   const { data: lvs } = await ctx.supabase.from('logistics_vendor').select('*')
   const lvMap = {}
   ;(lvs||[]).forEach(x => { (lvMap[x.logistics_id] ||= []).push(x.vendor_code) })
 
-  // 所有厂商（用于勾选负责厂商）
   const { data: allVendors } = await ctx.supabase.from('vendor_profile')
     .select('vendor_code, vendor_name')
     .eq('account_type', 'vendor')
@@ -458,14 +456,21 @@ async function renderLogistics(v) {
       <h2>物流商列表（${(vps||[]).length}）</h2>
       <div class="scroll">
         <table>
-          <tr><th>编号</th><th>名称</th><th>负责厂商</th><th>状态</th><th>操作</th></tr>
+          <tr><th>编号</th><th>名称</th><th style="min-width:260px;">负责厂商</th><th>状态</th><th>操作</th></tr>
           <tbody>${(vps||[]).map(p => `<tr>
             <td>${p.vendor_code||''}</td>
             <td>${p.vendor_name||''}</td>
-            <td style="font-size:12px;">${(lvMap[p.id]||[]).join(', ')||'-'}</td>
+            <td style="font-size:12px;">
+              ${(lvMap[p.id]||[]).map(vc => `
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                  <span>${vc}</span>
+                  <button class="small danger" data-act="del-vendor" data-id="${p.id}" data-vcode="${vc}">删除</button>
+                </div>
+              `).join('') || '<div style="color:#999;">无</div>'}
+              <button class="small secondary" data-act="add-vendor" data-id="${p.id}">+ 新增负责厂商</button>
+            </td>
             <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">停用</span>'}</td>
             <td>
-              <button class="small secondary" data-act="edit-vendors" data-id="${p.id}" data-code="${p.vendor_code}">改负责厂商</button>
               <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
               ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
             </td>
@@ -517,15 +522,21 @@ async function renderLogistics(v) {
       const id = b.dataset.id
       const act = b.dataset.act
 
-      if (act === 'edit-vendors') {
-        const code = b.dataset.code
-        const cur = (lvMap[id]||[]).join(',')
-        const input = prompt(
-          `输入负责厂商代码（逗号分隔）\n当前：${cur}`,
-          cur
-        )
+      // ★ 新增负责厂商
+      if (act === 'add-vendor') {
+        const cur = lvMap[id] || []
+        const avail = (allVendors||[]).filter(v => !cur.includes(v.vendor_code))
+        if (!avail.length) return alert('没有可添加的厂商')
+
+        const list = avail.map((v, i) => `${i+1}. ${v.vendor_code} - ${v.vendor_name||''}`).join('\n')
+        const input = prompt(`选择要添加的厂商（输入序号，多个用逗号分隔）：\n\n${list}`)
         if (input === null) return
-        const codes = input.split(',').map(s => s.trim()).filter(Boolean)
+
+        const idxs = input.split(',').map(s => Number(s.trim()) - 1).filter(n => n >= 0 && n < avail.length)
+        if (!idxs.length) return alert('未选择有效厂商')
+
+        const newCodes = idxs.map(i => avail[i].vendor_code)
+        const finalCodes = [...cur, ...newCodes]
 
         const { data: { session } } = await ctx.supabase.auth.getSession()
         const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
@@ -534,12 +545,35 @@ async function renderLogistics(v) {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${session.access_token}`
           },
-          body: JSON.stringify({ logistics_id: id, vendor_codes: codes })
+          body: JSON.stringify({ logistics_id: id, vendor_codes: finalCodes })
         })
-        alert(res.ok ? '已更新' : '更新失败：' + await res.text())
+        alert(res.ok ? `已添加 ${newCodes.length} 个厂商` : '添加失败：' + await res.text())
         if (res.ok) renderTab('logistics')
+        return
       }
 
+      // ★ 删除负责厂商
+      if (act === 'del-vendor') {
+        const vcode = b.dataset.vcode
+        if (!confirm(`确定删除负责厂商「${vcode}」？`)) return
+        const cur = lvMap[id] || []
+        const finalCodes = cur.filter(c => c !== vcode)
+
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({ logistics_id: id, vendor_codes: finalCodes })
+        })
+        alert(res.ok ? '已删除' : '删除失败：' + await res.text())
+        if (res.ok) renderTab('logistics')
+        return
+      }
+
+      // 重置密码
       if (act === 'reset') {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
@@ -553,8 +587,10 @@ async function renderLogistics(v) {
           body: JSON.stringify({ user_id: id, new_password: pwd })
         })
         alert(res.ok ? '重置成功' : '重置失败：' + await res.text())
+        return
       }
 
+      // 删除物流商
       if (act === 'del') {
         const code = b.dataset.code
         if (!confirm(`确定删除物流商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 物流商档案\n- 负责厂商关联\n\n此操作不可撤销！`)) return
@@ -571,6 +607,7 @@ async function renderLogistics(v) {
         const json = await res.json()
         alert(res.ok ? '已删除' : '删除失败：' + (json.error || '未知错误'))
         if (res.ok) renderTab('logistics')
+        return
       }
     }
   })
