@@ -268,7 +268,7 @@ async function renderFill(view) {
             <thead>
               <tr>
                 <th>单据类型</th><th>供应商代码</th><th>货主代码</th>
-                <th>仓位</th><th>商品代码</th><th>品名</th><th>包装规格</th>
+                <th>仓位</th><th>商品代码</th><th>包装规格</th>
                 <th>数量</th><th>到货日期</th><th>操作</th>
               </tr>
             </thead>
@@ -284,7 +284,7 @@ async function renderFill(view) {
               <tr>
                 <th>配单类型</th><th>货主代码</th><th>门店代码</th>
                 <th>仓位</th><th>配货日期</th>
-                <th>商品代码</th><th>品名</th><th>包装规格</th><th>数量</th><th>操作</th>
+                <th>商品代码</th><th>包装规格</th><th>数量</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="out-body"></tbody>
@@ -351,7 +351,6 @@ async function renderFill(view) {
         </select>
       </td>
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
-      <td><input data-i="${i}" data-f="product_name" value="${r.product_name||''}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
       <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" style="width:140px;margin:0;" /></td>
@@ -380,12 +379,9 @@ async function renderFill(view) {
             r.product_name = p.product_name || ''
             r.spec = p.spec || ''
             const tr = el.closest('tr')
-            tr.querySelector('[data-f="product_name"]').value = r.product_name
             tr.querySelector('[data-f="spec"]').value = r.spec
           } else {
             r.product_name = ''
-            const tr = el.closest('tr')
-            tr.querySelector('[data-f="product_name"]').value = ''
           }
           renderPreview()
           return
@@ -446,7 +442,6 @@ async function renderFill(view) {
       </td>
       <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:140px;margin:0;" /></td>
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
-      <td><input data-i="${i}" data-f="product_name" value="${r.product_name||''}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
       <td><button class="small danger" data-del-out="${i}">删除</button></td>
@@ -465,12 +460,9 @@ async function renderFill(view) {
             r.product_name = p.product_name || ''
             r.spec = p.spec || ''
             const tr = el.closest('tr')
-            tr.querySelector('[data-f="product_name"]').value = r.product_name
             tr.querySelector('[data-f="spec"]').value = r.spec
           } else {
             r.product_name = ''
-            const tr = el.closest('tr')
-            tr.querySelector('[data-f="product_name"]').value = ''
           }
           renderPreview()
           return
