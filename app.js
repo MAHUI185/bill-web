@@ -13,7 +13,6 @@ function msg(text, ok = true) {
 }
 
 async function init() {
-  // ★ 维护模式检查
   const { data: cfg } = await supabase.from('system_config')
     .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
   if (cfg?.config_value === 'true') return renderMaintenance()
@@ -35,7 +34,6 @@ async function loadProfile() {
   currentRole = admin?.role || null
 }
 
-// ★ 维护页
 function renderMaintenance() {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;text-align:center;">
@@ -92,8 +90,8 @@ function renderMain() {
   }
   const nav = document.getElementById('nav')
   const tabs = isAdmin
-    ? [['fill','填报'],['my','我的单据'],['admin','管理后台']]
-    : [['fill','填报'],['my','我的单据']]
+    ? [['fill','填报'],['my','我的单据'],['products','商品资料'],['admin','管理后台']]
+    : [['fill','填报'],['my','我的单据'],['products','商品资料']]
   nav.innerHTML = tabs.map(([k, v]) =>
     `<button data-k="${k}">${v}</button>`).join('')
   nav.querySelectorAll('button').forEach(b => {
@@ -111,6 +109,7 @@ async function renderView(key) {
   const view = document.getElementById('view')
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
+  if (key === 'products') return renderProducts(view)
   if (key === 'admin') {
     try {
       const mod = await import('./admin.js')
@@ -139,27 +138,73 @@ function getModeByType(billType) {
   return 'UNIFY'
 }
 
+// ★ 入库字段自动计算
+function calcInFields(billType, vendorCode) {
+  if (billType === 'VMI入库') {
+    return { vendor_code: vendorCode, owner_code: vendorCode }
+  }
+  if (billType === 'DSP入库') {
+    return { vendor_code: vendorCode, owner_code: '8888' }
+  }
+  return { vendor_code: vendorCode, owner_code: '' }
+}
+
+// ★ 出库字段自动计算
+function calcOutFields(billType, vendorCode) {
+  if (billType === 'VMI出库') {
+    return { owner_code: vendorCode, store_code: '9998204' }
+  }
+  if (billType === 'DSP出库') {
+    return { owner_code: '8888', store_code: '' }
+  }
+  return { owner_code: '', store_code: '' }
+}
+
+// ================= 填报 =================
 async function renderFill(view) {
   const { data: whs } = await supabase.from('vendor_warehouse')
     .select('warehouse_code').eq('vendor_id', currentUser.id)
   const { data: locs } = await supabase.from('location_config')
     .select('warehouse_code, location_code').eq('status', 1)
 
+  const myWhs = (whs||[]).map(w => w.warehouse_code)
+  const { data: stores } = await supabase.from('store_config')
+    .select('warehouse_code, store_code, store_name')
+    .eq('status', 1)
+  const myStores = (stores||[]).filter(s =>
+    !s.warehouse_code || myWhs.includes(s.warehouse_code)
+  )
+
+  const myVendorCode = currentProfile?.vendor_code || ''
+
+  // ★ 本厂商自己的商品（下拉来源）
+  const { data: myProducts } = await supabase.from('product_master')
+    .select('product_code, product_name, spec')
+    .eq('default_vendor_code', myVendorCode)
+    .order('product_code')
+
+  const productList = myProducts || []
+
   let inRows = [newInRow()]
   let outRows = [newOutRow()]
 
   function newInRow() {
+    const f = calcInFields('VMI入库', myVendorCode)
     return {
-      source_no: '', bill_type: 'VMI入库', vendor_code: currentProfile?.vendor_code || '',
-      owner_code: '', location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      product_code: '', spec: '', quantity: '', arrival_date: ''
+      source_no: '', bill_type: 'VMI入库',
+      vendor_code: f.vendor_code, owner_code: f.owner_code,
+      location_code: (locs && locs[0]) ? locs[0].location_code : '',
+      product_code: '', spec: '', quantity: '', arrival_date: '',
+      product_name: ''
     }
   }
   function newOutRow() {
+    const f = calcOutFields('VMI出库', myVendorCode)
     return {
-      bill_type: 'VMI出库', owner_code: '', store_code: '',
+      bill_type: 'VMI出库', owner_code: f.owner_code, store_code: f.store_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      pick_date: '', product_code: '', spec: '', quantity: ''
+      pick_date: '', product_code: '', spec: '', quantity: '',
+      product_name: ''
     }
   }
 
@@ -175,7 +220,7 @@ async function renderFill(view) {
             <thead>
               <tr>
                 <th>单据类型</th><th>供应商代码</th><th>货主代码</th>
-                <th>仓位</th><th>商品代码</th><th>包装规格</th>
+                <th>仓位</th><th>商品代码</th><th>品名</th><th>包装规格</th>
                 <th>数量</th><th>到货日期</th><th>操作</th>
               </tr>
             </thead>
@@ -191,7 +236,7 @@ async function renderFill(view) {
               <tr>
                 <th>配单类型</th><th>货主代码</th><th>门店代码</th>
                 <th>仓位</th><th>配货日期</th>
-                <th>商品代码</th><th>包装规格</th><th>数量</th><th>操作</th>
+                <th>商品代码</th><th>品名</th><th>包装规格</th><th>数量</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="out-body"></tbody>
@@ -213,6 +258,16 @@ async function renderFill(view) {
     renderPreview()
   }
 
+  function productOptionsHtml() {
+    return productList.map(p =>
+      `<option value="${p.product_code}">${p.product_code} - ${p.product_name||''} - ${p.spec||''}</option>`
+    ).join('')
+  }
+
+  function findProduct(code) {
+    return productList.find(p => p.product_code === code)
+  }
+
   function renderInTable() {
     const tbody = document.getElementById('in-body')
     if (!tbody) return
@@ -228,14 +283,15 @@ async function renderFill(view) {
           <option ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" style="width:120px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:120px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
       <td>
         <select data-i="${i}" data-f="location_code" style="width:80px;margin:0;">
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:120px;margin:0;" /></td>
+      <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
+      <td><input data-i="${i}" data-f="product_name" value="${r.product_name||''}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
       <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" style="width:140px;margin:0;" /></td>
@@ -243,13 +299,48 @@ async function renderFill(view) {
     </tr>`
     }).join('')
 
+    let dl = document.getElementById('product-list')
+    if (!dl) {
+      dl = document.createElement('datalist')
+      dl.id = 'product-list'
+      document.body.appendChild(dl)
+    }
+    dl.innerHTML = productOptionsHtml()
+
     tbody.querySelectorAll('input,select').forEach(el => {
       el.oninput = el.onchange = () => {
         const i = Number(el.dataset.i)
         const f = el.dataset.f
-        inRows[i][f] = el.value
+        const r = inRows[i]
+
+        if (f === 'product_code') {
+          r.product_code = el.value
+          const p = findProduct(el.value)
+          if (p) {
+            r.product_name = p.product_name || ''
+            r.spec = p.spec || ''
+            const tr = el.closest('tr')
+            tr.querySelector('[data-f="product_name"]').value = r.product_name
+            tr.querySelector('[data-f="spec"]').value = r.spec
+          } else {
+            r.product_name = ''
+          }
+          renderPreview()
+          return
+        }
+
+        if (f === 'bill_type') {
+          r.bill_type = el.value
+          const f2 = calcInFields(el.value, myVendorCode)
+          r.vendor_code = f2.vendor_code
+          r.owner_code = f2.owner_code
+          renderInTable()
+          renderPreview()
+          return
+        }
+
+        r[f] = el.value
         if (f === 'owner_code' || f === 'arrival_date') {
-          const r = inRows[i]
           r.source_no = (r.owner_code && r.arrival_date)
             ? r.owner_code + r.arrival_date.replace(/-/g, '')
             : ''
@@ -278,15 +369,23 @@ async function renderFill(view) {
           <option ${r.bill_type==='DSP出库'?'selected':''}>DSP出库</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" style="width:120px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="store_code" value="${r.store_code}" style="width:120px;margin:0;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
+      <td>
+        ${r.bill_type === 'VMI出库'
+          ? `<input data-i="${i}" data-f="store_code" value="${r.store_code}" readonly style="width:120px;margin:0;background:#f5f5f5;" />`
+          : `<select data-i="${i}" data-f="store_code" style="width:140px;margin:0;">
+               <option value="">请选择门店</option>
+               ${myStores.map(s => `<option value="${s.store_code}" ${r.store_code===s.store_code?'selected':''}>${s.store_code}${s.store_name?' - '+s.store_name:''}</option>`).join('')}
+             </select>`}
+      </td>
       <td>
         <select data-i="${i}" data-f="location_code" style="width:80px;margin:0;">
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
       <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:140px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:120px;margin:0;" /></td>
+      <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
+      <td><input data-i="${i}" data-f="product_name" value="${r.product_name||''}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
       <td><button class="small danger" data-del-out="${i}">删除</button></td>
@@ -296,7 +395,35 @@ async function renderFill(view) {
       el.oninput = el.onchange = () => {
         const i = Number(el.dataset.i)
         const f = el.dataset.f
-        outRows[i][f] = el.value
+        const r = outRows[i]
+
+        if (f === 'product_code') {
+          r.product_code = el.value
+          const p = findProduct(el.value)
+          if (p) {
+            r.product_name = p.product_name || ''
+            r.spec = p.spec || ''
+            const tr = el.closest('tr')
+            tr.querySelector('[data-f="product_name"]').value = r.product_name
+            tr.querySelector('[data-f="spec"]').value = r.spec
+          } else {
+            r.product_name = ''
+          }
+          renderPreview()
+          return
+        }
+
+        if (f === 'bill_type') {
+          r.bill_type = el.value
+          const f2 = calcOutFields(el.value, myVendorCode)
+          r.owner_code = f2.owner_code
+          r.store_code = f2.store_code
+          renderOutTable()
+          renderPreview()
+          return
+        }
+
+        r[f] = el.value
         renderPreview()
       }
     })
@@ -314,17 +441,17 @@ async function renderFill(view) {
   function renderPreview() {
     const box = document.getElementById('preview-box')
     if (!box) return
-    const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
-    const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
+    const validIn = inRows.filter(r => r.product_code && r.quantity)
+    const validOut = outRows.filter(r => r.product_code && r.quantity)
     box.innerHTML = `
       <div style="margin-bottom:12px;">
         <strong>入库 ${validIn.length} 条：</strong>
         ${validIn.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px;">
-          <tr><th>单据类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>规格</th><th>数量</th><th>到货日期</th></tr>
+          <tr><th>单据类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th><th>到货日期</th></tr>
           ${validIn.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.vendor_code}</td><td>${r.owner_code}</td>
-            <td>${r.location_code}</td><td>${r.product_code}</td><td>${r.spec}</td>
+            <td>${r.location_code}</td><td>${r.product_code}</td><td>${r.product_name||''}</td><td>${r.spec}</td>
             <td>${r.quantity}</td><td>${r.arrival_date || '-'}</td>
           </tr>`).join('')}
         </table>`}
@@ -333,11 +460,11 @@ async function renderFill(view) {
         <strong>出库 ${validOut.length} 条：</strong>
         ${validOut.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px;">
-          <tr><th>配单类型</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>规格</th><th>数量</th></tr>
+          <tr><th>配单类型</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th></tr>
           ${validOut.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
             <td>${r.location_code}</td><td>${r.pick_date || '-'}</td>
-            <td>${r.product_code}</td><td>${r.spec}</td><td>${r.quantity}</td>
+            <td>${r.product_code}</td><td>${r.product_name||''}</td><td>${r.spec}</td><td>${r.quantity}</td>
           </tr>`).join('')}
         </table>`}
       </div>`
@@ -377,8 +504,8 @@ async function renderFill(view) {
       return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
     }
 
-    const validIn = inRows.filter(r => r.source_no && r.product_code && r.quantity)
-    const validOut = outRows.filter(r => r.owner_code && r.product_code && r.quantity)
+    const validIn = inRows.filter(r => r.product_code && r.quantity)
+    const validOut = outRows.filter(r => r.product_code && r.quantity)
     if (validIn.length === 0 && validOut.length === 0) {
       return msgEl.innerHTML = msg('请至少填写一条单据', false)
     }
@@ -391,7 +518,7 @@ async function renderFill(view) {
       vendor_id: currentUser.id,
       warehouse_code: defaultWh,
       bill_type: r.bill_type,
-      source_no: r.source_no,
+      source_no: r.source_no || null,
       vendor_code: r.vendor_code,
       owner_code: r.owner_code,
       location_code: r.location_code,
@@ -403,13 +530,9 @@ async function renderFill(view) {
       arrival_date: r.arrival_date || null,
       effective_date: addOneDay(r.arrival_date),
       whole_process: 'NO',
-      product_remark: null,
+      product_remark: r.product_name || null,
       remark: null,
-      split_flag: null,
-      split_desc: null,
-      tare_dimension: null,
-      tare_value: null,
-      route: null,
+      split_flag: null, split_desc: null, tare_dimension: null, tare_value: null, route: null,
       submitter_type: 'vendor'
     }))
 
@@ -429,9 +552,8 @@ async function renderFill(view) {
       spec: r.spec,
       quantity: Number(r.quantity),
       price: 1,
-      group_name: null,
-      split_flag: null,
-      split_desc: null,
+      group_name: null, split_flag: null, split_desc: null,
+      product_remark: r.product_name || null,
       submitter_type: 'vendor',
       vendor_code: r.owner_code
     }))
@@ -452,6 +574,184 @@ async function renderFill(view) {
   }
 }
 
+// ================= 商品资料 =================
+async function renderProducts(view) {
+  const myVendorCode = currentProfile?.vendor_code || ''
+  const { data: whs } = await supabase.from('vendor_warehouse')
+    .select('warehouse_code').eq('vendor_id', currentUser.id)
+  const myWhs = (whs||[]).map(w => w.warehouse_code)
+
+  async function loadList() {
+    const { data } = await supabase.from('product_master')
+      .select('*')
+      .eq('default_vendor_code', myVendorCode)
+      .order('id', { ascending: false })
+    return data || []
+  }
+
+  const list = await loadList()
+
+  // 同编码多仓库合并显示
+  const merged = {}
+  ;(list||[]).forEach(r => {
+    const k = r.product_code
+    if (!merged[k]) {
+      merged[k] = { ...r, warehouses: [r.warehouse_code] }
+    } else {
+      merged[k].warehouses.push(r.warehouse_code)
+    }
+  })
+  const mergedList = Object.values(merged)
+
+  view.innerHTML = `
+    <div class="card">
+      <h2>新增商品</h2>
+      <div id="prod-msg"></div>
+      <div class="row">
+        <div><label>商品编码 *</label><input id="pd-code" /></div>
+        <div><label>品名 *</label><input id="pd-name" /></div>
+        <div><label>规格 *</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
+      </div>
+      <div class="row">
+        <div><label>长(cm)</label><input id="pd-length" type="number" step="0.01" /></div>
+        <div><label>宽(cm)</label><input id="pd-width" type="number" step="0.01" /></div>
+        <div><label>高(cm)</label><input id="pd-height" type="number" step="0.01" /></div>
+        <div><label>重量(kg)</label><input id="pd-weight" type="number" step="0.01" /></div>
+      </div>
+      <p style="font-size:12px;color:#666;margin:8px 0;">授权仓库：${myWhs.join(', ') || '无'}（新增时会写入全部授权仓库）</p>
+      <button id="btn-pd-add">新增商品</button>
+    </div>
+    <div class="card">
+      <h2>我的商品（${mergedList.length}）</h2>
+      <div class="scroll">
+        <table>
+          <tr><th>商品编码</th><th>品名</th><th>规格</th><th>长</th><th>宽</th><th>高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
+          <tbody>
+            ${mergedList.map(r => `<tr>
+              <td>${r.product_code||''}</td>
+              <td>${r.product_name||''}</td>
+              <td>${r.spec||''}</td>
+              <td>${r.length||''}</td>
+              <td>${r.width||''}</td>
+              <td>${r.height||''}</td>
+              <td>${r.weight||''}</td>
+              <td style="font-size:12px;">${r.warehouses.join(', ')}</td>
+              <td><button class="small secondary" data-edit="${r.product_code}">编辑</button></td>
+            </tr>`).join('') || '<tr><td colspan="9">无数据</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div id="edit-product-panel"></div>`
+
+  document.getElementById('btn-pd-add').onclick = async () => {
+    const msgEl = document.getElementById('prod-msg')
+    const code = document.getElementById('pd-code').value.trim()
+    const name = document.getElementById('pd-name').value.trim()
+    const spec = document.getElementById('pd-spec').value.trim()
+    const length = document.getElementById('pd-length').value
+    const width = document.getElementById('pd-width').value
+    const height = document.getElementById('pd-height').value
+    const weight = document.getElementById('pd-weight').value
+
+    if (!code || !name || !spec) {
+      msgEl.innerHTML = msg('商品编码、品名、规格为必填', false); return
+    }
+    if (!myWhs.length) {
+      msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false); return
+    }
+
+    for (const wh of myWhs) {
+      const { data: exist } = await supabase.from('product_master')
+        .select('id')
+        .eq('warehouse_code', wh)
+        .eq('default_vendor_code', myVendorCode)
+        .eq('product_code', code)
+        .maybeSingle()
+      if (exist) {
+        msgEl.innerHTML = msg(`商品编码 ${code} 在仓库 ${wh} 下已存在，无法新增`, false)
+        return
+      }
+    }
+
+    const rows = myWhs.map(wh => ({
+      warehouse_code: wh,
+      product_code: code,
+      product_name: name,
+      spec,
+      length: length ? Number(length) : null,
+      width: width ? Number(width) : null,
+      height: height ? Number(height) : null,
+      weight: weight ? Number(weight) : null,
+      default_vendor_code: myVendorCode,
+      default_owner_code: myVendorCode
+    }))
+
+    const { error } = await supabase.from('product_master').insert(rows)
+    if (error) {
+      msgEl.innerHTML = msg(error.message, false)
+      return
+    }
+    msgEl.innerHTML = msg(`新增成功（写入 ${rows.length} 个仓库）`, true)
+    setTimeout(() => renderProducts(view), 600)
+  }
+
+  view.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.onclick = () => {
+      const code = btn.dataset.edit
+      const recs = (list||[]).filter(r => r.product_code === code)
+      if (!recs.length) return
+      const first = recs[0]
+      const panel = document.getElementById('edit-product-panel')
+      panel.innerHTML = `
+        <div class="card">
+          <h2>编辑商品：${code}</h2>
+          <div id="pedit-msg"></div>
+          <div class="row">
+            <div><label>品名 *</label><input id="pe-name" value="${first.product_name||''}" /></div>
+            <div><label>规格 *</label><input id="pe-spec" value="${first.spec||''}" /></div>
+          </div>
+          <div class="row">
+            <div><label>长(cm)</label><input id="pe-length" type="number" step="0.01" value="${first.length||''}" /></div>
+            <div><label>宽(cm)</label><input id="pe-width" type="number" step="0.01" value="${first.width||''}" /></div>
+            <div><label>高(cm)</label><input id="pe-height" type="number" step="0.01" value="${first.height||''}" /></div>
+            <div><label>重量(kg)</label><input id="pe-weight" type="number" step="0.01" value="${first.weight||''}" /></div>
+          </div>
+          <p style="font-size:12px;color:#666;margin:8px 0;">将同时更新 ${recs.length} 条记录（仓库：${recs.map(r=>r.warehouse_code).join(', ')}）</p>
+          <button id="btn-pe-save">保存</button>
+          <button class="secondary" id="btn-pe-cancel">取消</button>
+        </div>`
+
+      document.getElementById('btn-pe-cancel').onclick = () => panel.innerHTML = ''
+
+      document.getElementById('btn-pe-save').onclick = async () => {
+        const msgEl = document.getElementById('pedit-msg')
+        const patch = {
+          product_name: document.getElementById('pe-name').value.trim(),
+          spec: document.getElementById('pe-spec').value.trim(),
+          length: document.getElementById('pe-length').value ? Number(document.getElementById('pe-length').value) : null,
+          width: document.getElementById('pe-width').value ? Number(document.getElementById('pe-width').value) : null,
+          height: document.getElementById('pe-height').value ? Number(document.getElementById('pe-height').value) : null,
+          weight: document.getElementById('pe-weight').value ? Number(document.getElementById('pe-weight').value) : null
+        }
+        if (!patch.product_name || !patch.spec) {
+          msgEl.innerHTML = msg('品名、规格为必填', false); return
+        }
+        const ids = recs.map(r => r.id)
+        const { error } = await supabase.from('product_master')
+          .update(patch).in('id', ids)
+        if (error) {
+          msgEl.innerHTML = msg(error.message, false)
+          return
+        }
+        msgEl.innerHTML = msg('已保存', true)
+        setTimeout(() => renderProducts(view), 600)
+      }
+    }
+  })
+}
+
+// ================= 我的单据 =================
 async function renderMy(view) {
   const { data } = await supabase.from('bill_order')
     .select('*').eq('vendor_id', currentUser.id)
@@ -495,38 +795,17 @@ async function renderMy(view) {
           <h2>修改单据</h2>
           <input id="e-source" type="hidden" value="${bill.source_no||''}" />
           <div class="row">
-            <div>
-              <label>商品代码</label>
-              <input id="e-product" value="${bill.product_code||''}" />
-            </div>
-            <div>
-              <label>包装规格</label>
-              <input id="e-spec" value="${bill.spec||''}" />
-            </div>
-            <div>
-              <label>数量</label>
-              <input id="e-qty" type="number" value="${bill.quantity||''}" />
-            </div>
+            <div><label>商品代码</label><input id="e-product" value="${bill.product_code||''}" /></div>
+            <div><label>包装规格</label><input id="e-spec" value="${bill.spec||''}" /></div>
+            <div><label>数量</label><input id="e-qty" type="number" value="${bill.quantity||''}" /></div>
           </div>
           <div class="row">
-            <div>
-              <label>货主代码</label>
-              <input id="e-owner" value="${bill.owner_code||''}" />
-            </div>
-            <div>
-              <label>到货日期</label>
-              <input id="e-arrival" type="date" value="${bill.arrival_date||''}" />
-            </div>
-            <div>
-              <label>订单到效日期</label>
-              <input id="e-effective" type="date" value="${bill.effective_date||''}" />
-            </div>
+            <div><label>货主代码</label><input id="e-owner" value="${bill.owner_code||''}" /></div>
+            <div><label>到货日期</label><input id="e-arrival" type="date" value="${bill.arrival_date||''}" /></div>
+            <div><label>订单到效日期</label><input id="e-effective" type="date" value="${bill.effective_date||''}" /></div>
           </div>
           <div class="row">
-            <div style="flex:3;">
-              <label>备注</label>
-              <input id="e-remark" value="${bill.remark||''}" />
-            </div>
+            <div style="flex:3;"><label>备注</label><input id="e-remark" value="${bill.remark||''}" /></div>
           </div>
           <button id="btn-save-edit">保存修改</button>
           <button class="secondary" id="btn-cancel-edit">取消</button>
