@@ -13,6 +13,7 @@ function msg(text, ok = true) {
 }
 
 async function init() {
+  // 维护模式检查
   const { data: cfg } = await supabase.from('system_config')
     .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
   if (cfg?.config_value === 'true') return renderMaintenance()
@@ -89,8 +90,9 @@ function renderMain() {
     init()
   }
   const nav = document.getElementById('nav')
+  // ★ 管理员/超管只有管理后台；厂商有填报、我的单据、商品资料
   const tabs = isAdmin
-    ? [['fill','填报'],['my','我的单据'],['products','商品资料'],['admin','管理后台']]
+    ? [['admin','管理后台']]
     : [['fill','填报'],['my','我的单据'],['products','商品资料']]
   nav.innerHTML = tabs.map(([k, v]) =>
     `<button data-k="${k}">${v}</button>`).join('')
@@ -138,21 +140,21 @@ function getModeByType(billType) {
   return 'UNIFY'
 }
 
-// ★ 入库字段自动计算
-function calcInFields(billType, vendorCode) {
+// 入库自动字段（厂商：supplierInput = 厂编）
+function calcInFields(billType, supplierInput) {
   if (billType === 'VMI入库') {
-    return { vendor_code: vendorCode, owner_code: vendorCode }
+    return { vendor_code: supplierInput, owner_code: supplierInput }
   }
   if (billType === 'DSP入库') {
-    return { vendor_code: vendorCode, owner_code: '8888' }
+    return { vendor_code: supplierInput, owner_code: '8888' }
   }
-  return { vendor_code: vendorCode, owner_code: '' }
+  return { vendor_code: supplierInput, owner_code: '' }
 }
 
-// ★ 出库字段自动计算
-function calcOutFields(billType, vendorCode) {
+// 出库自动字段（厂商：supplierInput = 厂编）
+function calcOutFields(billType, supplierInput) {
   if (billType === 'VMI出库') {
-    return { owner_code: vendorCode, store_code: '9998204' }
+    return { owner_code: supplierInput, store_code: '9998204' }
   }
   if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
@@ -160,14 +162,20 @@ function calcOutFields(billType, vendorCode) {
   return { owner_code: '', store_code: '' }
 }
 
-// ================= 填报 =================
+// ================= 填报（仅厂商） =================
 async function renderFill(view) {
+  const myVendorCode = currentProfile?.vendor_code || ''
+
+  // 授权仓库
   const { data: whs } = await supabase.from('vendor_warehouse')
     .select('warehouse_code').eq('vendor_id', currentUser.id)
+  const myWhs = (whs||[]).map(w => w.warehouse_code)
+
+  // 仓位
   const { data: locs } = await supabase.from('location_config')
     .select('warehouse_code, location_code').eq('status', 1)
 
-  const myWhs = (whs||[]).map(w => w.warehouse_code)
+  // 门店：按授权仓库过滤
   const { data: stores } = await supabase.from('store_config')
     .select('warehouse_code, store_code, store_name')
     .eq('status', 1)
@@ -175,14 +183,11 @@ async function renderFill(view) {
     !s.warehouse_code || myWhs.includes(s.warehouse_code)
   )
 
-  const myVendorCode = currentProfile?.vendor_code || ''
-
-  // ★ 本厂商自己的商品（下拉来源）
+  // 商品下拉：只看自己厂编
   const { data: myProducts } = await supabase.from('product_master')
     .select('product_code, product_name, spec')
     .eq('default_vendor_code', myVendorCode)
     .order('product_code')
-
   const productList = myProducts || []
 
   let inRows = [newInRow()]
@@ -324,6 +329,8 @@ async function renderFill(view) {
             tr.querySelector('[data-f="spec"]').value = r.spec
           } else {
             r.product_name = ''
+            const tr = el.closest('tr')
+            tr.querySelector('[data-f="product_name"]').value = ''
           }
           renderPreview()
           return
@@ -331,8 +338,7 @@ async function renderFill(view) {
 
         if (f === 'bill_type') {
           r.bill_type = el.value
-          const f2 = calcInFields(el.value, myVendorCode)
-          r.vendor_code = f2.vendor_code
+          const f2 = calcInFields(el.value, r.vendor_code)
           r.owner_code = f2.owner_code
           renderInTable()
           renderPreview()
@@ -408,6 +414,8 @@ async function renderFill(view) {
             tr.querySelector('[data-f="spec"]').value = r.spec
           } else {
             r.product_name = ''
+            const tr = el.closest('tr')
+            tr.querySelector('[data-f="product_name"]').value = ''
           }
           renderPreview()
           return
@@ -574,9 +582,10 @@ async function renderFill(view) {
   }
 }
 
-// ================= 商品资料 =================
+// ================= 商品资料（仅厂商） =================
 async function renderProducts(view) {
   const myVendorCode = currentProfile?.vendor_code || ''
+
   const { data: whs } = await supabase.from('vendor_warehouse')
     .select('warehouse_code').eq('vendor_id', currentUser.id)
   const myWhs = (whs||[]).map(w => w.warehouse_code)
