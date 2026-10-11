@@ -7,13 +7,14 @@ let currentUser = null
 let currentProfile = null
 let isAdmin = false
 let currentRole = null
+let isLogistics = false
+let myVendors = []   // 物流商负责的厂商列表 [{ vendor_code, vendor_name }]
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
 }
 
 async function init() {
-  // 维护模式检查
   const { data: cfg } = await supabase.from('system_config')
     .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
   if (cfg?.config_value === 'true') return renderMaintenance()
@@ -29,10 +30,22 @@ async function loadProfile() {
   const { data: profile } = await supabase.from('vendor_profile')
     .select('*').eq('id', currentUser.id).single()
   currentProfile = profile
+
   const { data: admin } = await supabase.from('admin_users')
     .select('role').eq('id', currentUser.id).maybeSingle()
   isAdmin = !!admin
   currentRole = admin?.role || null
+
+  isLogistics = profile?.account_type === 'logistics'
+
+  // ★ 物流商：加载负责的厂商列表
+  if (isLogistics) {
+    const { data: lv } = await supabase.from('logistics_vendor')
+      .select('vendor_code, vendor_name')
+      .eq('logistics_id', currentUser.id)
+      .order('vendor_code')
+    myVendors = lv || []
+  }
 }
 
 function renderMaintenance() {
@@ -75,11 +88,12 @@ function renderLogin() {
 }
 
 function renderMain() {
+  const roleTag = isAdmin ? '（管理员）' : isLogistics ? '（物流商）' : ''
   app.innerHTML = `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
       <div>
         <h1 style="margin-bottom:4px;">厂商留库数据提交系统</h1>
-        <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${isAdmin ? '（管理员）' : ''}</p>
+        <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
       </div>
       <button class="secondary" id="btn-logout" style="flex:0 0 auto;">退出登录</button>
     </div>
@@ -90,7 +104,6 @@ function renderMain() {
     init()
   }
   const nav = document.getElementById('nav')
-  // ★ 管理员/超管只有管理后台；厂商有填报、我的单据、商品资料
   const tabs = isAdmin
     ? [['admin','管理后台']]
     : [['fill','填报'],['my','我的单据'],['products','商品资料']]
@@ -140,7 +153,6 @@ function getModeByType(billType) {
   return 'UNIFY'
 }
 
-// 入库自动字段（厂商：supplierInput = 厂编）
 function calcInFields(billType, supplierInput) {
   if (billType === 'VMI入库') {
     return { vendor_code: supplierInput, owner_code: supplierInput }
@@ -151,7 +163,6 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
-// 出库自动字段（厂商：supplierInput = 厂编）
 function calcOutFields(billType, supplierInput) {
   if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: '9998204' }
@@ -162,20 +173,48 @@ function calcOutFields(billType, supplierInput) {
   return { owner_code: '', store_code: '' }
 }
 
-// ================= 填报（仅厂商） =================
+// ================= 填报 =================
 async function renderFill(view) {
-  const myVendorCode = currentProfile?.vendor_code || ''
+  // ★ 物流商：先选厂商
+  // 厂商：固定用自己
+  let selectedVendor = null   // { vendor_code, vendor_name }
 
-  // 授权仓库
-  const { data: whs } = await supabase.from('vendor_warehouse')
-    .select('warehouse_code').eq('vendor_id', currentUser.id)
-  const myWhs = (whs||[]).map(w => w.warehouse_code)
+  if (isLogistics) {
+    if (!myVendors.length) {
+      view.innerHTML = `<div class="card"><h2>填报单据</h2><p style="color:#cf1322;">当前物流商未配置负责厂商，请联系管理员。</p></div>`
+      return
+    }
+    // 默认选第一个
+    selectedVendor = myVendors[0]
+  } else {
+    selectedVendor = { vendor_code: currentProfile?.vendor_code || '', vendor_name: currentProfile?.vendor_name || '' }
+  }
 
-  // 仓位
+  const myVendorCode = selectedVendor.vendor_code
+
+  // 授权仓库：物流商 → 用它负责厂商的授权仓库（以第一个选中厂商为准）
+  // 厂商 → 用自己
+  let myWhs = []
+  if (isLogistics) {
+    // 物流商：取负责厂商的授权仓库合集
+    const codes = myVendors.map(v => v.vendor_code)
+    const { data: vps } = await supabase.from('vendor_profile')
+      .select('id, vendor_code').in('vendor_code', codes)
+    const ids = (vps||[]).map(v => v.id)
+    if (ids.length) {
+      const { data: vw } = await supabase.from('vendor_warehouse')
+        .select('warehouse_code').in('vendor_id', ids)
+      myWhs = [...new Set((vw||[]).map(x => x.warehouse_code))]
+    }
+  } else {
+    const { data: vw } = await supabase.from('vendor_warehouse')
+      .select('warehouse_code').eq('vendor_id', currentUser.id)
+    myWhs = (vw||[]).map(x => x.warehouse_code)
+  }
+
   const { data: locs } = await supabase.from('location_config')
     .select('warehouse_code, location_code').eq('status', 1)
 
-  // 门店：按授权仓库过滤
   const { data: stores } = await supabase.from('store_config')
     .select('warehouse_code, store_code, store_name')
     .eq('status', 1)
@@ -183,12 +222,15 @@ async function renderFill(view) {
     !s.warehouse_code || myWhs.includes(s.warehouse_code)
   )
 
-  // 商品下拉：只看自己厂编
-  const { data: myProducts } = await supabase.from('product_master')
-    .select('product_code, product_name, spec')
-    .eq('default_vendor_code', myVendorCode)
-    .order('product_code')
-  const productList = myProducts || []
+  // 商品下拉：按当前选中厂编
+  async function loadProducts(vendorCode) {
+    const { data } = await supabase.from('product_master')
+      .select('product_code, product_name, spec')
+      .eq('default_vendor_code', vendorCode)
+      .order('product_code')
+    return data || []
+  }
+  let productList = await loadProducts(myVendorCode)
 
   let inRows = [newInRow()]
   let outRows = [newOutRow()]
@@ -217,6 +259,15 @@ async function renderFill(view) {
     view.innerHTML = `
       <div class="card">
         <h2>填报单据</h2>
+        ${isLogistics ? `
+          <div class="row" style="margin-bottom:12px;">
+            <div>
+              <label>代报厂商 *</label>
+              <select id="vendor-select">
+                ${myVendors.map(v => `<option value="${v.vendor_code}" ${v.vendor_code===myVendorCode?'selected':''}>${v.vendor_code}${v.vendor_name?' - '+v.vendor_name:''}</option>`).join('')}
+              </select>
+            </div>
+          </div>` : ''}
         <div id="fill-msg"></div>
 
         <h3 style="margin:16px 0 8px;">入库单</h3>
@@ -261,6 +312,39 @@ async function renderFill(view) {
     renderInTable()
     renderOutTable()
     renderPreview()
+
+    // ★ 物流商切厂商：重载商品 + 重置行
+    const vs = document.getElementById('vendor-select')
+    if (vs) {
+      vs.onchange = async () => {
+        const vc = vs.value
+        selectedVendor = myVendors.find(v => v.vendor_code === vc)
+        productList = await loadProducts(vc)
+        inRows = [newInRowForVendor(vc)]
+        outRows = [newOutRowForVendor(vc)]
+        render()
+      }
+    }
+  }
+
+  function newInRowForVendor(vc) {
+    const f = calcInFields('VMI入库', vc)
+    return {
+      source_no: '', bill_type: 'VMI入库',
+      vendor_code: f.vendor_code, owner_code: f.owner_code,
+      location_code: (locs && locs[0]) ? locs[0].location_code : '',
+      product_code: '', spec: '', quantity: '', arrival_date: '',
+      product_name: ''
+    }
+  }
+  function newOutRowForVendor(vc) {
+    const f = calcOutFields('VMI出库', vc)
+    return {
+      bill_type: 'VMI出库', owner_code: f.owner_code, store_code: f.store_code,
+      location_code: (locs && locs[0]) ? locs[0].location_code : '',
+      pick_date: '', product_code: '', spec: '', quantity: '',
+      product_name: ''
+    }
   }
 
   function productOptionsHtml() {
@@ -482,14 +566,14 @@ async function renderFill(view) {
 
   const btnAddIn = document.getElementById('btn-add-in')
   if (btnAddIn) btnAddIn.onclick = () => {
-    inRows.push(newInRow())
+    inRows.push(newInRowForVendor(myVendorCode))
     renderInTable()
     renderPreview()
   }
 
   const btnAddOut = document.getElementById('btn-add-out')
   if (btnAddOut) btnAddOut.onclick = () => {
-    outRows.push(newOutRow())
+    outRows.push(newOutRowForVendor(myVendorCode))
     renderOutTable()
     renderPreview()
   }
@@ -497,8 +581,8 @@ async function renderFill(view) {
   const btnClear = document.getElementById('btn-clear-all')
   if (btnClear) btnClear.onclick = () => {
     if (!confirm('确定清空所有已填内容？')) return
-    inRows = [newInRow()]
-    outRows = [newOutRow()]
+    inRows = [newInRowForVendor(myVendorCode)]
+    outRows = [newOutRowForVendor(myVendorCode)]
     render()
   }
 
@@ -517,13 +601,28 @@ async function renderFill(view) {
     if (validIn.length === 0 && validOut.length === 0) {
       return msgEl.innerHTML = msg('请至少填写一条单据', false)
     }
-    if (!whs || whs.length === 0) {
+
+    // ★ 物流商：找负责厂商的 auth id（用于 vendor_id）
+    let vendorAuthId
+    if (isLogistics) {
+      const { data: vp } = await supabase.from('vendor_profile')
+        .select('id').eq('vendor_code', myVendorCode).maybeSingle()
+      if (!vp) return msgEl.innerHTML = msg('找不到代报厂商，请联系管理员', false)
+      vendorAuthId = vp.id
+    } else {
+      vendorAuthId = currentUser.id
+    }
+
+    // 仓库：物流商用负责厂商的授权仓；厂商用自己
+    let defaultWh
+    if (myWhs.length) {
+      defaultWh = myWhs[0]
+    } else {
       return msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false)
     }
-    const defaultWh = whs[0].warehouse_code
 
     const inPayloads = validIn.map(r => ({
-      vendor_id: currentUser.id,
+      vendor_id: vendorAuthId,
       warehouse_code: defaultWh,
       bill_type: r.bill_type,
       source_no: r.source_no || null,
@@ -545,7 +644,7 @@ async function renderFill(view) {
     }))
 
     const outPayloads = validOut.map(r => ({
-      vendor_id: currentUser.id,
+      vendor_id: vendorAuthId,
       warehouse_code: defaultWh,
       bill_type: r.bill_type,
       source_no: null,
@@ -576,207 +675,263 @@ async function renderFill(view) {
     }
 
     msgEl.innerHTML = msg(`提交成功：入库 ${inPayloads.length} 条，出库 ${outPayloads.length} 条`, true)
-    inRows = [newInRow()]
-    outRows = [newOutRow()]
+    inRows = [newInRowForVendor(myVendorCode)]
+    outRows = [newOutRowForVendor(myVendorCode)]
     setTimeout(() => render(), 800)
   }
 }
 
-// ================= 商品资料（仅厂商） =================
+// ================= 商品资料 =================
 async function renderProducts(view) {
-  const myVendorCode = currentProfile?.vendor_code || ''
+  // 物流商：顶部选厂商
+  let selectedVendorCode = isLogistics
+    ? (myVendors[0]?.vendor_code || '')
+    : (currentProfile?.vendor_code || '')
 
+  if (isLogistics && !myVendors.length) {
+    view.innerHTML = `<div class="card"><h2>商品资料</h2><p style="color:#cf1322;">当前物流商未配置负责厂商，请联系管理员。</p></div>`
+    return
+  }
+
+  // 厂商：用自己厂编；物流商：用选中厂商
   const { data: whs } = await supabase.from('vendor_warehouse')
     .select('warehouse_code').eq('vendor_id', currentUser.id)
   const myWhs = (whs||[]).map(w => w.warehouse_code)
 
-  async function loadList() {
+  async function loadList(vc) {
     const { data } = await supabase.from('product_master')
       .select('*')
-      .eq('default_vendor_code', myVendorCode)
+      .eq('default_vendor_code', vc)
       .order('id', { ascending: false })
     return data || []
   }
 
-  const list = await loadList()
+  let list = await loadList(selectedVendorCode)
 
-  // 同编码多仓库合并显示
-  const merged = {}
-  ;(list||[]).forEach(r => {
-    const k = r.product_code
-    if (!merged[k]) {
-      merged[k] = { ...r, warehouses: [r.warehouse_code] }
-    } else {
-      merged[k].warehouses.push(r.warehouse_code)
-    }
-  })
-  const mergedList = Object.values(merged)
+  function renderList() {
+    const merged = {}
+    ;(list||[]).forEach(r => {
+      const k = r.product_code
+      if (!merged[k]) {
+        merged[k] = { ...r, warehouses: [r.warehouse_code] }
+      } else {
+        merged[k].warehouses.push(r.warehouse_code)
+      }
+    })
+    const mergedList = Object.values(merged)
 
-  view.innerHTML = `
-    <div class="card">
-      <h2>新增商品</h2>
-      <div id="prod-msg"></div>
-      <div class="row">
-        <div><label>商品编码 *</label><input id="pd-code" /></div>
-        <div><label>品名 *</label><input id="pd-name" /></div>
-        <div><label>规格 *</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
+    view.innerHTML = `
+      ${isLogistics ? `
+        <div class="card">
+          <div class="row">
+            <div>
+              <label>选择厂商</label>
+              <select id="prod-vendor-select">
+                ${myVendors.map(v => `<option value="${v.vendor_code}" ${v.vendor_code===selectedVendorCode?'selected':''}>${v.vendor_code}${v.vendor_name?' - '+v.vendor_name:''}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+        </div>` : ''}
+      <div class="card">
+        <h2>新增商品</h2>
+        <div id="prod-msg"></div>
+        <div class="row">
+          <div><label>商品编码 *</label><input id="pd-code" /></div>
+          <div><label>品名 *</label><input id="pd-name" /></div>
+          <div><label>规格 *</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
+        </div>
+        <div class="row">
+          <div><label>长(cm)</label><input id="pd-length" type="number" step="0.01" /></div>
+          <div><label>宽(cm)</label><input id="pd-width" type="number" step="0.01" /></div>
+          <div><label>高(cm)</label><input id="pd-height" type="number" step="0.01" /></div>
+          <div><label>重量(kg)</label><input id="pd-weight" type="number" step="0.01" /></div>
+        </div>
+        <p style="font-size:12px;color:#666;margin:8px 0;">授权仓库：${myWhs.join(', ') || '无'}</p>
+        <button id="btn-pd-add">新增商品</button>
       </div>
-      <div class="row">
-        <div><label>长(cm)</label><input id="pd-length" type="number" step="0.01" /></div>
-        <div><label>宽(cm)</label><input id="pd-width" type="number" step="0.01" /></div>
-        <div><label>高(cm)</label><input id="pd-height" type="number" step="0.01" /></div>
-        <div><label>重量(kg)</label><input id="pd-weight" type="number" step="0.01" /></div>
+      <div class="card">
+        <h2>商品列表（${mergedList.length}）</h2>
+        <div class="scroll">
+          <table>
+            <tr><th>商品编码</th><th>品名</th><th>规格</th><th>长</th><th>宽</th><th>高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
+            <tbody>
+              ${mergedList.map(r => `<tr>
+                <td>${r.product_code||''}</td>
+                <td>${r.product_name||''}</td>
+                <td>${r.spec||''}</td>
+                <td>${r.length||''}</td>
+                <td>${r.width||''}</td>
+                <td>${r.height||''}</td>
+                <td>${r.weight||''}</td>
+                <td style="font-size:12px;">${r.warehouses.join(', ')}</td>
+                <td><button class="small secondary" data-edit="${r.product_code}">编辑</button></td>
+              </tr>`).join('') || '<tr><td colspan="9">无数据</td></tr>'}
+            </tbody>
+          </table>
+        </div>
       </div>
-      <p style="font-size:12px;color:#666;margin:8px 0;">授权仓库：${myWhs.join(', ') || '无'}（新增时会写入全部授权仓库）</p>
-      <button id="btn-pd-add">新增商品</button>
-    </div>
-    <div class="card">
-      <h2>我的商品（${mergedList.length}）</h2>
-      <div class="scroll">
-        <table>
-          <tr><th>商品编码</th><th>品名</th><th>规格</th><th>长</th><th>宽</th><th>高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
-          <tbody>
-            ${mergedList.map(r => `<tr>
-              <td>${r.product_code||''}</td>
-              <td>${r.product_name||''}</td>
-              <td>${r.spec||''}</td>
-              <td>${r.length||''}</td>
-              <td>${r.width||''}</td>
-              <td>${r.height||''}</td>
-              <td>${r.weight||''}</td>
-              <td style="font-size:12px;">${r.warehouses.join(', ')}</td>
-              <td><button class="small secondary" data-edit="${r.product_code}">编辑</button></td>
-            </tr>`).join('') || '<tr><td colspan="9">无数据</td></tr>'}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div id="edit-product-panel"></div>`
+      <div id="edit-product-panel"></div>`
 
-  document.getElementById('btn-pd-add').onclick = async () => {
-    const msgEl = document.getElementById('prod-msg')
-    const code = document.getElementById('pd-code').value.trim()
-    const name = document.getElementById('pd-name').value.trim()
-    const spec = document.getElementById('pd-spec').value.trim()
-    const length = document.getElementById('pd-length').value
-    const width = document.getElementById('pd-width').value
-    const height = document.getElementById('pd-height').value
-    const weight = document.getElementById('pd-weight').value
-
-    if (!code || !name || !spec) {
-      msgEl.innerHTML = msg('商品编码、品名、规格为必填', false); return
-    }
-    if (!myWhs.length) {
-      msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false); return
-    }
-
-    for (const wh of myWhs) {
-      const { data: exist } = await supabase.from('product_master')
-        .select('id')
-        .eq('warehouse_code', wh)
-        .eq('default_vendor_code', myVendorCode)
-        .eq('product_code', code)
-        .maybeSingle()
-      if (exist) {
-        msgEl.innerHTML = msg(`商品编码 ${code} 在仓库 ${wh} 下已存在，无法新增`, false)
-        return
+    // 物流商切厂商 → 重载列表
+    const vs = document.getElementById('prod-vendor-select')
+    if (vs) {
+      vs.onchange = async () => {
+        selectedVendorCode = vs.value
+        list = await loadList(selectedVendorCode)
+        renderList()
       }
     }
 
-    const rows = myWhs.map(wh => ({
-      warehouse_code: wh,
-      product_code: code,
-      product_name: name,
-      spec,
-      length: length ? Number(length) : null,
-      width: width ? Number(width) : null,
-      height: height ? Number(height) : null,
-      weight: weight ? Number(weight) : null,
-      default_vendor_code: myVendorCode,
-      default_owner_code: myVendorCode
-    }))
+    document.getElementById('btn-pd-add').onclick = async () => {
+      const msgEl = document.getElementById('prod-msg')
+      const code = document.getElementById('pd-code').value.trim()
+      const name = document.getElementById('pd-name').value.trim()
+      const spec = document.getElementById('pd-spec').value.trim()
+      const length = document.getElementById('pd-length').value
+      const width = document.getElementById('pd-width').value
+      const height = document.getElementById('pd-height').value
+      const weight = document.getElementById('pd-weight').value
 
-    const { error } = await supabase.from('product_master').insert(rows)
-    if (error) {
-      msgEl.innerHTML = msg(error.message, false)
-      return
-    }
-    msgEl.innerHTML = msg(`新增成功（写入 ${rows.length} 个仓库）`, true)
-    setTimeout(() => renderProducts(view), 600)
-  }
+      if (!code || !name || !spec) {
+        msgEl.innerHTML = msg('商品编码、品名、规格为必填', false); return
+      }
+      if (!myWhs.length) {
+        msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false); return
+      }
 
-  view.querySelectorAll('[data-edit]').forEach(btn => {
-    btn.onclick = () => {
-      const code = btn.dataset.edit
-      const recs = (list||[]).filter(r => r.product_code === code)
-      if (!recs.length) return
-      const first = recs[0]
-      const panel = document.getElementById('edit-product-panel')
-      panel.innerHTML = `
-        <div class="card">
-          <h2>编辑商品：${code}</h2>
-          <div id="pedit-msg"></div>
-          <div class="row">
-            <div><label>品名 *</label><input id="pe-name" value="${first.product_name||''}" /></div>
-            <div><label>规格 *</label><input id="pe-spec" value="${first.spec||''}" /></div>
-          </div>
-          <div class="row">
-            <div><label>长(cm)</label><input id="pe-length" type="number" step="0.01" value="${first.length||''}" /></div>
-            <div><label>宽(cm)</label><input id="pe-width" type="number" step="0.01" value="${first.width||''}" /></div>
-            <div><label>高(cm)</label><input id="pe-height" type="number" step="0.01" value="${first.height||''}" /></div>
-            <div><label>重量(kg)</label><input id="pe-weight" type="number" step="0.01" value="${first.weight||''}" /></div>
-          </div>
-          <p style="font-size:12px;color:#666;margin:8px 0;">将同时更新 ${recs.length} 条记录（仓库：${recs.map(r=>r.warehouse_code).join(', ')}）</p>
-          <button id="btn-pe-save">保存</button>
-          <button class="secondary" id="btn-pe-cancel">取消</button>
-        </div>`
-
-      document.getElementById('btn-pe-cancel').onclick = () => panel.innerHTML = ''
-
-      document.getElementById('btn-pe-save').onclick = async () => {
-        const msgEl = document.getElementById('pedit-msg')
-        const patch = {
-          product_name: document.getElementById('pe-name').value.trim(),
-          spec: document.getElementById('pe-spec').value.trim(),
-          length: document.getElementById('pe-length').value ? Number(document.getElementById('pe-length').value) : null,
-          width: document.getElementById('pe-width').value ? Number(document.getElementById('pe-width').value) : null,
-          height: document.getElementById('pe-height').value ? Number(document.getElementById('pe-height').value) : null,
-          weight: document.getElementById('pe-weight').value ? Number(document.getElementById('pe-weight').value) : null
-        }
-        if (!patch.product_name || !patch.spec) {
-          msgEl.innerHTML = msg('品名、规格为必填', false); return
-        }
-        const ids = recs.map(r => r.id)
-        const { error } = await supabase.from('product_master')
-          .update(patch).in('id', ids)
-        if (error) {
-          msgEl.innerHTML = msg(error.message, false)
+      for (const wh of myWhs) {
+        const { data: exist } = await supabase.from('product_master')
+          .select('id')
+          .eq('warehouse_code', wh)
+          .eq('default_vendor_code', selectedVendorCode)
+          .eq('product_code', code)
+          .maybeSingle()
+        if (exist) {
+          msgEl.innerHTML = msg(`商品编码 ${code} 在仓库 ${wh} 下已存在，无法新增`, false)
           return
         }
-        msgEl.innerHTML = msg('已保存', true)
-        setTimeout(() => renderProducts(view), 600)
       }
+
+      const rows = myWhs.map(wh => ({
+        warehouse_code: wh,
+        product_code: code,
+        product_name: name,
+        spec,
+        length: length ? Number(length) : null,
+        width: width ? Number(width) : null,
+        height: height ? Number(height) : null,
+        weight: weight ? Number(weight) : null,
+        default_vendor_code: selectedVendorCode,
+        default_owner_code: selectedVendorCode
+      }))
+
+      const { error } = await supabase.from('product_master').insert(rows)
+      if (error) {
+        msgEl.innerHTML = msg(error.message, false)
+        return
+      }
+      msgEl.innerHTML = msg(`新增成功（写入 ${rows.length} 个仓库）`, true)
+      setTimeout(async () => {
+        list = await loadList(selectedVendorCode)
+        renderList()
+      }, 600)
     }
-  })
+
+    view.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.onclick = () => {
+        const code = btn.dataset.edit
+        const recs = (list||[]).filter(r => r.product_code === code)
+        if (!recs.length) return
+        const first = recs[0]
+        const panel = document.getElementById('edit-product-panel')
+        panel.innerHTML = `
+          <div class="card">
+            <h2>编辑商品：${code}</h2>
+            <div id="pedit-msg"></div>
+            <div class="row">
+              <div><label>品名 *</label><input id="pe-name" value="${first.product_name||''}" /></div>
+              <div><label>规格 *</label><input id="pe-spec" value="${first.spec||''}" /></div>
+            </div>
+            <div class="row">
+              <div><label>长(cm)</label><input id="pe-length" type="number" step="0.01" value="${first.length||''}" /></div>
+              <div><label>宽(cm)</label><input id="pe-width" type="number" step="0.01" value="${first.width||''}" /></div>
+              <div><label>高(cm)</label><input id="pe-height" type="number" step="0.01" value="${first.height||''}" /></div>
+              <div><label>重量(kg)</label><input id="pe-weight" type="number" step="0.01" value="${first.weight||''}" /></div>
+            </div>
+            <p style="font-size:12px;color:#666;margin:8px 0;">将同时更新 ${recs.length} 条记录</p>
+            <button id="btn-pe-save">保存</button>
+            <button class="secondary" id="btn-pe-cancel">取消</button>
+          </div>`
+
+        document.getElementById('btn-pe-cancel').onclick = () => panel.innerHTML = ''
+
+        document.getElementById('btn-pe-save').onclick = async () => {
+          const msgEl = document.getElementById('pedit-msg')
+          const patch = {
+            product_name: document.getElementById('pe-name').value.trim(),
+            spec: document.getElementById('pe-spec').value.trim(),
+            length: document.getElementById('pe-length').value ? Number(document.getElementById('pe-length').value) : null,
+            width: document.getElementById('pe-width').value ? Number(document.getElementById('pe-width').value) : null,
+            height: document.getElementById('pe-height').value ? Number(document.getElementById('pe-height').value) : null,
+            weight: document.getElementById('pe-weight').value ? Number(document.getElementById('pe-weight').value) : null
+          }
+          if (!patch.product_name || !patch.spec) {
+            msgEl.innerHTML = msg('品名、规格为必填', false); return
+          }
+          const ids = recs.map(r => r.id)
+          const { error } = await supabase.from('product_master')
+            .update(patch).in('id', ids)
+          if (error) {
+            msgEl.innerHTML = msg(error.message, false)
+            return
+          }
+          msgEl.innerHTML = msg('已保存', true)
+          setTimeout(async () => {
+            list = await loadList(selectedVendorCode)
+            renderList()
+          }, 600)
+        }
+      }
+    })
+  }
+
+  renderList()
 }
 
 // ================= 我的单据 =================
 async function renderMy(view) {
-  const { data } = await supabase.from('bill_order')
-    .select('*').eq('vendor_id', currentUser.id)
-    .order('id', { ascending: false }).limit(100)
+  // 厂商：vendor_id = 自己
+  // 物流商：vendor_code IN (负责厂商)
+  let q = supabase.from('bill_order')
+    .select('*')
+    .order('id', { ascending: false })
+    .limit(200)
+
+  if (isLogistics) {
+    const codes = myVendors.map(v => v.vendor_code)
+    if (!codes.length) {
+      view.innerHTML = `<div class="card"><h2>我的单据</h2><p style="color:#cf1322;">未配置负责厂商。</p></div>`
+      return
+    }
+    q = q.in('vendor_code', codes)
+  } else {
+    q = q.eq('vendor_id', currentUser.id)
+  }
+
+  const { data } = await q
 
   view.innerHTML = `
     <div class="card">
-      <h2>我的单据</h2>
+      <h2>${isLogistics ? '我负责厂商的单据' : '我的单据'}</h2>
       <div id="my-msg"></div>
       <table>
         <tr>
-          <th>ID</th><th>类型</th><th>商品</th><th>数量</th>
+          <th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th>
           <th>仓库</th><th>已导出</th><th>时间</th><th>操作</th>
         </tr>
         ${(data||[]).map(b => `<tr>
           <td>${b.id}</td>
+          <td>${b.vendor_code||''}</td>
           <td>${b.bill_type}</td>
           <td>${b.product_code}</td>
           <td>${b.quantity}</td>
@@ -801,7 +956,7 @@ async function renderMy(view) {
       const panel = document.getElementById('edit-panel')
       panel.innerHTML = `
         <div class="card">
-          <h2>修改单据</h2>
+          <h2>修改单据 #${id}</h2>
           <input id="e-source" type="hidden" value="${bill.source_no||''}" />
           <div class="row">
             <div><label>商品代码</label><input id="e-product" value="${bill.product_code||''}" /></div>
