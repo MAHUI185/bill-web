@@ -162,9 +162,10 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
-function calcOutFields(billType, supplierInput) {
+// ★ 出库自动字段：VMI出库门店 = 当前仓库的 default_store_code
+function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'VMI出库') {
-    return { owner_code: supplierInput, store_code: '9998204' }
+    return { owner_code: supplierInput, store_code: defaultStore || '' }
   }
   if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
@@ -205,6 +206,16 @@ async function renderFill(view) {
     myWhs = (vw||[]).map(x => x.warehouse_code)
   }
 
+  // ★ 当前仓库（第一个授权仓）的默认门店
+  let defaultStoreCode = ''
+  if (myWhs.length) {
+    const { data: whInfo } = await supabase.from('warehouse')
+      .select('default_store_code')
+      .eq('warehouse_code', myWhs[0])
+      .maybeSingle()
+    defaultStoreCode = whInfo?.default_store_code || ''
+  }
+
   const { data: locs } = await supabase.from('location_config')
     .select('warehouse_code, location_code').eq('status', 1)
 
@@ -238,7 +249,7 @@ async function renderFill(view) {
     }
   }
   function newOutRowForVendor(vc) {
-    const f = calcOutFields('VMI出库', vc)
+    const f = calcOutFields('VMI出库', vc, defaultStoreCode)
     return {
       bill_type: 'VMI出库', owner_code: f.owner_code, store_code: f.store_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
@@ -471,7 +482,7 @@ async function renderFill(view) {
 
         if (f === 'bill_type') {
           r.bill_type = el.value
-          const f2 = calcOutFields(el.value, myVendorCode)
+          const f2 = calcOutFields(el.value, myVendorCode, defaultStoreCode)
           r.owner_code = f2.owner_code
           r.store_code = f2.store_code
           renderOutTable()
