@@ -162,7 +162,6 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
-// ★ 出库自动字段：VMI出库门店 = 当前仓库的 default_store_code
 function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
@@ -206,7 +205,6 @@ async function renderFill(view) {
     myWhs = (vw||[]).map(x => x.warehouse_code)
   }
 
-  // ★ 当前仓库（第一个授权仓）的默认门店
   let defaultStoreCode = ''
   if (myWhs.length) {
     const { data: whInfo } = await supabase.from('warehouse')
@@ -561,6 +559,14 @@ async function renderFill(view) {
     render()
   }
 
+  // ★ 判断某行是否"有填写"（用户手填字段里至少有一个非空）
+  function isInRowFilled(r) {
+    return !!(r.product_code || r.spec || r.quantity || r.arrival_date)
+  }
+  function isOutRowFilled(r) {
+    return !!(r.product_code || r.spec || r.quantity || r.pick_date)
+  }
+
   const btnSubmit = document.getElementById('btn-submit-all')
   if (btnSubmit) btnSubmit.onclick = async () => {
     const msgEl = document.getElementById('fill-msg')
@@ -571,9 +577,18 @@ async function renderFill(view) {
       return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
     }
 
+    // ★ 先判断「有没有任何填写」
+    const filledIn = inRows.filter(isInRowFilled)
+    const filledOut = outRows.filter(isOutRowFilled)
+    if (filledIn.length === 0 && filledOut.length === 0) {
+      return msgEl.innerHTML = msg('请至少填写一条单据', false)
+    }
+
+    // ★ 只校验「有填写」的行
     const errors = []
 
     inRows.forEach((r, idx) => {
+      if (!isInRowFilled(r)) return  // 空行跳过
       const missing = []
       if (!r.location_code) missing.push('仓位')
       if (!r.product_code) missing.push('商品代码')
@@ -586,6 +601,7 @@ async function renderFill(view) {
     })
 
     outRows.forEach((r, idx) => {
+      if (!isOutRowFilled(r)) return  // 空行跳过
       const missing = []
       if (!r.location_code) missing.push('仓位')
       if (!r.product_code) missing.push('商品代码')
@@ -608,8 +624,9 @@ async function renderFill(view) {
       return
     }
 
-    const validIn = inRows
-    const validOut = outRows
+    // ★ 只提交「有填写」的行
+    const validIn = inRows.filter(isInRowFilled)
+    const validOut = outRows.filter(isOutRowFilled)
 
     let vendorAuthId
     if (isLogistics) {
@@ -688,7 +705,7 @@ async function renderFill(view) {
   }
 }
 
-// ================= 商品资料（厂商 + 物流商） =================
+// ================= 商品资料 =================
 async function renderProducts(view) {
   if (isAdmin) {
     view.innerHTML = `<div class="card"><h2>商品资料</h2><p style="color:#999;">管理员请到管理后台的商品主数据里维护。</p></div>`
