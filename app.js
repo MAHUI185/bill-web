@@ -256,6 +256,24 @@ async function renderFill(view) {
     }
   }
 
+  function isInRowFilled(r) {
+    return !!(r.product_code || r.spec || r.quantity || r.arrival_date)
+  }
+  function isOutRowFilled(r) {
+    return !!(r.product_code || r.spec || r.quantity || r.pick_date)
+  }
+
+  function productOptionsHtml() {
+    return productList.map(p =>
+      `<option value="${p.product_code}">${p.product_code} - ${p.product_name||''} - ${p.spec||''}</option>`
+    ).join('')
+  }
+
+  function findProduct(code) {
+    return productList.find(p => p.product_code === code)
+  }
+
+  // ★★★ render 里包含所有按钮绑定（每次渲染都重绑） ★★★
   function render() {
     view.innerHTML = `
       <div class="card">
@@ -314,6 +332,7 @@ async function renderFill(view) {
     renderOutTable()
     renderPreview()
 
+    // 物流商切厂商
     const vs = document.getElementById('vendor-select')
     if (vs) {
       vs.onchange = async () => {
@@ -326,16 +345,159 @@ async function renderFill(view) {
         render()
       }
     }
-  }
 
-  function productOptionsHtml() {
-    return productList.map(p =>
-      `<option value="${p.product_code}">${p.product_code} - ${p.product_name||''} - ${p.spec||''}</option>`
-    ).join('')
-  }
+    // ★ 按钮绑定（每次 render 都重绑）
+    const btnAddIn = document.getElementById('btn-add-in')
+    if (btnAddIn) btnAddIn.onclick = () => {
+      inRows.push(newInRowForVendor(myVendorCode))
+      renderInTable()
+      renderPreview()
+    }
 
-  function findProduct(code) {
-    return productList.find(p => p.product_code === code)
+    const btnAddOut = document.getElementById('btn-add-out')
+    if (btnAddOut) btnAddOut.onclick = () => {
+      outRows.push(newOutRowForVendor(myVendorCode))
+      renderOutTable()
+      renderPreview()
+    }
+
+    const btnClear = document.getElementById('btn-clear-all')
+    if (btnClear) btnClear.onclick = () => {
+      if (!confirm('确定清空所有已填内容？')) return
+      inRows = [newInRowForVendor(myVendorCode)]
+      outRows = [newOutRowForVendor(myVendorCode)]
+      render()
+    }
+
+    const btnSubmit = document.getElementById('btn-submit-all')
+    if (btnSubmit) btnSubmit.onclick = async () => {
+      const msgEl = document.getElementById('fill-msg')
+
+      const { data: cfg } = await supabase.from('system_config')
+        .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
+      if (cfg?.config_value === 'true') {
+        return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
+      }
+
+      const filledIn = inRows.filter(isInRowFilled)
+      const filledOut = outRows.filter(isOutRowFilled)
+      if (filledIn.length === 0 && filledOut.length === 0) {
+        return msgEl.innerHTML = msg('请至少填写一条单据', false)
+      }
+
+      const errors = []
+
+      inRows.forEach((r, idx) => {
+        if (!isInRowFilled(r)) return
+        const missing = []
+        if (!r.location_code) missing.push('仓位')
+        if (!r.product_code) missing.push('商品代码')
+        if (!r.spec) missing.push('包装规格')
+        if (!r.quantity) missing.push('数量')
+        if (!r.arrival_date) missing.push('到货日期')
+        if (missing.length) errors.push(`入库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
+      })
+
+      outRows.forEach((r, idx) => {
+        if (!isOutRowFilled(r)) return
+        const missing = []
+        if (!r.location_code) missing.push('仓位')
+        if (!r.product_code) missing.push('商品代码')
+        if (!r.spec) missing.push('包装规格')
+        if (!r.quantity) missing.push('数量')
+        if (!r.pick_date) missing.push('配货日期')
+        if (r.bill_type === 'DSP出库' && !r.store_code) missing.push('门店代码')
+        if (missing.length) errors.push(`出库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
+      })
+
+      if (errors.length) {
+        msgEl.innerHTML = `<div class="msg err">
+          <strong>提交失败，以下行数据不完整：</strong>
+          <div style="margin-top:8px;font-size:13px;line-height:1.8;">
+            ${errors.map(e => `<div>${e}</div>`).join('')}
+          </div>
+        </div>`
+        return
+      }
+
+      const validIn = inRows.filter(isInRowFilled)
+      const validOut = outRows.filter(isOutRowFilled)
+
+      let vendorAuthId
+      if (isLogistics) {
+        const { data: vp } = await supabase.from('vendor_profile')
+          .select('id').eq('vendor_code', myVendorCode).maybeSingle()
+        if (!vp) return msgEl.innerHTML = msg('找不到代报厂商，请联系管理员', false)
+        vendorAuthId = vp.id
+      } else {
+        vendorAuthId = currentUser.id
+      }
+
+      let defaultWh
+      if (myWhs.length) {
+        defaultWh = myWhs[0]
+      } else {
+        return msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false)
+      }
+
+      const inPayloads = validIn.map(r => ({
+        vendor_id: vendorAuthId,
+        warehouse_code: defaultWh,
+        bill_type: r.bill_type,
+        source_no: r.source_no || null,
+        vendor_code: r.vendor_code,
+        owner_code: r.owner_code,
+        location_code: r.location_code,
+        logistics_mode: getModeByType(r.bill_type),
+        product_code: r.product_code,
+        spec: r.spec,
+        quantity: Number(r.quantity),
+        price: 1,
+        arrival_date: r.arrival_date || null,
+        effective_date: addOneDay(r.arrival_date),
+        whole_process: 'NO',
+        product_remark: r.product_name || null,
+        remark: null,
+        split_flag: null, split_desc: null, tare_dimension: null, tare_value: null, route: null,
+        submitter_type: 'vendor'
+      }))
+
+      const outPayloads = validOut.map(r => ({
+        vendor_id: vendorAuthId,
+        warehouse_code: defaultWh,
+        bill_type: r.bill_type,
+        source_no: null,
+        owner_code: r.owner_code,
+        store_code: r.store_code,
+        location_code: r.location_code,
+        logistics_mode: getModeByType(r.bill_type),
+        pick_date: r.pick_date || null,
+        effective_date: addOneDay(r.pick_date),
+        inbound_order_no: null,
+        product_code: r.product_code,
+        spec: r.spec,
+        quantity: Number(r.quantity),
+        price: 1,
+        group_name: null, split_flag: null, split_desc: null,
+        product_remark: r.product_name || null,
+        submitter_type: 'vendor',
+        vendor_code: myVendorCode
+      }))
+
+      const all = [...inPayloads, ...outPayloads]
+      msgEl.innerHTML = msg('提交中...', true)
+
+      const { error } = await supabase.from('bill_order').insert(all)
+      if (error) {
+        msgEl.innerHTML = msg(error.message, false)
+        return
+      }
+
+      msgEl.innerHTML = msg(`提交成功：入库 ${inPayloads.length} 条，出库 ${outPayloads.length} 条`, true)
+      inRows = [newInRowForVendor(myVendorCode)]
+      outRows = [newOutRowForVendor(myVendorCode)]
+      setTimeout(() => render(), 800)
+    }
   }
 
   function renderInTable() {
@@ -536,170 +698,6 @@ async function renderFill(view) {
   }
 
   render()
-
-  const btnAddIn = document.getElementById('btn-add-in')
-  if (btnAddIn) btnAddIn.onclick = () => {
-    inRows.push(newInRowForVendor(myVendorCode))
-    renderInTable()
-    renderPreview()
-  }
-
-  const btnAddOut = document.getElementById('btn-add-out')
-  if (btnAddOut) btnAddOut.onclick = () => {
-    outRows.push(newOutRowForVendor(myVendorCode))
-    renderOutTable()
-    renderPreview()
-  }
-
-  const btnClear = document.getElementById('btn-clear-all')
-  if (btnClear) btnClear.onclick = () => {
-    if (!confirm('确定清空所有已填内容？')) return
-    inRows = [newInRowForVendor(myVendorCode)]
-    outRows = [newOutRowForVendor(myVendorCode)]
-    render()
-  }
-
-  function isInRowFilled(r) {
-    return !!(r.product_code || r.spec || r.quantity || r.arrival_date)
-  }
-  function isOutRowFilled(r) {
-    return !!(r.product_code || r.spec || r.quantity || r.pick_date)
-  }
-
-  const btnSubmit = document.getElementById('btn-submit-all')
-  if (btnSubmit) btnSubmit.onclick = async () => {
-    const msgEl = document.getElementById('fill-msg')
-
-    const { data: cfg } = await supabase.from('system_config')
-      .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
-    if (cfg?.config_value === 'true') {
-      return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
-    }
-
-    const filledIn = inRows.filter(isInRowFilled)
-    const filledOut = outRows.filter(isOutRowFilled)
-    if (filledIn.length === 0 && filledOut.length === 0) {
-      return msgEl.innerHTML = msg('请至少填写一条单据', false)
-    }
-
-    const errors = []
-
-    inRows.forEach((r, idx) => {
-      if (!isInRowFilled(r)) return
-      const missing = []
-      if (!r.location_code) missing.push('仓位')
-      if (!r.product_code) missing.push('商品代码')
-      if (!r.spec) missing.push('包装规格')
-      if (!r.quantity) missing.push('数量')
-      if (!r.arrival_date) missing.push('到货日期')
-      if (missing.length) {
-        errors.push(`入库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
-      }
-    })
-
-    outRows.forEach((r, idx) => {
-      if (!isOutRowFilled(r)) return
-      const missing = []
-      if (!r.location_code) missing.push('仓位')
-      if (!r.product_code) missing.push('商品代码')
-      if (!r.spec) missing.push('包装规格')
-      if (!r.quantity) missing.push('数量')
-      if (!r.pick_date) missing.push('配货日期')
-      if (r.bill_type === 'DSP出库' && !r.store_code) missing.push('门店代码')
-      if (missing.length) {
-        errors.push(`出库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
-      }
-    })
-
-    if (errors.length) {
-      msgEl.innerHTML = `<div class="msg err">
-        <strong>提交失败，以下行数据不完整：</strong>
-        <div style="margin-top:8px;font-size:13px;line-height:1.8;">
-          ${errors.map(e => `<div>${e}</div>`).join('')}
-        </div>
-      </div>`
-      return
-    }
-
-    const validIn = inRows.filter(isInRowFilled)
-    const validOut = outRows.filter(isOutRowFilled)
-
-    let vendorAuthId
-    if (isLogistics) {
-      const { data: vp } = await supabase.from('vendor_profile')
-        .select('id').eq('vendor_code', myVendorCode).maybeSingle()
-      if (!vp) return msgEl.innerHTML = msg('找不到代报厂商，请联系管理员', false)
-      vendorAuthId = vp.id
-    } else {
-      vendorAuthId = currentUser.id
-    }
-
-    let defaultWh
-    if (myWhs.length) {
-      defaultWh = myWhs[0]
-    } else {
-      return msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false)
-    }
-
-    const inPayloads = validIn.map(r => ({
-      vendor_id: vendorAuthId,
-      warehouse_code: defaultWh,
-      bill_type: r.bill_type,
-      source_no: r.source_no || null,
-      vendor_code: r.vendor_code,
-      owner_code: r.owner_code,
-      location_code: r.location_code,
-      logistics_mode: getModeByType(r.bill_type),
-      product_code: r.product_code,
-      spec: r.spec,
-      quantity: Number(r.quantity),
-      price: 1,
-      arrival_date: r.arrival_date || null,
-      effective_date: addOneDay(r.arrival_date),
-      whole_process: 'NO',
-      product_remark: r.product_name || null,
-      remark: null,
-      split_flag: null, split_desc: null, tare_dimension: null, tare_value: null, route: null,
-      submitter_type: 'vendor'
-    }))
-
-    // ★ DSP出库的 vendor_code 用厂编（不用 owner_code）
-    const outPayloads = validOut.map(r => ({
-      vendor_id: vendorAuthId,
-      warehouse_code: defaultWh,
-      bill_type: r.bill_type,
-      source_no: null,
-      owner_code: r.owner_code,
-      store_code: r.store_code,
-      location_code: r.location_code,
-      logistics_mode: getModeByType(r.bill_type),
-      pick_date: r.pick_date || null,
-      effective_date: addOneDay(r.pick_date),
-      inbound_order_no: null,
-      product_code: r.product_code,
-      spec: r.spec,
-      quantity: Number(r.quantity),
-      price: 1,
-      group_name: null, split_flag: null, split_desc: null,
-      product_remark: r.product_name || null,
-      submitter_type: 'vendor',
-      vendor_code: myVendorCode
-    }))
-
-    const all = [...inPayloads, ...outPayloads]
-    msgEl.innerHTML = msg('提交中...', true)
-
-    const { error } = await supabase.from('bill_order').insert(all)
-    if (error) {
-      msgEl.innerHTML = msg(error.message, false)
-      return
-    }
-
-    msgEl.innerHTML = msg(`提交成功：入库 ${inPayloads.length} 条，出库 ${outPayloads.length} 条`, true)
-    inRows = [newInRowForVendor(myVendorCode)]
-    outRows = [newOutRowForVendor(myVendorCode)]
-    setTimeout(() => render(), 800)
-  }
 }
 
 // ================= 商品资料 =================
