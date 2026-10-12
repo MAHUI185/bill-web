@@ -559,7 +559,6 @@ async function renderFill(view) {
     render()
   }
 
-  // ★ 判断某行是否"有填写"（用户手填字段里至少有一个非空）
   function isInRowFilled(r) {
     return !!(r.product_code || r.spec || r.quantity || r.arrival_date)
   }
@@ -577,18 +576,16 @@ async function renderFill(view) {
       return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
     }
 
-    // ★ 先判断「有没有任何填写」
     const filledIn = inRows.filter(isInRowFilled)
     const filledOut = outRows.filter(isOutRowFilled)
     if (filledIn.length === 0 && filledOut.length === 0) {
       return msgEl.innerHTML = msg('请至少填写一条单据', false)
     }
 
-    // ★ 只校验「有填写」的行
     const errors = []
 
     inRows.forEach((r, idx) => {
-      if (!isInRowFilled(r)) return  // 空行跳过
+      if (!isInRowFilled(r)) return
       const missing = []
       if (!r.location_code) missing.push('仓位')
       if (!r.product_code) missing.push('商品代码')
@@ -601,7 +598,7 @@ async function renderFill(view) {
     })
 
     outRows.forEach((r, idx) => {
-      if (!isOutRowFilled(r)) return  // 空行跳过
+      if (!isOutRowFilled(r)) return
       const missing = []
       if (!r.location_code) missing.push('仓位')
       if (!r.product_code) missing.push('商品代码')
@@ -624,7 +621,6 @@ async function renderFill(view) {
       return
     }
 
-    // ★ 只提交「有填写」的行
     const validIn = inRows.filter(isInRowFilled)
     const validOut = outRows.filter(isOutRowFilled)
 
@@ -667,6 +663,7 @@ async function renderFill(view) {
       submitter_type: 'vendor'
     }))
 
+    // ★ DSP出库的 vendor_code 用厂编（不用 owner_code）
     const outPayloads = validOut.map(r => ({
       vendor_id: vendorAuthId,
       warehouse_code: defaultWh,
@@ -686,7 +683,7 @@ async function renderFill(view) {
       group_name: null, split_flag: null, split_desc: null,
       product_remark: r.product_name || null,
       submitter_type: 'vendor',
-      vendor_code: r.owner_code
+      vendor_code: myVendorCode
     }))
 
     const all = [...inPayloads, ...outPayloads]
