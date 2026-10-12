@@ -418,6 +418,89 @@ async function renderVendors(v) {
 }
 
 // ================= 3.5 物流商管理 =================
+// ★ 内部工具：搜索式多选厂商
+function buildVendorPicker(rootId, allVendors, initialSelected = []) {
+  const root = document.getElementById(rootId)
+  if (!root) return { getSelected: () => [] }
+  let selected = [...initialSelected]
+
+  function render() {
+    const selectedSet = new Set(selected)
+    root.innerHTML = `
+      <div style="position:relative;">
+        <input id="${rootId}-input" placeholder="输入厂编开头搜索..." autocomplete="off"
+          style="margin-bottom:6px;" />
+        <div id="${rootId}-suggest"
+          style="position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #eee;border-radius:4px;
+                 box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100;display:none;max-height:200px;overflow:auto;"></div>
+      </div>
+      <div id="${rootId}-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
+        ${selected.map(code => {
+          const vd = allVendors.find(x => x.vendor_code === code)
+          const name = vd?.vendor_name || ''
+          return `<span style="display:inline-flex;align-items:center;gap:4px;background:#e6f4ff;color:#1677ff;
+                                border:1px solid #91caff;border-radius:12px;padding:2px 10px;font-size:12px;">
+            ${code}${name?' · '+name:''}
+            <span data-rm="${code}" style="cursor:pointer;font-weight:bold;color:#1677ff;">×</span>
+          </span>`
+        }).join('')}
+      </div>`
+
+    const input = document.getElementById(`${rootId}-input`)
+    const suggest = document.getElementById(`${rootId}-suggest`)
+
+    function doSearch() {
+      const kw = input.value.trim()
+      if (!kw) { suggest.style.display = 'none'; return }
+      const matches = allVendors
+        .filter(v => !selectedSet.has(v.vendor_code) && v.vendor_code.startsWith(kw))
+        .slice(0, 3)
+      if (!matches.length) { suggest.style.display = 'none'; return }
+      suggest.innerHTML = matches.map(v =>
+        `<div data-pick="${v.vendor_code}"
+              style="padding:6px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid #f5f5f5;"
+              onmouseover="this.style.background='#f5f5f5'"
+              onmouseout="this.style.background='#fff'">
+          ${v.vendor_code} - ${v.vendor_name||''}
+        </div>`
+      ).join('')
+      suggest.style.display = 'block'
+    }
+
+    input.oninput = doSearch
+    input.onfocus = doSearch
+    input.onblur = () => {
+      setTimeout(() => { suggest.style.display = 'none' }, 200)
+    }
+
+    suggest.querySelectorAll('[data-pick]').forEach(el => {
+      el.onmousedown = (e) => {
+        e.preventDefault()
+        const code = el.dataset.pick
+        if (!selected.includes(code)) {
+          selected.push(code)
+        }
+        input.value = ''
+        render()
+        document.getElementById(`${rootId}-input`)?.focus()
+      }
+    })
+
+    root.querySelectorAll('[data-rm]').forEach(el => {
+      el.onclick = () => {
+        const code = el.dataset.rm
+        selected = selected.filter(c => c !== code)
+        render()
+      }
+    })
+  }
+
+  render()
+  return {
+    getSelected: () => selected
+  }
+}
+
 async function renderLogistics(v) {
   const { data: vps } = await ctx.supabase.from('vendor_profile')
     .select('*')
@@ -443,13 +526,11 @@ async function renderLogistics(v) {
       </div>
       <div class="row">
         <div style="flex:1;">
-          <label>负责厂商（多选，Ctrl/Shift 多选）</label>
-          <select id="lg-vendors" multiple style="height:160px;width:100%;">
-            ${(allVendors||[]).map(v => `<option value="${v.vendor_code}">${v.vendor_code}${v.vendor_name?' - '+v.vendor_name:''}</option>`).join('')}
-          </select>
+          <label>负责厂商 *（输入厂编开头搜索，最多 3 条建议）</label>
+          <div id="lg-picker"></div>
         </div>
       </div>
-      <button id="btn-create-logistics">创建物流商</button>
+      <button id="btn-create-logistics" style="margin-top:8px;">创建物流商</button>
       <div id="lg-msg"></div>
     </div>
     <div class="card" style="box-shadow:none;padding:0;">
@@ -473,13 +554,15 @@ async function renderLogistics(v) {
     </div>
     <div id="modal-root"></div>`
 
+  // 创建时的选择器
+  const lgPicker = buildVendorPicker('lg-picker', allVendors || [], [])
+
   document.getElementById('btn-create-logistics').onclick = async () => {
     const msgEl = document.getElementById('lg-msg')
     const code = document.getElementById('lg-code').value.trim()
     const name = document.getElementById('lg-name').value.trim()
     const pwd = document.getElementById('lg-pwd').value
-    const sel = document.getElementById('lg-vendors')
-    const codes = Array.from(sel.selectedOptions).map(o => o.value)
+    const codes = lgPicker.getSelected()
 
     if (!code) { msgEl.innerHTML = ctx.msg('请填写物流商编号', false); return }
     if (!name) { msgEl.innerHTML = ctx.msg('请填写物流商名称', false); return }
@@ -516,24 +599,17 @@ async function renderLogistics(v) {
       const id = b.dataset.id
       const act = b.dataset.act
 
-      // ★ 管理厂商（弹窗）
+      // ★ 管理厂商（弹窗 + 搜索式多选）
       if (act === 'manage-vendors') {
         const code = b.dataset.code
-        const current = new Set(lvMap[id] || [])
         const modal = document.getElementById('modal-root')
         modal.innerHTML = `
           <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;">
             <div style="background:#fff;border-radius:8px;padding:24px;max-width:560px;width:90%;max-height:80vh;display:flex;flex-direction:column;">
               <h2 style="margin-bottom:16px;">管理负责厂商 · ${code}</h2>
-              <div style="flex:1;overflow:auto;border:1px solid #eee;border-radius:4px;padding:12px;margin-bottom:16px;">
-                ${(allVendors||[]).map(v => `
-                  <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #f5f5f5;cursor:pointer;">
-                    <input type="checkbox" class="chk-vendor" value="${v.vendor_code}"
-                           ${current.has(v.vendor_code)?'checked':''}
-                           style="width:auto;margin:0;" />
-                    <span style="font-size:13px;">${v.vendor_code}${v.vendor_name?' - '+v.vendor_name:''}</span>
-                  </label>
-                `).join('') || '<div style="color:#999;">无厂商</div>'}
+              <div style="flex:1;overflow:auto;margin-bottom:16px;">
+                <label style="font-size:12px;color:#666;">输入厂编开头搜索，最多 3 条建议</label>
+                <div id="mv-picker"></div>
               </div>
               <div style="display:flex;justify-content:flex-end;gap:8px;">
                 <button class="secondary" id="btn-modal-cancel">取消</button>
@@ -542,11 +618,12 @@ async function renderLogistics(v) {
             </div>
           </div>`
 
+        const mvPicker = buildVendorPicker('mv-picker', allVendors || [], lvMap[id] || [])
+
         document.getElementById('btn-modal-cancel').onclick = () => { modal.innerHTML = '' }
 
         document.getElementById('btn-modal-save').onclick = async () => {
-          const checks = modal.querySelectorAll('.chk-vendor:checked')
-          const finalCodes = Array.from(checks).map(c => c.value)
+          const finalCodes = mvPicker.getSelected()
 
           const { data: { session } } = await ctx.supabase.auth.getSession()
           const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
