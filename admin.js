@@ -418,7 +418,7 @@ async function renderVendors(v) {
 }
 
 // ================= 3.5 物流商管理 =================
-// ★ 内部工具：搜索式多选厂商
+// ★ 修复版：标签 × 加大点击区域、标签区间距加大
 function buildVendorPicker(rootId, allVendors, initialSelected = []) {
   const root = document.getElementById(rootId)
   if (!root) return { getSelected: () => [] }
@@ -434,14 +434,18 @@ function buildVendorPicker(rootId, allVendors, initialSelected = []) {
           style="position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #eee;border-radius:4px;
                  box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:100;display:none;max-height:200px;overflow:auto;"></div>
       </div>
-      <div id="${rootId}-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
+      <div id="${rootId}-tags" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
         ${selected.map(code => {
           const vd = allVendors.find(x => x.vendor_code === code)
           const name = vd?.vendor_name || ''
-          return `<span style="display:inline-flex;align-items:center;gap:4px;background:#e6f4ff;color:#1677ff;
-                                border:1px solid #91caff;border-radius:12px;padding:2px 10px;font-size:12px;">
+          return `<span style="display:inline-flex;align-items:center;gap:6px;background:#e6f4ff;color:#1677ff;
+                                border:1px solid #91caff;border-radius:14px;padding:4px 12px;font-size:12px;">
             ${code}${name?' · '+name:''}
-            <span data-rm="${code}" style="cursor:pointer;font-weight:bold;color:#1677ff;">×</span>
+            <span data-rm="${code}" style="cursor:pointer;font-weight:bold;color:#1677ff;
+                  padding:2px 8px;font-size:14px;line-height:1;user-select:none;border-radius:8px;
+                  background:#fff;border:1px solid #91caff;"
+                  onmouseover="this.style.background='#1677ff';this.style.color='#fff';"
+                  onmouseout="this.style.background='#fff';this.style.color='#1677ff';">×</span>
           </span>`
         }).join('')}
       </div>`
@@ -458,36 +462,37 @@ function buildVendorPicker(rootId, allVendors, initialSelected = []) {
       if (!matches.length) { suggest.style.display = 'none'; return }
       suggest.innerHTML = matches.map(v =>
         `<div data-pick="${v.vendor_code}"
-              style="padding:6px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid #f5f5f5;"
+              style="padding:8px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid #f5f5f5;user-select:none;"
               onmouseover="this.style.background='#f5f5f5'"
               onmouseout="this.style.background='#fff'">
           ${v.vendor_code} - ${v.vendor_name||''}
         </div>`
       ).join('')
       suggest.style.display = 'block'
+
+      suggest.querySelectorAll('[data-pick]').forEach(el => {
+        el.onmousedown = (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          const code = el.dataset.pick
+          if (!selected.includes(code)) selected.push(code)
+          input.value = ''
+          render()
+          document.getElementById(`${rootId}-input`)?.focus()
+        }
+      })
     }
 
     input.oninput = doSearch
     input.onfocus = doSearch
     input.onblur = () => {
-      setTimeout(() => { suggest.style.display = 'none' }, 200)
+      setTimeout(() => { suggest.style.display = 'none' }, 300)
     }
 
-    suggest.querySelectorAll('[data-pick]').forEach(el => {
+    root.querySelectorAll('[data-rm]').forEach(el => {
       el.onmousedown = (e) => {
         e.preventDefault()
-        const code = el.dataset.pick
-        if (!selected.includes(code)) {
-          selected.push(code)
-        }
-        input.value = ''
-        render()
-        document.getElementById(`${rootId}-input`)?.focus()
-      }
-    })
-
-    root.querySelectorAll('[data-rm]').forEach(el => {
-      el.onclick = () => {
+        e.stopPropagation()
         const code = el.dataset.rm
         selected = selected.filter(c => c !== code)
         render()
@@ -554,7 +559,6 @@ async function renderLogistics(v) {
     </div>
     <div id="modal-root"></div>`
 
-  // 创建时的选择器
   const lgPicker = buildVendorPicker('lg-picker', allVendors || [], [])
 
   document.getElementById('btn-create-logistics').onclick = async () => {
@@ -599,7 +603,6 @@ async function renderLogistics(v) {
       const id = b.dataset.id
       const act = b.dataset.act
 
-      // ★ 管理厂商（弹窗 + 搜索式多选）
       if (act === 'manage-vendors') {
         const code = b.dataset.code
         const modal = document.getElementById('modal-root')
@@ -644,7 +647,6 @@ async function renderLogistics(v) {
         return
       }
 
-      // 重置密码
       if (act === 'reset') {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
@@ -661,7 +663,6 @@ async function renderLogistics(v) {
         return
       }
 
-      // 删除物流商
       if (act === 'del') {
         const code = b.dataset.code
         if (!confirm(`确定删除物流商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 物流商档案\n- 负责厂商关联\n\n此操作不可撤销！`)) return
