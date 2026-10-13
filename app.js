@@ -32,10 +32,16 @@ async function loadProfile() {
   const { data: profile } = await supabase.from('vendor_profile')
     .select('*').eq('id', currentUser.id).single()
 
-  // ★ 厂商禁用检查
+  // 禁用检查
   if (profile?.status === 0) {
     await supabase.auth.signOut()
     renderLogin('账号已禁用，请联系管理员')
+    return false
+  }
+
+  // ★ 首次登录强制改密
+  if (profile?.must_change_pwd) {
+    renderForceChangePwd()
     return false
   }
 
@@ -44,7 +50,6 @@ async function loadProfile() {
   const { data: admin } = await supabase.from('admin_users')
     .select('role, status').eq('id', currentUser.id).maybeSingle()
 
-  // ★ 管理员禁用检查
   if (admin?.status === 0) {
     await supabase.auth.signOut()
     renderLogin('账号已禁用，请联系管理员')
@@ -53,7 +58,6 @@ async function loadProfile() {
 
   isAdmin = !!admin
   currentRole = admin?.role || null
-
   isLogistics = profile?.account_type === 'logistics'
 
   if (isLogistics) {
@@ -91,7 +95,8 @@ function renderLogin(errMsg = '') {
       <div id="login-msg">${errMsg ? msg(errMsg, false) : ''}</div>
       <input id="email" placeholder="邮箱" />
       <input id="password" type="password" placeholder="密码" />
-      <button id="btn-login">登录</button>
+      <button id="btn-login" style="width:100%;">登录</button>
+      <button class="secondary" id="btn-goto-change" style="width:100%;margin-top:8px;">修改密码</button>
     </div>`
   document.getElementById('btn-login').onclick = async () => {
     const email = document.getElementById('email').value.trim()
@@ -103,6 +108,115 @@ function renderLogin(errMsg = '') {
       return
     }
     await init()
+  }
+  document.getElementById('btn-goto-change').onclick = () => renderChangePwd()
+}
+
+// ★ D：登录页「修改密码」（未登录状态）
+function renderChangePwd() {
+  app.innerHTML = `
+    <div class="card" style="max-width:400px;margin:80px auto;">
+      <h1>修改密码</h1>
+      <div id="cp-msg"></div>
+      <input id="cp-email" placeholder="邮箱" />
+      <input id="cp-old" type="password" placeholder="旧密码" />
+      <input id="cp-new" type="password" placeholder="新密码（至少 6 位）" />
+      <input id="cp-new2" type="password" placeholder="确认新密码" />
+      <button id="btn-cp-submit" style="width:100%;">提交</button>
+      <button class="secondary" id="btn-cp-back" style="width:100%;margin-top:8px;">返回登录</button>
+    </div>`
+
+  document.getElementById('btn-cp-back').onclick = () => renderLogin()
+
+  document.getElementById('btn-cp-submit').onclick = async () => {
+    const msgEl = document.getElementById('cp-msg')
+    const email = document.getElementById('cp-email').value.trim()
+    const oldPwd = document.getElementById('cp-old').value
+    const newPwd = document.getElementById('cp-new').value
+    const newPwd2 = document.getElementById('cp-new2').value
+
+    if (!email || !oldPwd || !newPwd || !newPwd2) {
+      msgEl.innerHTML = msg('所有字段为必填', false); return
+    }
+    if (newPwd.length < 6) {
+      msgEl.innerHTML = msg('新密码至少 6 位', false); return
+    }
+    if (newPwd !== newPwd2) {
+      msgEl.innerHTML = msg('两次输入的新密码不一致', false); return
+    }
+
+    msgEl.innerHTML = msg('处理中...', true)
+
+    // 1. 用旧密码登录，验证旧密码
+    const { error: signErr } = await supabase.auth.signInWithPassword({
+      email, password: oldPwd
+    })
+    if (signErr) {
+      msgEl.innerHTML = msg('旧密码错误，或账号已禁用', false); return
+    }
+
+    // 2. 改密码
+    const { error: updErr } = await supabase.auth.updateUser({ password: newPwd })
+    if (updErr) {
+      msgEl.innerHTML = msg('修改失败：' + updErr.message, false)
+      await supabase.auth.signOut()
+      return
+    }
+
+    // 3. 登出，提示用新密码重新登录
+    await supabase.auth.signOut()
+    msgEl.innerHTML = msg('密码已修改，请用新密码登录', true)
+    setTimeout(() => renderLogin('密码已修改，请重新登录'), 1500)
+  }
+}
+
+// ★ C：已登录 + must_change_pwd=true → 强制改密
+function renderForceChangePwd() {
+  app.innerHTML = `
+    <div class="card" style="max-width:400px;margin:80px auto;">
+      <h1>请修改初始密码</h1>
+      <p style="color:#d46b08;margin-bottom:12px;">首次登录，请修改密码后再使用系统。</p>
+      <div id="fp-msg"></div>
+      <input id="fp-new" type="password" placeholder="新密码（至少 6 位）" />
+      <input id="fp-new2" type="password" placeholder="确认新密码" />
+      <button id="btn-fp-submit" style="width:100%;">提交</button>
+      <button class="secondary" id="btn-fp-logout" style="width:100%;margin-top:8px;">退出登录</button>
+    </div>`
+
+  document.getElementById('btn-fp-logout').onclick = async () => {
+    await supabase.auth.signOut()
+    renderLogin()
+  }
+
+  document.getElementById('btn-fp-submit').onclick = async () => {
+    const msgEl = document.getElementById('fp-msg')
+    const p1 = document.getElementById('fp-new').value
+    const p2 = document.getElementById('fp-new2').value
+
+    if (!p1 || !p2) { msgEl.innerHTML = msg('请填写新密码', false); return }
+    if (p1.length < 6) { msgEl.innerHTML = msg('新密码至少 6 位', false); return }
+    if (p1 !== p2) { msgEl.innerHTML = msg('两次输入不一致', false); return }
+
+    msgEl.innerHTML = msg('处理中...', true)
+
+    const { error } = await supabase.auth.updateUser({ password: p1 })
+    if (error) {
+      msgEl.innerHTML = msg('修改失败：' + error.message, false); return
+    }
+
+    const { error: updErr } = await supabase.from('vendor_profile')
+      .update({ must_change_pwd: false })
+      .eq('id', currentUser.id)
+    if (updErr) {
+      msgEl.innerHTML = msg('修改标记失败：' + updErr.message, false)
+      return
+    }
+
+    msgEl.innerHTML = msg('密码已修改，正在进入系统...', true)
+    setTimeout(async () => {
+      const ok = await loadProfile()
+      if (ok) renderMain()
+    }, 800)
   }
 }
 
