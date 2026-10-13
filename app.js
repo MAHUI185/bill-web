@@ -15,6 +15,83 @@ function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
 }
 
+// ★ 统一错误翻译（Auth + DB + 网络）
+function translateError(errMsg) {
+  if (!errMsg) return '操作失败'
+  const m = String(errMsg).toLowerCase()
+
+  // Auth
+  if (m.includes('new password should be different') || m.includes('same password'))
+    return '新密码不能与旧密码相同'
+  if (m.includes('password should be at least'))
+    return '密码长度不足（至少 6 位）'
+  if (m.includes('invalid login credentials'))
+    return '邮箱或密码错误'
+  if (m.includes('email not confirmed'))
+    return '邮箱未确认'
+  if (m.includes('user not found'))
+    return '用户不存在'
+  if (m.includes('email rate limit') || m.includes('for security purposes'))
+    return '操作过于频繁，请稍后再试'
+  if (m.includes('weak password'))
+    return '密码太弱，请用更复杂的密码'
+  if (m.includes('user already registered'))
+    return '该用户已存在'
+  if (m.includes('banned'))
+    return '账号已被禁用'
+
+  // DB
+  if (m.includes('row-level security'))
+    return '没有权限执行此操作'
+  if (m.includes('duplicate key') && m.includes('product_master'))
+    return '该商品编码已存在'
+  if (m.includes('duplicate key') && m.includes('warehouse'))
+    return '该仓库代码已存在'
+  if (m.includes('duplicate key') && m.includes('store_config'))
+    return '该门店代码已存在'
+  if (m.includes('duplicate key') && m.includes('location_config'))
+    return '该仓位代码已存在'
+  if (m.includes('duplicate key') && m.includes('logistics_mode'))
+    return '该物流方式代码已存在'
+  if (m.includes('duplicate key') && m.includes('location_warehouse_map'))
+    return '该仓位映射已存在'
+  if (m.includes('duplicate key') && m.includes('vendor_profile'))
+    return '该厂编已存在'
+  if (m.includes('duplicate key') && m.includes('admin_users'))
+    return '该管理员已存在'
+  if (m.includes('duplicate key') && m.includes('deadline_config'))
+    return '该提报时间段已存在'
+  if (m.includes('duplicate key') && m.includes('holiday_config'))
+    return '该节假日已存在'
+  if (m.includes('duplicate key'))
+    return '数据已存在，请检查'
+  if (m.includes('violates foreign key'))
+    return '关联数据不存在，无法操作'
+  if (m.includes('violates not-null'))
+    return '必填字段不能为空'
+  if (m.includes('check constraint'))
+    return '数据格式不合法'
+  if (m.includes('invalid input syntax for type uuid'))
+    return 'ID 格式错误'
+  if (m.includes('invalid input syntax for type date'))
+    return '日期格式错误'
+  if (m.includes('invalid input syntax for type integer') || m.includes('invalid input syntax for type numeric'))
+    return '数字格式错误'
+  if (m.includes('timeout') || m.includes('timed out'))
+    return '操作超时，请重试'
+  if (m.includes('connection'))
+    return '网络连接失败，请检查网络'
+  if (m.includes('jwt') && m.includes('expired'))
+    return '登录已过期，请重新登录'
+  if (m.includes('failed to fetch') || m.includes('networkerror'))
+    return '网络连接失败，请检查网络'
+
+  // 已是中文（触发器/自定义报错）
+  if (/[\u4e00-\u9fa5]/.test(errMsg)) return errMsg
+
+  return '操作失败：' + errMsg
+}
+
 async function init() {
   const { data: cfg } = await supabase.from('system_config')
     .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
@@ -32,14 +109,12 @@ async function loadProfile() {
   const { data: profile } = await supabase.from('vendor_profile')
     .select('*').eq('id', currentUser.id).single()
 
-  // 禁用检查
   if (profile?.status === 0) {
     await supabase.auth.signOut()
     renderLogin('账号已禁用，请联系管理员')
     return false
   }
 
-  // ★ 首次登录强制改密
   if (profile?.must_change_pwd) {
     renderForceChangePwd()
     return false
@@ -104,7 +179,10 @@ function renderLogin(errMsg = '') {
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
       document.getElementById('login-msg').innerHTML = msg(
-        '登录失败，账号可能已禁用或密码错误，请联系管理员', false)
+        translateError(error.message) === '邮箱或密码错误'
+          ? '登录失败，账号可能已禁用或密码错误，请联系管理员'
+          : translateError(error.message),
+        false)
       return
     }
     await init()
@@ -112,7 +190,6 @@ function renderLogin(errMsg = '') {
   document.getElementById('btn-goto-change').onclick = () => renderChangePwd()
 }
 
-// ★ D：登录页「修改密码」（未登录状态）
 function renderChangePwd() {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;">
@@ -147,7 +224,6 @@ function renderChangePwd() {
 
     msgEl.innerHTML = msg('处理中...', true)
 
-    // 1. 用旧密码登录，验证旧密码
     const { error: signErr } = await supabase.auth.signInWithPassword({
       email, password: oldPwd
     })
@@ -155,22 +231,19 @@ function renderChangePwd() {
       msgEl.innerHTML = msg('旧密码错误，或账号已禁用', false); return
     }
 
-    // 2. 改密码
     const { error: updErr } = await supabase.auth.updateUser({ password: newPwd })
     if (updErr) {
-      msgEl.innerHTML = msg('修改失败：' + updErr.message, false)
+      msgEl.innerHTML = msg(translateError(updErr.message), false)
       await supabase.auth.signOut()
       return
     }
 
-    // 3. 登出，提示用新密码重新登录
     await supabase.auth.signOut()
     msgEl.innerHTML = msg('密码已修改，请用新密码登录', true)
     setTimeout(() => renderLogin('密码已修改，请重新登录'), 1500)
   }
 }
 
-// ★ C：已登录 + must_change_pwd=true → 强制改密
 function renderForceChangePwd() {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;">
@@ -201,14 +274,14 @@ function renderForceChangePwd() {
 
     const { error } = await supabase.auth.updateUser({ password: p1 })
     if (error) {
-      msgEl.innerHTML = msg('修改失败：' + error.message, false); return
+      msgEl.innerHTML = msg(translateError(error.message), false); return
     }
 
     const { error: updErr } = await supabase.from('vendor_profile')
       .update({ must_change_pwd: false })
       .eq('id', currentUser.id)
     if (updErr) {
-      msgEl.innerHTML = msg('修改标记失败：' + updErr.message, false)
+      msgEl.innerHTML = msg(translateError(updErr.message), false)
       return
     }
 
@@ -278,11 +351,12 @@ async function renderView(key) {
     try {
       const mod = await import('./admin.js')
       await mod.renderAdmin(view, {
-        supabase, currentUser, currentProfile, isAdmin, currentRole, msg, SUPABASE_URL
+        supabase, currentUser, currentProfile, isAdmin, currentRole,
+        msg, SUPABASE_URL, translateError
       })
     } catch (e) {
       console.error('管理后台加载失败', e)
-      view.innerHTML = msg('管理后台加载失败：' + e.message, false)
+      view.innerHTML = msg('管理后台加载失败', false)
     }
   }
 }
@@ -729,7 +803,7 @@ async function renderFill(view) {
 
       const { error } = await supabase.from('bill_order').insert(all)
       if (error) {
-        msgEl.innerHTML = msg(error.message, false)
+        msgEl.innerHTML = msg(translateError(error.message), false)
         return
       }
 
@@ -1080,7 +1154,7 @@ async function renderProducts(view) {
 
       const { error } = await supabase.from('product_master').insert(rows)
       if (error) {
-        msgEl.innerHTML = msg(error.message, false)
+        msgEl.innerHTML = msg(translateError(error.message), false)
         return
       }
       msgEl.innerHTML = msg(`新增成功（写入 ${rows.length} 个仓库）`, true)
@@ -1124,7 +1198,7 @@ async function renderProducts(view) {
           const { error } = await supabase.from('product_master')
             .update(patch).in('id', ids)
           if (error) {
-            msgEl.innerHTML = msg(error.message, false)
+            msgEl.innerHTML = msg(translateError(error.message), false)
             return
           }
           msgEl.innerHTML = msg('已保存', true)
@@ -1229,7 +1303,7 @@ async function renderMy(view) {
         const { error } = await supabase.from('bill_order')
           .update(patch).eq('id', id)
         if (error) {
-          document.getElementById('my-msg').innerHTML = msg(error.message, false)
+          document.getElementById('my-msg').innerHTML = msg(translateError(error.message), false)
           return
         }
         document.getElementById('my-msg').innerHTML = msg('修改成功', true)

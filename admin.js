@@ -46,7 +46,7 @@ async function renderTab(key) {
     if (key === 'logs') return renderLogs(v)
     if (key === 'sys') return renderSys(v)
   } catch (e) {
-    v.innerHTML = ctx.msg(String(e), false)
+    v.innerHTML = ctx.msg('加载失败，请刷新重试', false)
   }
 }
 
@@ -215,10 +215,10 @@ async function renderBills(v) {
         document.getElementById('import-msg').innerHTML = h
       } else {
         document.getElementById('import-msg').innerHTML = ctx.msg(
-          json.error || `失败：${(json.errors||[]).join('；')}`, false)
+          json.error || `导入失败，请检查文件格式`, false)
       }
     } catch (e) {
-      document.getElementById('import-msg').innerHTML = ctx.msg(String(e), false)
+      document.getElementById('import-msg').innerHTML = ctx.msg('导入失败，请检查文件格式', false)
     }
   }
 
@@ -238,7 +238,13 @@ async function renderBills(v) {
       })
     })
     if (!res.ok) {
-      document.getElementById('export-msg').innerHTML = ctx.msg(await res.text(), false)
+      const txt = await res.text()
+      let msgText = '导出失败'
+      try {
+        const j = JSON.parse(txt)
+        msgText = ctx.translateError(j.error || '导出失败')
+      } catch (e) {}
+      document.getElementById('export-msg').innerHTML = ctx.msg(msgText, false)
       return
     }
     const blob = await res.blob()
@@ -356,7 +362,7 @@ async function renderVendors(v) {
     const json = await res.json()
     document.getElementById('vendor-msg').innerHTML = res.ok
       ? ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
-      : ctx.msg(json.error, false)
+      : ctx.msg(ctx.translateError(json.error), false)
     if (res.ok) renderTab('vendors')
   }
 
@@ -365,7 +371,6 @@ async function renderVendors(v) {
       const id = b.dataset.id
       const act = b.dataset.act
 
-      // 修改
       if (act === 'edit') {
         const p = vps.find(x => x.id === id)
         if (!p) return
@@ -395,7 +400,7 @@ async function renderVendors(v) {
             .update({ vendor_name: name, contact_name: contact, contact_phone: phone })
             .eq('id', id)
           if (error) {
-            msgEl.innerHTML = ctx.msg(error.message, false); return
+            msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
           }
           alert('已保存')
           renderTab('vendors')
@@ -403,7 +408,6 @@ async function renderVendors(v) {
         return
       }
 
-      // 启用/禁用
       if (act === 'toggle') {
         const enable = b.dataset.enable === '1'
         const action = enable ? '启用' : '禁用'
@@ -418,7 +422,7 @@ async function renderVendors(v) {
           body: JSON.stringify({ user_id: id, account_type: 'vendor', enable })
         })
         const json = await res.json()
-        alert(res.ok ? `已${action}` : `${action}失败：` + (json.error || '未知错误'))
+        alert(res.ok ? `已${action}` : `${action}失败：` + ctx.translateError(json.error || '未知错误'))
         if (res.ok) renderTab('vendors')
         return
       }
@@ -438,7 +442,7 @@ async function renderVendors(v) {
           },
           body: JSON.stringify({ vendor_id: id, vendor_code: code, warehouse_codes: codes })
         })
-        alert(res.ok ? '授权成功' : '授权失败：' + await res.text())
+        alert(res.ok ? '授权成功' : '授权失败，请重试')
         if (res.ok) renderTab('vendors')
       }
 
@@ -454,7 +458,7 @@ async function renderVendors(v) {
           },
           body: JSON.stringify({ user_id: id, new_password: pwd })
         })
-        alert(res.ok ? '重置成功' : '重置失败：' + await res.text())
+        alert(res.ok ? '重置成功' : '重置失败，请重试')
       }
 
       if (act === 'del') {
@@ -471,7 +475,7 @@ async function renderVendors(v) {
           body: JSON.stringify({ vendor_id: id })
         })
         const json = await res.json()
-        alert(res.ok ? '已删除' : '删除失败：' + (json.error || '未知错误'))
+        alert(res.ok ? '已删除' : '删除失败：' + ctx.translateError(json.error || '未知错误'))
         if (res.ok) renderTab('vendors')
       }
     }
@@ -654,7 +658,7 @@ async function renderLogistics(v) {
       msgEl.innerHTML = ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
       renderTab('logistics')
     } else {
-      msgEl.innerHTML = ctx.msg(json.error || '创建失败', false)
+      msgEl.innerHTML = ctx.msg(ctx.translateError(json.error || '创建失败'), false)
     }
   }
 
@@ -701,7 +705,10 @@ async function renderLogistics(v) {
             modal.innerHTML = ''
             renderTab('logistics')
           } else {
-            alert('保存失败：' + await res.text())
+            const txt = await res.text()
+            let m = '保存失败，请重试'
+            try { m = ctx.translateError(JSON.parse(txt).error) } catch(e) {}
+            alert(m)
           }
         }
         return
@@ -719,7 +726,7 @@ async function renderLogistics(v) {
           },
           body: JSON.stringify({ user_id: id, new_password: pwd })
         })
-        alert(res.ok ? '重置成功' : '重置失败：' + await res.text())
+        alert(res.ok ? '重置成功' : '重置失败，请重试')
         return
       }
 
@@ -737,7 +744,7 @@ async function renderLogistics(v) {
           body: JSON.stringify({ logistics_id: id })
         })
         const json = await res.json()
-        alert(res.ok ? '已删除' : '删除失败：' + (json.error || '未知错误'))
+        alert(res.ok ? '已删除' : '删除失败：' + ctx.translateError(json.error || '未知错误'))
         if (res.ok) renderTab('logistics')
         return
       }
@@ -836,7 +843,7 @@ async function renderAdmins(v) {
       msgEl.innerHTML = ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
       renderTab('admins')
     } else {
-      msgEl.innerHTML = ctx.msg(json.error || '创建失败', false)
+      msgEl.innerHTML = ctx.msg(ctx.translateError(json.error || '创建失败'), false)
     }
   }
 
@@ -845,7 +852,6 @@ async function renderAdmins(v) {
       const id = b.dataset.id
       const act = b.dataset.act
 
-      // 修改（弹窗，角色下拉中文）
       if (act === 'edit') {
         const a = admins.find(x => x.id === id)
         if (!a) return
@@ -882,14 +888,15 @@ async function renderAdmins(v) {
           const { error } = await ctx.supabase.from('admin_users')
             .update({ name, phone: phone || null, role })
             .eq('id', id)
-          if (error) { msgEl.innerHTML = ctx.msg(error.message, false); return }
+          if (error) {
+            msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
+          }
           alert('已保存')
           renderTab('admins')
         }
         return
       }
 
-      // 启用/禁用
       if (act === 'toggle') {
         const enable = b.dataset.enable === '1'
         const action = enable ? '启用' : '禁用'
@@ -905,7 +912,7 @@ async function renderAdmins(v) {
           body: JSON.stringify({ user_id: id, account_type: 'admin', enable })
         })
         const json = await res.json()
-        alert(res.ok ? `已${action}` : `${action}失败：` + (json.error || '未知错误'))
+        alert(res.ok ? `已${action}` : `${action}失败：` + ctx.translateError(json.error || '未知错误'))
         if (res.ok) renderTab('admins')
         return
       }
@@ -922,14 +929,14 @@ async function renderAdmins(v) {
           },
           body: JSON.stringify({ user_id: id, new_password: pwd })
         })
-        alert(res.ok ? '重置成功' : '重置失败：' + await res.text())
+        alert(res.ok ? '重置成功' : '重置失败，请重试')
       }
 
       if (act === 'del') {
         if (id === ctx.currentUser.id) return alert('不能删除自己')
         if (!confirm(`确定删除管理员「${b.dataset.name}」？`)) return
         const { error } = await ctx.supabase.from('admin_users').delete().eq('id', id)
-        if (error) return alert(error.message)
+        if (error) return alert(ctx.translateError(error.message))
         await ctx.supabase.from('vendor_profile').delete().eq('id', id)
         alert('已删除')
         renderTab('admins')
@@ -993,14 +1000,14 @@ async function renderWh(v) {
       warehouse_name: document.getElementById('w-name').value.trim(),
       region: document.getElementById('w-region').value.trim() || null
     })
-    document.getElementById('w-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('w-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderBaseSub('wh')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('warehouse').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderBaseSub('wh')
     }
   })
@@ -1031,14 +1038,14 @@ async function renderLoc(v) {
       location_name: document.getElementById('l-name').value.trim() || null,
       created_by: ctx.currentProfile?.vendor_name || 'admin'
     })
-    document.getElementById('l-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('l-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderBaseSub('loc')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('location_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderBaseSub('loc')
     }
   })
@@ -1068,14 +1075,14 @@ async function renderStore(v) {
       store_name: document.getElementById('s-name').value.trim() || null,
       created_by: ctx.currentProfile?.vendor_name || 'admin'
     })
-    document.getElementById('s-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('s-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderBaseSub('store')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('store_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderBaseSub('store')
     }
   })
@@ -1104,14 +1111,14 @@ async function renderMode(v) {
       sort_order: Number(document.getElementById('m-sort').value) || 0,
       created_by: ctx.currentProfile?.vendor_name || 'admin'
     })
-    document.getElementById('m-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('m-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderBaseSub('mode')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('logistics_mode_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderBaseSub('mode')
     }
   })
@@ -1189,7 +1196,7 @@ async function renderProduct(v) {
     })
     const json = await res.json()
     document.getElementById('p-msg').innerHTML = res.ok
-      ? ctx.msg(`导入 ${json.count} 条`, true) : ctx.msg(json.error, false)
+      ? ctx.msg(`导入 ${json.count} 条`, true) : ctx.msg(ctx.translateError(json.error || '导入失败'), false)
     if (res.ok) renderBaseSub('product')
   }
 
@@ -1227,7 +1234,7 @@ async function renderProduct(v) {
     })
 
     if (error) {
-      msgEl.innerHTML = ctx.msg(error.message, false)
+      msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
       return
     }
     msgEl.innerHTML = ctx.msg('新增成功', true)
@@ -1238,7 +1245,7 @@ async function renderProduct(v) {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('product_master').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderBaseSub('product')
     }
   })
@@ -1266,14 +1273,14 @@ async function renderMap(v) {
       warehouse_code: document.getElementById('mp-wh').value.trim(),
       warehouse_name: document.getElementById('mp-name').value.trim() || null
     })
-    document.getElementById('mp-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('mp-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderBaseSub('map')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('location_warehouse_map').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderBaseSub('map')
     }
   })
@@ -1331,14 +1338,14 @@ async function renderDeadline(v) {
       config_value: document.getElementById('d-value').value.trim(),
       updated_by: ctx.currentProfile?.vendor_name || 'admin'
     })
-    document.getElementById('d-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('d-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderRuleSub('deadline')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('deadline_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderRuleSub('deadline')
     }
   })
@@ -1363,14 +1370,14 @@ async function renderHoliday(v) {
       holiday_date: document.getElementById('h-date').value,
       description: document.getElementById('h-desc').value.trim() || null
     })
-    document.getElementById('h-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('h-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderRuleSub('holiday')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('holiday_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderRuleSub('holiday')
     }
   })
@@ -1401,14 +1408,14 @@ async function renderBypass(v) {
       reason: document.getElementById('b-reason').value.trim() || null,
       created_by: ctx.currentProfile?.vendor_name || 'admin'
     })
-    document.getElementById('b-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('b-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderRuleSub('bypass')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('bypass_list').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderRuleSub('bypass')
     }
   })
@@ -1545,7 +1552,7 @@ async function renderSys(v) {
     const { error } = await ctx.supabase.from('system_config')
       .upsert({ config_key: key, config_value: val, updated_by: ctx.currentProfile?.vendor_name || 'admin' },
               { onConflict: 'config_key' })
-    document.getElementById('c-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已保存', true)
+    document.getElementById('c-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已保存', true)
     if (!error) renderTab('sys')
   }
   document.getElementById('btn-v-add').onclick = async () => {
@@ -1556,14 +1563,14 @@ async function renderSys(v) {
       notes: document.getElementById('v-notes').value.trim() || null,
       released_by: ctx.currentProfile?.vendor_name || 'admin'
     })
-    document.getElementById('v-msg').innerHTML = error ? ctx.msg(error.message, false) : ctx.msg('已新增', true)
+    document.getElementById('v-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
     if (!error) renderTab('sys')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('system_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(error.message)
+      if (error) return alert(ctx.translateError(error.message))
       renderTab('sys')
     }
   })
