@@ -90,16 +90,13 @@ function renderLogin() {
 function renderMain() {
   const roleTag = isAdmin ? '（管理员）' : isLogistics ? '（物流商）' : ''
   app.innerHTML = `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
-        <div>
-          <h1 style="margin-bottom:4px;">厂商留库数据提交系统</h1>
-          <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
-        </div>
-        <button class="secondary" id="btn-logout" style="flex:0 0 auto;">退出登录</button>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+      <div>
+        <h1 style="margin-bottom:4px;">厂商留库数据提交系统</h1>
+        <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
       </div>
       ${!isAdmin ? `
-        <div id="main-countdown" style="display:none;margin-top:16px;text-align:center;">
+        <div id="main-countdown" style="display:none;flex:0 0 auto;">
           <div id="main-countdown-inner" style="display:inline-flex;align-items:center;gap:10px;
                padding:8px 24px;border-radius:24px;font-size:18px;font-weight:600;
                background:linear-gradient(135deg,#f6ffed 0%,#e6f4ff 100%);
@@ -109,6 +106,7 @@ function renderMain() {
           </div>
         </div>
       ` : ''}
+      <button class="secondary" id="btn-logout" style="flex:0 0 auto;">退出登录</button>
     </div>
     <div class="nav" id="nav"></div>
     <div id="view"></div>`
@@ -137,7 +135,6 @@ async function renderView(key) {
   const view = document.getElementById('view')
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
 
-  // 默认隐藏倒计时
   const cdEl = document.getElementById('main-countdown')
   if (cdEl) cdEl.style.display = 'none'
 
@@ -364,7 +361,6 @@ async function renderFill(view) {
     return productList.find(p => p.product_code === code)
   }
 
-  // ★ 挂倒计时（更新顶部 #main-countdown）
   function startCountdown() {
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
     const wrap = document.getElementById('main-countdown')
