@@ -9,6 +9,7 @@ let isAdmin = false
 let currentRole = null
 let isLogistics = false
 let myVendors = []
+let countdownTimer = null   // ★ 全局倒计时定时器
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
@@ -121,6 +122,9 @@ function renderMain() {
 
 async function renderView(key) {
   const view = document.getElementById('view')
+  // 切换 tab 时清掉旧倒计时
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
@@ -172,6 +176,66 @@ function calcOutFields(billType, supplierInput, defaultStore) {
   return { owner_code: '', store_code: '' }
 }
 
+// ★ 计算今天的提报时间段（按优先级查 deadline_config）
+async function loadDeadlineRange(vendorCode, warehouseCode) {
+  // 判断周末（北京时间）
+  const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
+  const dow = nowBj.getDay()   // 0=周日, 6=周六
+  const dayType = (dow === 0 || dow === 6) ? 'weekend' : 'weekday'
+
+  // 按优先级查
+  const tries = [
+    { vendor: vendorCode, wh: warehouseCode, day: dayType },
+    { vendor: vendorCode, wh: null, day: dayType },
+    { vendor: null, wh: warehouseCode, day: dayType },
+    { vendor: null, wh: null, day: dayType },
+    { vendor: null, wh: null, day: 'all' }
+  ]
+
+  for (const t of tries) {
+    let q = supabase.from('deadline_config').select('config_value')
+    q = t.vendor ? q.eq('vendor_code', t.vendor) : q.is('vendor_code', null)
+    q = t.wh ? q.eq('warehouse_code', t.wh) : q.is('warehouse_code', null)
+    q = q.eq('day_type', t.day)
+    const { data } = await q.maybeSingle()
+    if (data?.config_value) return { range: data.config_value, dayType }
+  }
+
+  // 默认
+  return {
+    range: dayType === 'weekend' ? '08:00-12:00' : '07:00-15:00',
+    dayType
+  }
+}
+
+// ★ 计算并渲染倒计时文本
+function calcCountdown(range) {
+  const [startStr, endStr] = range.split('-')
+  const [sh, sm] = startStr.split(':').map(Number)
+  const [eh, em] = endStr.split(':').map(Number)
+
+  // 当前北京时间
+  const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
+  const nowSec = nowBj.getHours() * 3600 + nowBj.getMinutes() * 60 + nowBj.getSeconds()
+  const startSec = sh * 3600 + sm * 60
+  const endSec = eh * 3600 + em * 60
+
+  function fmt(sec) {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    const s = sec % 60
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+  }
+
+  if (nowSec < startSec) {
+    return { text: `距开始还有 ${fmt(startSec - nowSec)}`, color: '#d46b08' }
+  }
+  if (nowSec < endSec) {
+    return { text: `距截止还有 ${fmt(endSec - nowSec)}`, color: '#389e0d' }
+  }
+  return { text: '今日提报已截止', color: '#cf1322' }
+}
+
 // ================= 填报 =================
 async function renderFill(view) {
   let selectedVendor = null
@@ -213,6 +277,9 @@ async function renderFill(view) {
       .maybeSingle()
     defaultStoreCode = whInfo?.default_store_code || ''
   }
+
+  // ★ 查提报时间段
+  const { range } = await loadDeadlineRange(myVendorCode, myWhs[0] || null)
 
   const { data: locs } = await supabase.from('location_config')
     .select('warehouse_code, location_code').eq('status', 1)
@@ -273,11 +340,33 @@ async function renderFill(view) {
     return productList.find(p => p.product_code === code)
   }
 
-  // ★★★ render 里包含所有按钮绑定（每次渲染都重绑） ★★★
+  // ★ 挂倒计时
+  function startCountdown() {
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+    const el = document.getElementById('countdown-box')
+    if (!el) return
+
+    function tick() {
+      const { text, color } = calcCountdown(range)
+      const el2 = document.getElementById('countdown-box')
+      if (el2) {
+        el2.textContent = text
+        el2.style.color = color
+      }
+    }
+    tick()
+    countdownTimer = setInterval(tick, 1000)
+  }
+
   function render() {
     view.innerHTML = `
+      <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <h2 style="margin:0;">填报单据</h2>
+        <div style="font-size:18px;font-weight:bold;">
+          <span id="countdown-box">--:--:--</span>
+        </div>
+      </div>
       <div class="card">
-        <h2>填报单据</h2>
         ${isLogistics ? `
           <div class="row" style="margin-bottom:12px;">
             <div>
@@ -331,8 +420,8 @@ async function renderFill(view) {
     renderInTable()
     renderOutTable()
     renderPreview()
+    startCountdown()   // ★ 挂倒计时
 
-    // 物流商切厂商
     const vs = document.getElementById('vendor-select')
     if (vs) {
       vs.onchange = async () => {
@@ -346,7 +435,6 @@ async function renderFill(view) {
       }
     }
 
-    // ★ 按钮绑定（每次 render 都重绑）
     const btnAddIn = document.getElementById('btn-add-in')
     if (btnAddIn) btnAddIn.onclick = () => {
       inRows.push(newInRowForVendor(myVendorCode))
