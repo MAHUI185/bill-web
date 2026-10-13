@@ -9,7 +9,7 @@ let isAdmin = false
 let currentRole = null
 let isLogistics = false
 let myVendors = []
-let countdownTimer = null   // ★ 全局倒计时定时器
+let countdownTimer = null
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
@@ -90,12 +90,25 @@ function renderLogin() {
 function renderMain() {
   const roleTag = isAdmin ? '（管理员）' : isLogistics ? '（物流商）' : ''
   app.innerHTML = `
-    <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
-      <div>
-        <h1 style="margin-bottom:4px;">厂商留库数据提交系统</h1>
-        <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
+        <div>
+          <h1 style="margin-bottom:4px;">厂商留库数据提交系统</h1>
+          <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
+        </div>
+        <button class="secondary" id="btn-logout" style="flex:0 0 auto;">退出登录</button>
       </div>
-      <button class="secondary" id="btn-logout" style="flex:0 0 auto;">退出登录</button>
+      ${!isAdmin ? `
+        <div id="main-countdown" style="display:none;margin-top:16px;text-align:center;">
+          <div id="main-countdown-inner" style="display:inline-flex;align-items:center;gap:10px;
+               padding:8px 24px;border-radius:24px;font-size:18px;font-weight:600;
+               background:linear-gradient(135deg,#f6ffed 0%,#e6f4ff 100%);
+               border:1px solid #b7eb8f;color:#389e0d;">
+            <span style="font-size:14px;opacity:.85;">⏱</span>
+            <span id="main-countdown-text">--:--:--</span>
+          </div>
+        </div>
+      ` : ''}
     </div>
     <div class="nav" id="nav"></div>
     <div id="view"></div>`
@@ -122,8 +135,11 @@ function renderMain() {
 
 async function renderView(key) {
   const view = document.getElementById('view')
-  // 切换 tab 时清掉旧倒计时
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
+
+  // 默认隐藏倒计时
+  const cdEl = document.getElementById('main-countdown')
+  if (cdEl) cdEl.style.display = 'none'
 
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
@@ -176,14 +192,11 @@ function calcOutFields(billType, supplierInput, defaultStore) {
   return { owner_code: '', store_code: '' }
 }
 
-// ★ 计算今天的提报时间段（按优先级查 deadline_config）
 async function loadDeadlineRange(vendorCode, warehouseCode) {
-  // 判断周末（北京时间）
   const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
-  const dow = nowBj.getDay()   // 0=周日, 6=周六
+  const dow = nowBj.getDay()
   const dayType = (dow === 0 || dow === 6) ? 'weekend' : 'weekday'
 
-  // 按优先级查
   const tries = [
     { vendor: vendorCode, wh: warehouseCode, day: dayType },
     { vendor: vendorCode, wh: null, day: dayType },
@@ -201,20 +214,17 @@ async function loadDeadlineRange(vendorCode, warehouseCode) {
     if (data?.config_value) return { range: data.config_value, dayType }
   }
 
-  // 默认
   return {
     range: dayType === 'weekend' ? '08:00-12:00' : '07:00-15:00',
     dayType
   }
 }
 
-// ★ 计算并渲染倒计时文本
 function calcCountdown(range) {
   const [startStr, endStr] = range.split('-')
   const [sh, sm] = startStr.split(':').map(Number)
   const [eh, em] = endStr.split(':').map(Number)
 
-  // 当前北京时间
   const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
   const nowSec = nowBj.getHours() * 3600 + nowBj.getMinutes() * 60 + nowBj.getSeconds()
   const startSec = sh * 3600 + sm * 60
@@ -228,12 +238,27 @@ function calcCountdown(range) {
   }
 
   if (nowSec < startSec) {
-    return { text: `距开始还有 ${fmt(startSec - nowSec)}`, color: '#d46b08' }
+    return {
+      text: `距开始还有 ${fmt(startSec - nowSec)}`,
+      bg: 'linear-gradient(135deg,#fff7e6 0%,#fff1b8 100%)',
+      border: '#ffd591',
+      color: '#d46b08'
+    }
   }
   if (nowSec < endSec) {
-    return { text: `距截止还有 ${fmt(endSec - nowSec)}`, color: '#389e0d' }
+    return {
+      text: `距截止还有 ${fmt(endSec - nowSec)}`,
+      bg: 'linear-gradient(135deg,#f6ffed 0%,#e6f4ff 100%)',
+      border: '#b7eb8f',
+      color: '#389e0d'
+    }
   }
-  return { text: '今日提报已截止', color: '#cf1322' }
+  return {
+    text: '今日提报已截止',
+    bg: 'linear-gradient(135deg,#fff2f0 0%,#ffccc7 100%)',
+    border: '#ffa39e',
+    color: '#cf1322'
+  }
 }
 
 // ================= 填报 =================
@@ -278,7 +303,6 @@ async function renderFill(view) {
     defaultStoreCode = whInfo?.default_store_code || ''
   }
 
-  // ★ 查提报时间段
   const { range } = await loadDeadlineRange(myVendorCode, myWhs[0] || null)
 
   const { data: locs } = await supabase.from('location_config')
@@ -340,19 +364,23 @@ async function renderFill(view) {
     return productList.find(p => p.product_code === code)
   }
 
-  // ★ 挂倒计时
+  // ★ 挂倒计时（更新顶部 #main-countdown）
   function startCountdown() {
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null }
-    const el = document.getElementById('countdown-box')
-    if (!el) return
+    const wrap = document.getElementById('main-countdown')
+    if (!wrap) return
+    wrap.style.display = 'block'
 
     function tick() {
-      const { text, color } = calcCountdown(range)
-      const el2 = document.getElementById('countdown-box')
-      if (el2) {
-        el2.textContent = text
-        el2.style.color = color
+      const c = calcCountdown(range)
+      const inner = document.getElementById('main-countdown-inner')
+      const textEl = document.getElementById('main-countdown-text')
+      if (inner) {
+        inner.style.background = c.bg
+        inner.style.borderColor = c.border
+        inner.style.color = c.color
       }
+      if (textEl) textEl.textContent = c.text
     }
     tick()
     countdownTimer = setInterval(tick, 1000)
@@ -360,13 +388,8 @@ async function renderFill(view) {
 
   function render() {
     view.innerHTML = `
-      <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-        <h2 style="margin:0;">填报单据</h2>
-        <div style="font-size:18px;font-weight:bold;">
-          <span id="countdown-box">--:--:--</span>
-        </div>
-      </div>
       <div class="card">
+        <h2>填报单据</h2>
         ${isLogistics ? `
           <div class="row" style="margin-bottom:12px;">
             <div>
@@ -420,7 +443,7 @@ async function renderFill(view) {
     renderInTable()
     renderOutTable()
     renderPreview()
-    startCountdown()   // ★ 挂倒计时
+    startCountdown()
 
     const vs = document.getElementById('vendor-select')
     if (vs) {
