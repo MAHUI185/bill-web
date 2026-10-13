@@ -418,7 +418,6 @@ async function renderVendors(v) {
 }
 
 // ================= 3.5 物流商管理 =================
-// ★ 修复版：标签 × 加大点击区域、标签区间距加大
 function buildVendorPicker(rootId, allVendors, initialSelected = []) {
   const root = document.getElementById(rootId)
   if (!root) return { getSelected: () => [] }
@@ -1022,6 +1021,20 @@ async function renderProduct(v) {
       </div>
       <div id="p-msg"></div>
     </div>
+    <div class="card" style="box-shadow:none;padding:0 0 16px;">
+      <h2>手动新增商品</h2>
+      <div class="row">
+        <select id="pm-wh">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
+        <input id="pm-code" placeholder="商品代码 *" />
+        <input id="pm-vendor" placeholder="厂编 *" />
+      </div>
+      <div class="row">
+        <input id="pm-name" placeholder="品名 *" />
+        <input id="pm-spec" placeholder="规格 *" />
+      </div>
+      <button id="btn-pm-add">新增商品</button>
+      <div id="pm-msg"></div>
+    </div>
     <div class="card" style="box-shadow:none;padding:0;">
       <h2>商品列表</h2>
       <div class="scroll">
@@ -1034,6 +1047,8 @@ async function renderProduct(v) {
           </tr>`).join('')}</tbody></table>
       </div>
     </div>`
+
+  // Excel 导入
   document.getElementById('btn-p-import').onclick = async () => {
     const file = document.getElementById('p-file').files[0]
     if (!file) return document.getElementById('p-msg').innerHTML = ctx.msg('请选择文件', false)
@@ -1069,6 +1084,50 @@ async function renderProduct(v) {
       ? ctx.msg(`导入 ${json.count} 条`, true) : ctx.msg(json.error, false)
     if (res.ok) renderBaseSub('product')
   }
+
+  // 手动新增
+  document.getElementById('btn-pm-add').onclick = async () => {
+    const msgEl = document.getElementById('pm-msg')
+    const wh = document.getElementById('pm-wh').value
+    const code = document.getElementById('pm-code').value.trim()
+    const vendor = document.getElementById('pm-vendor').value.trim()
+    const name = document.getElementById('pm-name').value.trim()
+    const spec = document.getElementById('pm-spec').value.trim()
+
+    if (!code || !vendor || !name || !spec) {
+      msgEl.innerHTML = ctx.msg('商品代码、厂编、品名、规格为必填', false); return
+    }
+
+    const { data: exist } = await ctx.supabase.from('product_master')
+      .select('id')
+      .eq('warehouse_code', wh)
+      .eq('product_code', code)
+      .eq('default_vendor_code', vendor)
+      .maybeSingle()
+
+    if (exist) {
+      msgEl.innerHTML = ctx.msg(`同仓库「${wh}」同厂编「${vendor}」下商品代码「${code}」已存在`, false)
+      return
+    }
+
+    const { error } = await ctx.supabase.from('product_master').insert({
+      warehouse_code: wh,
+      product_code: code,
+      product_name: name,
+      spec,
+      default_vendor_code: vendor,
+      default_owner_code: vendor
+    })
+
+    if (error) {
+      msgEl.innerHTML = ctx.msg(error.message, false)
+      return
+    }
+    msgEl.innerHTML = ctx.msg('新增成功', true)
+    setTimeout(() => renderBaseSub('product'), 600)
+  }
+
+  // 删除
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
