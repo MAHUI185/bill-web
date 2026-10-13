@@ -23,17 +23,34 @@ async function init() {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) return renderLogin()
   currentUser = session.user
-  await loadProfile()
+  const ok = await loadProfile()
+  if (!ok) return
   renderMain()
 }
 
 async function loadProfile() {
   const { data: profile } = await supabase.from('vendor_profile')
     .select('*').eq('id', currentUser.id).single()
+
+  // ★ 厂商禁用检查
+  if (profile?.status === 0) {
+    await supabase.auth.signOut()
+    renderLogin('账号已禁用，请联系管理员')
+    return false
+  }
+
   currentProfile = profile
 
   const { data: admin } = await supabase.from('admin_users')
-    .select('role').eq('id', currentUser.id).maybeSingle()
+    .select('role, status').eq('id', currentUser.id).maybeSingle()
+
+  // ★ 管理员禁用检查
+  if (admin?.status === 0) {
+    await supabase.auth.signOut()
+    renderLogin('账号已禁用，请联系管理员')
+    return false
+  }
+
   isAdmin = !!admin
   currentRole = admin?.role || null
 
@@ -46,6 +63,7 @@ async function loadProfile() {
       .order('vendor_code')
     myVendors = lv || []
   }
+  return true
 }
 
 function renderMaintenance() {
@@ -66,11 +84,11 @@ function renderMaintenance() {
   }, 10000)
 }
 
-function renderLogin() {
+function renderLogin(errMsg = '') {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;">
       <h1>厂商留库数据提交系统</h1>
-      <div id="login-msg"></div>
+      <div id="login-msg">${errMsg ? msg(errMsg, false) : ''}</div>
       <input id="email" placeholder="邮箱" />
       <input id="password" type="password" placeholder="密码" />
       <button id="btn-login">登录</button>
@@ -80,7 +98,8 @@ function renderLogin() {
     const password = document.getElementById('password').value
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
-      document.getElementById('login-msg').innerHTML = msg(error.message, false)
+      document.getElementById('login-msg').innerHTML = msg(
+        '登录失败，账号可能已禁用或密码错误，请联系管理员', false)
       return
     }
     await init()

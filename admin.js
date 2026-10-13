@@ -319,8 +319,10 @@ async function renderVendors(v) {
             <td>${p.contact_name||''}</td>
             <td>${p.contact_phone||''}</td>
             <td>${(vwMap[p.id]||[]).join(', ')||'-'}</td>
-            <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">停用</span>'}</td>
+            <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">禁用</span>'}</td>
             <td>
+              <button class="small secondary" data-act="edit" data-id="${p.id}">修改</button>
+              <button class="small secondary" data-act="toggle" data-id="${p.id}" data-enable="${p.status===1?'0':'1'}">${p.status===1?'禁用':'启用'}</button>
               <button class="small secondary" data-act="grant" data-id="${p.id}" data-code="${p.vendor_code}">授权</button>
               <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
               ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
@@ -328,7 +330,8 @@ async function renderVendors(v) {
           </tr>`).join('') || '<tr><td colspan="7">无数据</td></tr>'}</tbody>
         </table>
       </div>
-    </div>`
+    </div>
+    <div id="vendor-edit-panel"></div>`
 
   document.getElementById('btn-create-vendor').onclick = async () => {
     const whSel = document.getElementById('v-wh')
@@ -361,6 +364,64 @@ async function renderVendors(v) {
     b.onclick = async () => {
       const id = b.dataset.id
       const act = b.dataset.act
+
+      // 修改
+      if (act === 'edit') {
+        const p = vps.find(x => x.id === id)
+        if (!p) return
+        const panel = document.getElementById('vendor-edit-panel')
+        panel.innerHTML = `
+          <div class="card" style="border:2px solid #1677ff;">
+            <h2>修改厂商 · ${p.vendor_code}</h2>
+            <div id="ve-msg"></div>
+            <div class="row">
+              <div><label>厂商名称 *</label><input id="ve-name" value="${p.vendor_name||''}" /></div>
+              <div><label>联系人 *</label><input id="ve-contact" value="${p.contact_name||''}" /></div>
+              <div><label>手机号 *</label><input id="ve-phone" value="${p.contact_phone||''}" /></div>
+            </div>
+            <button id="btn-ve-save">保存</button>
+            <button class="secondary" id="btn-ve-cancel">取消</button>
+          </div>`
+        document.getElementById('btn-ve-cancel').onclick = () => panel.innerHTML = ''
+        document.getElementById('btn-ve-save').onclick = async () => {
+          const msgEl = document.getElementById('ve-msg')
+          const name = document.getElementById('ve-name').value.trim()
+          const contact = document.getElementById('ve-contact').value.trim()
+          const phone = document.getElementById('ve-phone').value.trim()
+          if (!name || !contact || !phone) {
+            msgEl.innerHTML = ctx.msg('厂商名称、联系人、手机号为必填', false); return
+          }
+          const { error } = await ctx.supabase.from('vendor_profile')
+            .update({ vendor_name: name, contact_name: contact, contact_phone: phone })
+            .eq('id', id)
+          if (error) {
+            msgEl.innerHTML = ctx.msg(error.message, false); return
+          }
+          alert('已保存')
+          renderTab('vendors')
+        }
+        return
+      }
+
+      // 启用/禁用
+      if (act === 'toggle') {
+        const enable = b.dataset.enable === '1'
+        const action = enable ? '启用' : '禁用'
+        if (!confirm(`确定${action}该厂商？`)) return
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({ user_id: id, account_type: 'vendor', enable })
+        })
+        const json = await res.json()
+        alert(res.ok ? `已${action}` : `${action}失败：` + (json.error || '未知错误'))
+        if (res.ok) renderTab('vendors')
+        return
+      }
 
       if (act === 'grant') {
         const code = b.dataset.code
@@ -546,7 +607,7 @@ async function renderLogistics(v) {
             <td>${p.vendor_code||''}</td>
             <td>${p.vendor_name||''}</td>
             <td style="font-size:12px;color:#666;">${(lvMap[p.id]||[]).join(', ')||'-'}</td>
-            <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">停用</span>'}</td>
+            <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">禁用</span>'}</td>
             <td>
               <button class="small secondary" data-act="manage-vendors" data-id="${p.id}" data-code="${p.vendor_code}">管理厂商</button>
               <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
@@ -715,26 +776,27 @@ async function renderAdmins(v) {
       <h2>管理员列表（${(admins||[]).length}）</h2>
       <div class="scroll">
         <table>
-          <tr><th>姓名</th><th>手机</th><th>角色</th><th>创建时间</th><th>操作</th></tr>
+          <tr><th>姓名</th><th>手机</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
           <tbody>${(admins||[]).map(a => `<tr>
             <td>${a.name || ''}</td>
             <td>${a.phone || ''}</td>
             <td>${a.role === 'super_admin' ? '超管' : a.role === 'admin' ? '管理员' : '助理'}</td>
+            <td>${a.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">禁用</span>'}</td>
             <td>${a.created_at ? new Date(a.created_at).toLocaleString() : ''}</td>
             <td>
-              <button class="small secondary" data-act="role" data-id="${a.id}" data-role="${a.role}">改角色</button>
+              <button class="small secondary" data-act="edit" data-id="${a.id}">修改</button>
+              <button class="small secondary" data-act="toggle" data-id="${a.id}" data-enable="${a.status===1?'0':'1'}">${a.status===1?'禁用':'启用'}</button>
               <button class="small secondary" data-act="pwd" data-id="${a.id}">重置密码</button>
               ${isSuper() ? `<button class="small danger" data-act="del" data-id="${a.id}" data-name="${a.name||''}">删除</button>` : ''}
             </td>
-          </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody>
+          </tr>`).join('') || '<tr><td colspan="6">无数据</td></tr>'}</tbody>
         </table>
       </div>
-    </div>`
+    </div>
+    <div id="admin-edit-panel"></div>`
 
   const btn = document.getElementById('btn-create-admin')
-  if (!btn) return
-
-  btn.onclick = async () => {
+  if (btn) btn.onclick = async () => {
     const elLogin = document.getElementById('ad-login')
     const elName = document.getElementById('ad-name')
     const elPhone = document.getElementById('ad-phone')
@@ -742,11 +804,6 @@ async function renderAdmins(v) {
     const elRole = document.getElementById('ad-role')
     const elWh = document.getElementById('ad-wh')
     const msgEl = document.getElementById('admin-create-msg')
-
-    if (!elLogin || !elName || !elPwd) {
-      msgEl.innerHTML = ctx.msg('表单元素异常，请刷新页面', false)
-      return
-    }
 
     const login = (elLogin.value || '').trim()
     const name = (elName.value || '').trim()
@@ -759,13 +816,9 @@ async function renderAdmins(v) {
     if (!name) { msgEl.innerHTML = ctx.msg('请填写姓名', false); return }
     if (!pwd) { msgEl.innerHTML = ctx.msg('请填写初始密码', false); return }
     if (!/^[a-zA-Z0-9_]+$/.test(login)) {
-      msgEl.innerHTML = ctx.msg('登录名只能用字母、数字、下划线', false)
-      return
+      msgEl.innerHTML = ctx.msg('登录名只能用字母、数字、下划线', false); return
     }
-    if (pwd.length < 6) {
-      msgEl.innerHTML = ctx.msg('密码至少 6 位', false)
-      return
-    }
+    if (pwd.length < 6) { msgEl.innerHTML = ctx.msg('密码至少 6 位', false); return }
 
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
@@ -776,10 +829,7 @@ async function renderAdmins(v) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${session.access_token}`
       },
-      body: JSON.stringify({
-        login_name: login, password: pwd, name, phone, role,
-        warehouse_codes: whSel
-      })
+      body: JSON.stringify({ login_name: login, password: pwd, name, phone, role, warehouse_codes: whSel })
     })
     const json = await res.json()
     if (res.ok) {
@@ -794,14 +844,72 @@ async function renderAdmins(v) {
     b.onclick = async () => {
       const id = b.dataset.id
       const act = b.dataset.act
-      if (act === 'role') {
-        const input = prompt('输入新角色：super_admin / admin / assistant', b.dataset.role)
-        if (!input) return
-        if (!['super_admin','admin','assistant'].includes(input)) return alert('角色不合法')
-        const { error } = await ctx.supabase.from('admin_users').update({ role: input }).eq('id', id)
-        alert(error ? error.message : '已修改')
-        if (!error) renderTab('admins')
+
+      // 修改（弹窗，角色下拉中文）
+      if (act === 'edit') {
+        const a = admins.find(x => x.id === id)
+        if (!a) return
+        const panel = document.getElementById('admin-edit-panel')
+        panel.innerHTML = `
+          <div class="card" style="border:2px solid #1677ff;">
+            <h2>修改管理员 · ${a.name||''}</h2>
+            <div id="ae-msg"></div>
+            <div class="row">
+              <div><label>姓名 *</label><input id="ae-name" value="${a.name||''}" /></div>
+              <div><label>手机</label><input id="ae-phone" value="${a.phone||''}" /></div>
+              <div>
+                <label>角色 *</label>
+                <select id="ae-role">
+                  <option value="admin" ${a.role==='admin'?'selected':''}>管理员</option>
+                  <option value="assistant" ${a.role==='assistant'?'selected':''}>助理</option>
+                  <option value="super_admin" ${a.role==='super_admin'?'selected':''}>超级管理员</option>
+                </select>
+              </div>
+            </div>
+            <button id="btn-ae-save">保存</button>
+            <button class="secondary" id="btn-ae-cancel">取消</button>
+          </div>`
+        document.getElementById('btn-ae-cancel').onclick = () => panel.innerHTML = ''
+        document.getElementById('btn-ae-save').onclick = async () => {
+          const msgEl = document.getElementById('ae-msg')
+          const name = document.getElementById('ae-name').value.trim()
+          const phone = document.getElementById('ae-phone').value.trim()
+          const role = document.getElementById('ae-role').value
+          if (!name) { msgEl.innerHTML = ctx.msg('姓名为必填', false); return }
+          if (!['admin','assistant','super_admin'].includes(role)) {
+            msgEl.innerHTML = ctx.msg('角色不合法', false); return
+          }
+          const { error } = await ctx.supabase.from('admin_users')
+            .update({ name, phone: phone || null, role })
+            .eq('id', id)
+          if (error) { msgEl.innerHTML = ctx.msg(error.message, false); return }
+          alert('已保存')
+          renderTab('admins')
+        }
+        return
       }
+
+      // 启用/禁用
+      if (act === 'toggle') {
+        const enable = b.dataset.enable === '1'
+        const action = enable ? '启用' : '禁用'
+        if (id === ctx.currentUser.id) return alert('不能禁用自己的账号')
+        if (!confirm(`确定${action}该管理员？`)) return
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({ user_id: id, account_type: 'admin', enable })
+        })
+        const json = await res.json()
+        alert(res.ok ? `已${action}` : `${action}失败：` + (json.error || '未知错误'))
+        if (res.ok) renderTab('admins')
+        return
+      }
+
       if (act === 'pwd') {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
@@ -816,6 +924,7 @@ async function renderAdmins(v) {
         })
         alert(res.ok ? '重置成功' : '重置失败：' + await res.text())
       }
+
       if (act === 'del') {
         if (id === ctx.currentUser.id) return alert('不能删除自己')
         if (!confirm(`确定删除管理员「${b.dataset.name}」？`)) return
@@ -1048,7 +1157,6 @@ async function renderProduct(v) {
       </div>
     </div>`
 
-  // Excel 导入
   document.getElementById('btn-p-import').onclick = async () => {
     const file = document.getElementById('p-file').files[0]
     if (!file) return document.getElementById('p-msg').innerHTML = ctx.msg('请选择文件', false)
@@ -1085,7 +1193,6 @@ async function renderProduct(v) {
     if (res.ok) renderBaseSub('product')
   }
 
-  // 手动新增
   document.getElementById('btn-pm-add').onclick = async () => {
     const msgEl = document.getElementById('pm-msg')
     const wh = document.getElementById('pm-wh').value
@@ -1127,7 +1234,6 @@ async function renderProduct(v) {
     setTimeout(() => renderBaseSub('product'), 600)
   }
 
-  // 删除
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
