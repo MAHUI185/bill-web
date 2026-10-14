@@ -314,6 +314,21 @@ async function renderVendors(v) {
       <button id="btn-create-vendor">创建厂商</button>
       <div id="vendor-msg"></div>
     </div>
+    <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #91caff;">
+      <h2>批量导入厂商</h2>
+      <div class="row">
+        <div style="flex:2;">
+          <label>选择 Excel 文件（列：厂编 / 厂商名称 / 联系人 / 联系电话）</label>
+          <input id="batch-file" type="file" accept=".xlsx,.xls" />
+        </div>
+      </div>
+      <p style="font-size:12px;color:#666;margin:8px 0;">
+        统一初始密码：<strong>888888</strong>；授权仓库：<strong>2608</strong>
+      </p>
+      <button id="btn-batch-import">开始批量导入</button>
+      <div id="batch-msg"></div>
+      <div id="batch-preview" style="margin-top:12px;"></div>
+    </div>
     <div class="card" style="box-shadow:none;padding:0;">
       <h2>厂商列表（${vps.length}）</h2>
       <div class="scroll">
@@ -364,6 +379,140 @@ async function renderVendors(v) {
       ? ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
       : ctx.msg(ctx.translateError(json.error), false)
     if (res.ok) renderTab('vendors')
+  }
+
+  // ★ 批量导入厂商
+  const btnBatchImport = document.getElementById('btn-batch-import')
+  if (btnBatchImport) btnBatchImport.onclick = async () => {
+    const file = document.getElementById('batch-file').files[0]
+    const msgEl = document.getElementById('batch-msg')
+    const previewEl = document.getElementById('batch-preview')
+
+    if (!file) {
+      msgEl.innerHTML = ctx.msg('请选择 Excel 文件', false)
+      return
+    }
+
+    msgEl.innerHTML = ctx.msg('解析文件中...', true)
+
+    try {
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf)
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+
+      const list = rows.map(r => ({
+        vendor_code: String(r['厂编'] || r['vendor_code'] || '').trim(),
+        vendor_name: String(r['厂商名称'] || r['vendor_name'] || '').trim(),
+        contact_name: String(r['联系人'] || r['contact_name'] || '').trim(),
+        contact_phone: String(r['联系电话'] || r['手机号'] || r['contact_phone'] || '').trim()
+      })).filter(x => x.vendor_code && x.vendor_name)
+
+      if (!list.length) {
+        msgEl.innerHTML = ctx.msg('未解析到有效数据（需含「厂编」和「厂商名称」列）', false)
+        return
+      }
+
+      previewEl.innerHTML = `
+        <p style="color:#333;margin-bottom:8px;">
+          共解析 <strong>${list.length}</strong> 条，预览前 5 条：
+        </p>
+        <div class="scroll" style="max-height:200px;">
+          <table>
+            <tr><th>厂编</th><th>厂商名称</th><th>联系人</th><th>联系电话</th></tr>
+            ${list.slice(0, 5).map(x => `<tr>
+              <td>${x.vendor_code}</td>
+              <td>${x.vendor_name}</td>
+              <td>${x.contact_name}</td>
+              <td>${x.contact_phone}</td>
+            </tr>`).join('')}
+          </table>
+        </div>
+        <p style="color:#d46b08;margin-top:12px;">
+          确认无误后，点击下方按钮开始导入。
+        </p>
+        <button id="btn-batch-confirm">确认导入 ${list.length} 个厂商</button>
+      `
+
+      document.getElementById('btn-batch-confirm').onclick = async () => {
+        if (!confirm(`确定导入 ${list.length} 个厂商？\n\n统一密码：888888\n授权仓库：2608`)) return
+
+        msgEl.innerHTML = ctx.msg(`导入中（0 / ${list.length}）...`, true)
+        previewEl.innerHTML = ''
+
+        const success = []
+        const failed = []
+
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+
+        for (let i = 0; i < list.length; i++) {
+          const item = list[i]
+          msgEl.innerHTML = ctx.msg(`导入中（${i+1} / ${list.length}）：${item.vendor_code} ${item.vendor_name}...`, true)
+
+          try {
+            const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-vendor`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session.access_token}`
+              },
+              body: JSON.stringify({
+                vendor_code: item.vendor_code,
+                vendor_name: item.vendor_name,
+                contact_name: item.contact_name,
+                contact_phone: item.contact_phone,
+                password: '888888',
+                warehouse_codes: ['2608']
+              })
+            })
+
+            const json = await res.json()
+
+            if (res.ok && json.ok) {
+              success.push(item)
+            } else {
+              failed.push({ ...item, error: json.error || '未知错误' })
+            }
+          } catch (e) {
+            failed.push({ ...item, error: String(e) })
+          }
+        }
+
+        let html = `
+          <div class="msg ${failed.length === 0 ? 'ok' : 'err'}" style="margin-top:12px;">
+            <strong>导入完成</strong><br>
+            成功：${success.length} 个<br>
+            失败：${failed.length} 个
+          </div>
+        `
+
+        if (failed.length > 0) {
+          html += `
+            <details style="margin-top:8px;">
+              <summary style="cursor:pointer;color:#cf1322;">查看失败详情</summary>
+              <div class="scroll" style="max-height:300px;margin-top:8px;">
+                <table>
+                  <tr><th>厂编</th><th>厂商名称</th><th>失败原因</th></tr>
+                  ${failed.map(f => `<tr>
+                    <td>${f.vendor_code}</td>
+                    <td>${f.vendor_name}</td>
+                    <td style="color:#cf1322;font-size:12px;">${f.error}</td>
+                  </tr>`).join('')}
+                </table>
+              </div>
+            </details>
+          `
+        }
+
+        msgEl.innerHTML = html
+
+        if (success.length > 0) {
+          setTimeout(() => renderTab('vendors'), 2000)
+        }
+      }
+    } catch (e) {
+      msgEl.innerHTML = ctx.msg('解析失败：' + e.message, false)
+    }
   }
 
   v.querySelectorAll('button[data-act]').forEach(b => {
@@ -988,9 +1137,10 @@ async function renderWh(v) {
       <button id="btn-w-add">新增</button>
     </div>
     <div id="w-msg"></div>
-    <table><tr><th>代码</th><th>名称</th><th>区域</th><th>状态</th><th>操作</th></tr>
+    <table><tr><th>代码</th><th>名称</th><th>区域</th><th>默认门店</th><th>状态</th><th>操作</th></tr>
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.warehouse_code}</td><td>${r.warehouse_name}</td><td>${r.region||''}</td>
+        <td>${r.default_store_code||'-'}</td>
         <td>${r.status===1?'启用':'停用'}</td>
         <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
@@ -1195,8 +1345,7 @@ async function renderProduct(v) {
       })
     })
     const json = await res.json()
-    document.getElementById('p-msg').innerHTML = res.ok
-      ? ctx.msg(`导入 ${json.count} 条`, true) : ctx.msg(ctx.translateError(json.error || '导入失败'), false)
+    document.getElementById('p-msg').innerHTML = res.ok      ? ctx.msg(`导入 ${json.count} 条`, true) : ctx.msg(ctx.translateError(json.error || '导入失败'), false)
     if (res.ok) renderBaseSub('product')
   }
 
