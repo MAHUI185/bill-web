@@ -15,12 +15,11 @@ function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
 }
 
-// ★ 统一错误翻译（Auth + DB + 网络）
+// 统一错误翻译（Auth + DB + 网络）
 function translateError(errMsg) {
   if (!errMsg) return '操作失败'
   const m = String(errMsg).toLowerCase()
 
-  // Auth
   if (m.includes('new password should be different') || m.includes('same password'))
     return '新密码不能与旧密码相同'
   if (m.includes('password should be at least'))
@@ -40,7 +39,6 @@ function translateError(errMsg) {
   if (m.includes('banned'))
     return '账号已被禁用'
 
-  // DB
   if (m.includes('row-level security'))
     return '没有权限执行此操作'
   if (m.includes('duplicate key') && m.includes('product_master'))
@@ -86,7 +84,6 @@ function translateError(errMsg) {
   if (m.includes('failed to fetch') || m.includes('networkerror'))
     return '网络连接失败，请检查网络'
 
-  // 已是中文（触发器/自定义报错）
   if (/[\u4e00-\u9fa5]/.test(errMsg)) return errMsg
 
   return '操作失败：' + errMsg
@@ -368,6 +365,23 @@ function addOneDay(d) {
   return dt.toISOString().slice(0, 10)
 }
 
+// ★ 新增：加 N 天
+function addDays(d, n) {
+  if (!d) return null
+  const dt = new Date(d + 'T00:00:00Z')
+  dt.setUTCDate(dt.getUTCDate() + n)
+  return dt.toISOString().slice(0, 10)
+}
+
+// ★ 新增：北京时间当天 yyyy-MM-dd
+function todayBj() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
+  const y = now.getFullYear()
+  const m = String(now.getMonth() + 1).padStart(2, '0')
+  const d = String(now.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
 function getModeByType(billType) {
   if (billType === 'VMI入库') return 'UNIFY'
   if (billType === 'DSP入库') return 'LIKECROSS'
@@ -531,31 +545,35 @@ async function renderFill(view) {
   let inRows = [newInRowForVendor(myVendorCode)]
   let outRows = [newOutRowForVendor(myVendorCode)]
 
+  // ★ 入库行：到货日期 = 当天 + 1
   function newInRowForVendor(vc) {
     const f = calcInFields('VMI入库', vc)
     return {
       source_no: '', bill_type: 'VMI入库',
       vendor_code: f.vendor_code, owner_code: f.owner_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      product_code: '', spec: '', quantity: '', arrival_date: '',
+      product_code: '', spec: '', quantity: '',
+      arrival_date: addDays(todayBj(), 1),   // ★ 当天+1
       product_name: ''
     }
   }
+  // ★ 出库行：配货日期 = 当天 + 2
   function newOutRowForVendor(vc) {
     const f = calcOutFields('VMI出库', vc, defaultStoreCode)
     return {
       bill_type: 'VMI出库', owner_code: f.owner_code, store_code: f.store_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      pick_date: '', product_code: '', spec: '', quantity: '',
+      pick_date: addDays(todayBj(), 2),   // ★ 当天+2
+      product_code: '', spec: '', quantity: '',
       product_name: ''
     }
   }
 
   function isInRowFilled(r) {
-    return !!(r.product_code || r.spec || r.quantity || r.arrival_date)
+    return !!(r.product_code || r.spec || r.quantity)
   }
   function isOutRowFilled(r) {
-    return !!(r.product_code || r.spec || r.quantity || r.pick_date)
+    return !!(r.product_code || r.spec || r.quantity)
   }
 
   function productOptionsHtml() {
@@ -839,7 +857,7 @@ async function renderFill(view) {
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
-      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" style="width:140px;margin:0;" /></td>
+      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
       <td><button class="small danger" data-del-in="${i}">删除</button></td>
     </tr>`
     }).join('')
@@ -926,7 +944,7 @@ async function renderFill(view) {
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" style="width:140px;margin:0;" /></td>
+      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
