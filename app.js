@@ -802,56 +802,33 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
-      // ===== ★ DSP核验：按 货主代码 + 商品代码 维度 =====
+               // ===== ★ DSP核验：仅限本批次（当天）提交的数据 =====
       const dspOutRows = validOut.filter(r => r.bill_type === 'DSP出库' || r.bill_type === 'DSP出货')
       
       if (dspOutRows.length > 0) {
-        // 1. 获取本批次填写的入库记录（忽略空格大小写防误判）
+        // 1. 收集当前表单中填写的 DSP入库 记录
         const currentInDspKeys = new Set()
         validIn.forEach(r => {
           if (r.bill_type === 'DSP入库') {
-            currentInDspKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
+            // 去空格后拼接比对
+            const key = `${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`
+            currentInDspKeys.add(key)
           }
         })
 
-        // 2. 找出本批次里缺失了入库的前置商品
-        const missingKeys = new Set()
+        // 2. 检查每一条 DSP出库，是否在表单里有对应的 DSP入库
+        const finalMissing = []
         dspOutRows.forEach(r => {
           const key = `${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`
           if (!currentInDspKeys.has(key)) {
-            missingKeys.add(key)
+            finalMissing.push(r.product_code)
           }
         })
 
-        if (missingKeys.size > 0) {
-          // 3. 对于本批次缺的商品，统一去数据库查历史
-          const productCodes = Array.from(missingKeys).map(k => k.split('||')[1])
-          const { data: existDspIn, error: dspErr } = await supabase.from('bill_order')
-            .select('owner_code, product_code')
-            .eq('vendor_code', myVendorCode)
-            .in('bill_type', ['DSP入库'])
-            .in('product_code', productCodes)
-
-          if (dspErr) {
-            return msgEl.innerHTML = msg('校验 DSP 前置单据失败，请重试', false)
-          }
-
-          // 4. 构建数据库里已有的记录集合
-          const dbExistKeys = new Set()
-          ;(existDspIn || []).forEach(r => {
-            dbExistKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
-          })
-
-          // 5. 最终确认哪些缺失了
-          const finalMissing = []
-          missingKeys.forEach(k => {
-            if (!dbExistKeys.has(k)) finalMissing.push(k)
-          })
-
-          if (finalMissing.length > 0) {
-            const errCodes = finalMissing.map(k => k.split('||')[1]).join('、')
-            return msgEl.innerHTML = msg(`提交失败：商品 [${errCodes}] 没有对应的 DSP入库 记录。请先提交同货主、同商品的 DSP入库单。`, false)
-          }
+        // 3. 只要有一条没匹配上，就拦截
+        if (finalMissing.length > 0) {
+          const errCodes = [...new Set(finalMissing)].join('、')
+          return msgEl.innerHTML = msg(`提交失败：本批次填写的商品 [${errCodes}] 缺少对应的 DSP入库。必须先提交同货主、同商品的 DSP入库单，才能提交 DSP出库。`, false)
         }
       }
       // ===== ★ DSP核验结束 =====
