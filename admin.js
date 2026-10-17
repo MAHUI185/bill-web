@@ -98,6 +98,8 @@ const ACTION_CN = {
   reset_admin_pwd: '重置管理员密码',
   import_bills: '导入单据',
   export_bills: '导出单据',
+  update_bill: '修改单据',
+  delete_bill: '删除单据',
   create_warehouse: '新增仓库',
   delete_warehouse: '删除仓库',
   create_location: '新增仓位',
@@ -218,11 +220,12 @@ async function renderBills(v) {
       </div>
       <div class="scroll">
         <table>
-          <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th></tr>
+          <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           <tbody id="b-body"></tbody>
         </table>
       </div>
     </div>
+    <div id="admin-edit-bill-panel"></div>
     <div class="card" style="box-shadow:none;padding:0;">
       <details>
         <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">导出批次（点击展开）</summary>
@@ -354,12 +357,84 @@ async function renderBills(v) {
       <td>${b.product_code||''}</td><td>${b.quantity||''}</td>
       <td>${b.exported ? '是' : '否'}</td>
       <td>${new Date(b.created_at).toLocaleString()}</td>
-    </tr>`).join('') || '<tr><td colspan="9">无数据</td></tr>'
+      <td>
+        <button class="small secondary" data-act="edit-bill" data-id="${b.id}">修改</button>
+        ${isSuper() ? `<button class="small danger" data-act="del-bill" data-id="${b.id}">删除</button>` : ''}
+      </td>
+    </tr>`).join('') || '<tr><td colspan="10">无数据</td></tr>'
+
+    document.querySelectorAll('#b-body button[data-act]').forEach(btn => {
+      btn.onclick = () => {
+        const id = Number(btn.dataset.id)
+        const b = (data||[]).find(x => x.id === id)
+        if (!b) return
+
+        if (btn.dataset.act === 'edit-bill') {
+          const panel = document.getElementById('admin-edit-bill-panel')
+          panel.innerHTML = `
+            <div class="card" style="border:2px solid #1677ff; margin-top:12px;">
+              <h2>修改单据 #${id}</h2>
+              <div id="ae-bill-msg"></div>
+              <div class="row">
+                <div><label>商品代码 *</label><input id="ab-product" value="${b.product_code||''}" /></div>
+                <div><label>包装规格 *</label><input id="ab-spec" value="${b.spec||''}" /></div>
+                <div><label>数量 *</label><input id="ab-qty" type="number" value="${b.quantity||''}" /></div>
+              </div>
+              <div class="row">
+                <div><label>货主代码</label><input id="ab-owner" value="${b.owner_code||''}" /></div>
+                <div><label>到货日期</label><input id="ab-arrival" type="date" value="${b.arrival_date||''}" /></div>
+                <div><label>到效日期</label><input id="ab-effective" type="date" value="${b.effective_date||''}" /></div>
+              </div>
+              <div class="row">
+                <div style="flex:3;"><label>备注</label><input id="ab-remark" value="${b.remark||''}" /></div>
+              </div>
+              <button id="btn-save-ab">保存</button>
+              <button class="secondary" id="btn-cancel-ab">取消</button>
+            </div>`
+
+          document.getElementById('btn-cancel-ab').onclick = () => panel.innerHTML = ''
+
+          document.getElementById('btn-save-ab').onclick = async () => {
+            const msgEl = document.getElementById('ae-bill-msg')
+            const product = document.getElementById('ab-product').value.trim()
+            const spec = document.getElementById('ab-spec').value.trim()
+            const qty = Number(document.getElementById('ab-qty').value)
+            if (!product || !spec || !qty) return msgEl.innerHTML = ctx.msg('商品、规格、数量为必填', false)
+
+            const patch = {
+              product_code: product,
+              spec: spec,
+              quantity: qty,
+              owner_code: document.getElementById('ab-owner').value.trim(),
+              arrival_date: document.getElementById('ab-arrival').value || null,
+              effective_date: document.getElementById('ab-effective').value || null,
+              remark: document.getElementById('ab-remark').value.trim()
+            }
+            const { error } = await ctx.supabase.from('bill_order').update(patch).eq('id', id)
+            if (error) return msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+            
+            await logOp('update_bill', '修改单据 ' + id)
+            alert('已保存')
+            search()
+          }
+        }
+
+        if (btn.dataset.act === 'del-bill') {
+          if (!confirm(`确定删除单据 #${id} 吗？此操作不可撤销！`)) return
+          ;(async () => {
+            const { error } = await ctx.supabase.from('bill_order').delete().eq('id', id)
+            if (error) return alert(ctx.translateError(error.message))
+            await logOp('delete_bill', '删除单据 ' + id)
+            alert('已删除')
+            search()
+          })()
+        }
+      }
+    })
   }
   document.getElementById('btn-b-search').onclick = search
   search()
 
-  // 加载导出批次
   ;(async () => {
     const { data: batches } = await ctx.supabase
       .from('export_batch_detail').select('*')
@@ -380,6 +455,7 @@ async function renderBills(v) {
       </div>`
   })()
 }
+
 // ================= 3. 厂商管理 =================
 async function renderVendors(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
@@ -1295,6 +1371,7 @@ async function renderAdmins(v) {
     }
   })
 }
+
 // ================= 5. 基础数据 =================
 async function renderBase(v) {
   v.innerHTML = `

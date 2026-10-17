@@ -10,6 +10,7 @@ let currentRole = null
 let isLogistics = false
 let myVendors = []
 let countdownTimer = null
+let activeHeartbeatTimer = null
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
@@ -182,6 +183,26 @@ function renderLogin(errMsg = '') {
         false)
       return
     }
+
+    // ★ 登录成功：写登录日志 + 更新最后登录/活跃时间
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        await supabase.from('login_log').insert({
+          vendor_id: user.id,
+          user_agent: navigator.userAgent
+        })
+        await supabase.from('vendor_profile')
+          .update({
+            last_login_at: new Date().toISOString(),
+            last_active_at: new Date().toISOString()
+          })
+          .eq('id', user.id)
+      }
+    } catch (e) {
+      console.warn('写登录日志失败', e)
+    }
+
     await init()
   }
   document.getElementById('btn-goto-change').onclick = () => renderChangePwd()
@@ -314,6 +335,7 @@ function renderMain() {
     <div class="nav" id="nav"></div>
     <div id="view"></div>`
   document.getElementById('btn-logout').onclick = async () => {
+    if (activeHeartbeatTimer) { clearInterval(activeHeartbeatTimer); activeHeartbeatTimer = null }
     await supabase.auth.signOut()
     init()
   }
@@ -332,6 +354,20 @@ function renderMain() {
   })
   nav.querySelector('button').classList.add('active')
   renderView(tabs[0][0])
+
+  // ★ 活跃心跳：每 3 分钟更新 last_active_at
+  if (activeHeartbeatTimer) { clearInterval(activeHeartbeatTimer); activeHeartbeatTimer = null }
+  if (currentUser) {
+    const beat = async () => {
+      try {
+        await supabase.from('vendor_profile')
+          .update({ last_active_at: new Date().toISOString() })
+          .eq('id', currentUser.id)
+      } catch (e) {}
+    }
+    beat()
+    activeHeartbeatTimer = setInterval(beat, 3 * 60 * 1000)
+  }
 }
 
 async function renderView(key) {
@@ -385,7 +421,7 @@ function getModeByType(billType) {
   if (billType === 'DSP入库') return 'LIKECROSS'
   if (billType === 'VMI出库') return 'LIKECROSS'
   if (billType === 'DSP出库') return 'LIKECROSS'
-  if (billType === '济转西RT') return 'LIKECROSS' // 沿用原有逻辑，具体视业务而定
+  if (billType === '济转西RT') return 'LIKECROSS'
   if (billType === '济转西DSP') return 'LIKECROSS'
   return 'UNIFY'
 }
@@ -565,7 +601,10 @@ async function renderFill(view) {
   function newOutRowForVendor(vc) {
     const f = calcOutFields('VMI出库', vc, defaultStoreCode)
     return {
-      bill_type: 'VMI出库', owner_code: f.owner_code, store_code: f.store_code,
+      bill_type: 'VMI出库', 
+      source_no: '',
+      owner_code: f.owner_code, 
+      store_code: f.store_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
       pick_date: addDays(todayBj(), 2),
       product_code: '', spec: '', quantity: '',
@@ -577,7 +616,7 @@ async function renderFill(view) {
     return !!(r.product_code || r.spec || r.quantity)
   }
   function isOutRowFilled(r) {
-    return !!(r.product_code || r.spec || r.quantity)
+    return !!(r.product_code || r.spec || r.quantity || r.source_no)
   }
 
   function productOptionsHtml() {
@@ -646,7 +685,7 @@ async function renderFill(view) {
           <table>
             <thead>
               <tr>
-                <th>配单类型</th><th>货主代码</th><th>门店代码</th>
+                <th>配单类型</th><th>采购单号(来源)</th><th>货主代码</th><th>门店代码</th>
                 <th>仓位</th><th>配货日期</th>
                 <th>商品代码</th><th>包装规格</th><th>数量</th><th>操作</th>
               </tr>
@@ -737,6 +776,9 @@ async function renderFill(view) {
       outRows.forEach((r, idx) => {
         if (!isOutRowFilled(r)) return
         const missing = []
+        // ★ 只有 VMI出库 必填来源单号
+        if (r.bill_type === 'VMI出库' && !r.source_no) missing.push('采购单号')
+        
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
         if (!r.spec) missing.push('包装规格')
@@ -802,14 +844,14 @@ async function renderFill(view) {
         vendor_id: vendorAuthId,
         warehouse_code: defaultWh,
         bill_type: r.bill_type,
-        source_no: null,
+        source_no: r.source_no || null,
+        inbound_order_no: r.source_no || null,  // 自动等于来源单号
         owner_code: r.owner_code,
         store_code: r.store_code,
         location_code: r.location_code,
         logistics_mode: getModeByType(r.bill_type),
         pick_date: r.pick_date || null,
         effective_date: addOneDay(r.pick_date),
-        inbound_order_no: null,
         product_code: r.product_code,
         spec: r.spec,
         quantity: Number(r.quantity),
@@ -936,6 +978,7 @@ async function renderFill(view) {
           <option ${r.bill_type==='济转西DSP'?'selected':''}>济转西DSP</option>
         </select>
       </td>
+      <td><input data-i="${i}" data-f="source_no" value="${r.source_no || ''}" placeholder="采购单号" style="width:140px;margin:0;" /></td>
       <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
       <td>
         ${(r.bill_type === 'VMI出库' || r.bill_type === '济转西RT' || r.bill_type === '济转西DSP')
@@ -1025,9 +1068,9 @@ async function renderFill(view) {
         <strong>出库 ${validOut.length} 条：</strong>
         ${validOut.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px;">
-          <tr><th>配单类型</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th></tr>
+          <tr><th>配单类型</th><th>采购单号(来源)</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th></tr>
           ${validOut.map(r => `<tr>
-            <td>${r.bill_type}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
+            <td>${r.bill_type}</td><td>${r.source_no || '-'}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
             <td>${r.location_code}</td><td>${r.pick_date || '-'}</td>
             <td>${r.product_code}</td><td>${r.product_name||''}</td><td>${r.spec}</td><td>${r.quantity}</td>
           </tr>`).join('')}
@@ -1262,83 +1305,25 @@ async function renderMy(view) {
     <div class="card">
       <h2>${isLogistics ? '我负责厂商的单据' : '我的单据'}</h2>
       <div id="my-msg"></div>
-      <table>
-        <tr>
-          <th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th>
-          <th>仓库</th><th>已导出</th><th>时间</th><th>操作</th>
-        </tr>
-        ${(data||[]).map(b => `<tr>
-          <td>${b.id}</td>
-          <td>${b.vendor_code||''}</td>
-          <td>${b.bill_type}</td>
-          <td>${b.product_code}</td>
-          <td>${b.quantity}</td>
-          <td>${b.warehouse_code}</td>
-          <td>${b.exported ? '是' : '否'}</td>
-          <td>${new Date(b.created_at).toLocaleString()}</td>
-          <td>
-            ${b.exported
-              ? '<span style="color:#999;font-size:12px;">已导出不可改</span>'
-              : `<button class="small secondary" data-edit="${b.id}">修改</button>`}
-          </td>
-        </tr>`).join('')}
-      </table>
-    </div>
-    <div id="edit-panel"></div>`
-
-  view.querySelectorAll('[data-edit]').forEach(btn => {
-    btn.onclick = () => {
-      const id = Number(btn.dataset.edit)
-      const bill = (data||[]).find(x => x.id === id)
-      if (!bill) return
-      const panel = document.getElementById('edit-panel')
-      panel.innerHTML = `
-        <div class="card">
-          <h2>修改单据 #${id}</h2>
-          <input id="e-source" type="hidden" value="${bill.source_no||''}" />
-          <div class="row">
-            <div><label>商品代码</label><input id="e-product" value="${bill.product_code||''}" /></div>
-            <div><label>包装规格</label><input id="e-spec" value="${bill.spec||''}" /></div>
-            <div><label>数量</label><input id="e-qty" type="number" value="${bill.quantity||''}" /></div>
-          </div>
-          <div class="row">
-            <div><label>货主代码</label><input id="e-owner" value="${bill.owner_code||''}" /></div>
-            <div><label>到货日期</label><input id="e-arrival" type="date" value="${bill.arrival_date||''}" /></div>
-            <div><label>订单到效日期</label><input id="e-effective" type="date" value="${bill.effective_date||''}" /></div>
-          </div>
-          <div class="row">
-            <div style="flex:3;"><label>备注</label><input id="e-remark" value="${bill.remark||''}" /></div>
-          </div>
-          <button id="btn-save-edit">保存修改</button>
-          <button class="secondary" id="btn-cancel-edit">取消</button>
-        </div>`
-
-      document.getElementById('btn-save-edit').onclick = async () => {
-        const patch = {
-          source_no: document.getElementById('e-source').value,
-          product_code: document.getElementById('e-product').value,
-          spec: document.getElementById('e-spec').value,
-          quantity: Number(document.getElementById('e-qty').value),
-          owner_code: document.getElementById('e-owner').value,
-          effective_date: document.getElementById('e-effective').value || null,
-          arrival_date: document.getElementById('e-arrival').value || null,
-          remark: document.getElementById('e-remark').value
-        }
-        const { error } = await supabase.from('bill_order')
-          .update(patch).eq('id', id)
-        if (error) {
-          document.getElementById('my-msg').innerHTML = msg(translateError(error.message), false)
-          return
-        }
-        document.getElementById('my-msg').innerHTML = msg('修改成功', true)
-        renderMy(view)
-      }
-
-      document.getElementById('btn-cancel-edit').onclick = () => {
-        panel.innerHTML = ''
-      }
-    }
-  })
+      <div class="scroll" style="max-height: 600px;">
+        <table>
+          <tr>
+            <th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th>
+            <th>仓库</th><th>已导出</th><th>时间</th>
+          </tr>
+          ${(data||[]).map(b => `<tr>
+            <td>${b.id}</td>
+            <td>${b.vendor_code||''}</td>
+            <td>${b.bill_type}</td>
+            <td>${b.product_code}</td>
+            <td>${b.quantity}</td>
+            <td>${b.warehouse_code}</td>
+            <td>${b.exported ? '是' : '否'}</td>
+            <td>${new Date(b.created_at).toLocaleString()}</td>
+          </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无单据</td></tr>'}
+        </table>
+      </div>
+    </div>`
 }
 
 init()
