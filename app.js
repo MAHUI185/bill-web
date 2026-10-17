@@ -806,31 +806,51 @@ async function renderFill(view) {
       const dspOutRows = validOut.filter(r => r.bill_type === 'DSP出库' || r.bill_type === 'DSP出货')
       
       if (dspOutRows.length > 0) {
+        // 1. 获取本批次填写的入库记录（忽略空格大小写防误判）
         const currentInDspKeys = new Set()
         validIn.forEach(r => {
           if (r.bill_type === 'DSP入库') {
-            currentInDspKeys.add(`${r.owner_code}||${r.product_code}`)
+            currentInDspKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
           }
         })
 
-        for (const outRow of dspOutRows) {
-          const key = `${outRow.owner_code}||${outRow.product_code}`
-          if (currentInDspKeys.has(key)) continue
+        // 2. 找出本批次里缺失了入库的前置商品
+        const missingKeys = new Set()
+        dspOutRows.forEach(r => {
+          const key = `${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`
+          if (!currentInDspKeys.has(key)) {
+            missingKeys.add(key)
+          }
+        })
 
+        if (missingKeys.size > 0) {
+          // 3. 对于本批次缺的商品，统一去数据库查历史
+          const productCodes = Array.from(missingKeys).map(k => k.split('||')[1])
           const { data: existDspIn, error: dspErr } = await supabase.from('bill_order')
-            .select('id')
+            .select('owner_code, product_code')
             .eq('vendor_code', myVendorCode)
             .in('bill_type', ['DSP入库'])
-            .eq('owner_code', outRow.owner_code)
-            .eq('product_code', outRow.product_code)
-            .limit(1)
+            .in('product_code', productCodes)
 
           if (dspErr) {
             return msgEl.innerHTML = msg('校验 DSP 前置单据失败，请重试', false)
           }
-          
-          if (!existDspIn || existDspIn.length === 0) {
-            return msgEl.innerHTML = msg(`提交失败：出库单第 ${validOut.indexOf(outRow) + 1} 行，商品「${outRow.product_code}」没有对应的 DSP入库 记录。请先提交同货主、同商品的 DSP入库单。`, false)
+
+          // 4. 构建数据库里已有的记录集合
+          const dbExistKeys = new Set()
+          ;(existDspIn || []).forEach(r => {
+            dbExistKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
+          })
+
+          // 5. 最终确认哪些缺失了
+          const finalMissing = []
+          missingKeys.forEach(k => {
+            if (!dbExistKeys.has(k)) finalMissing.push(k)
+          })
+
+          if (finalMissing.length > 0) {
+            const errCodes = finalMissing.map(k => k.split('||')[1]).join('、')
+            return msgEl.innerHTML = msg(`提交失败：商品 [${errCodes}] 没有对应的 DSP入库 记录。请先提交同货主、同商品的 DSP入库单。`, false)
           }
         }
       }
