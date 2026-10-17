@@ -17,21 +17,42 @@ export async function renderAdmin(view, context) {
   }
   ctx.operatorName = operatorName
 
+  // ★ 根据角色分配菜单
+  let menuHtml = ''
+  if (context.currentRole === 'super_admin') {
+    menuHtml = `
+      <button data-t="progress" class="active">提报进度</button>
+      <button data-t="bills">单据管理</button>
+      <button data-t="vendors">厂商管理</button>
+      <button data-t="logistics">物流商管理</button>
+      <button data-t="admins">管理员管理</button>
+      <button data-t="base">基础数据</button>
+      <button data-t="logs">日志</button>
+      <button data-t="sys">系统配置</button>
+    `
+  } else if (context.currentRole === 'admin') {
+    menuHtml = `
+      <button data-t="progress" class="active">提报进度</button>
+      <button data-t="bills">单据管理</button>
+      <button data-t="vendors">厂商管理</button>
+      <button data-t="logistics">物流商管理</button>
+    `
+  } else { // 助理 assistant
+    menuHtml = `
+      <button data-t="progress" class="active">提报进度</button>
+      <button data-t="bills">单据管理</button>
+    `
+  }
+
   view.innerHTML = `
     <div class="card">
       <h2>管理后台</h2>
       <div class="tabs" id="admin-tabs">
-        <button data-t="progress" class="active">提报进度</button>
-        <button data-t="bills">单据管理</button>
-        <button data-t="vendors">厂商管理</button>
-        <button data-t="logistics">物流商管理</button>
-        <button data-t="admins">管理员管理</button>
-        <button data-t="base">基础数据</button>
-        <button data-t="logs">日志</button>
-        <button data-t="sys">系统配置</button>
+        ${menuHtml}
       </div>
       <div id="admin-view"></div>
     </div>`
+    
   document.querySelectorAll('#admin-tabs button').forEach(b => {
     b.onclick = () => {
       document.querySelectorAll('#admin-tabs button').forEach(x => x.classList.remove('active'))
