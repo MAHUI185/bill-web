@@ -681,6 +681,7 @@ async function renderFill(view) {
         <button class="secondary small" id="btn-add-in" style="margin-top:8px;">+ 添加入库行</button>
 
         <h3 style="margin:24px 0 8px;">出库单</h3>
+        <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：提交「DSP出库」前，必须已经提交过同货主、同商品的「DSP入库」单据。</p>
         <div style="overflow:auto;">
           <table>
             <thead>
@@ -800,6 +801,45 @@ async function renderFill(view) {
 
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
+
+      // ===== ★ DSP核验：按 货主代码 + 商品代码 维度 =====
+      const dspOutRows = validOut.filter(r => r.bill_type === 'DSP出库' || r.bill_type === 'DSP出货')
+      
+      if (dspOutRows.length > 0) {
+        // 获取当前填写的入库行里是否有同货主、同商品的DSP入库
+        const currentInDspKeys = new Set()
+        validIn.forEach(r => {
+          if (r.bill_type === 'DSP入库') {
+            currentInDspKeys.add(`${r.owner_code}||${r.product_code}`)
+          }
+        })
+
+        for (const outRow of dspOutRows) {
+          const key = `${outRow.owner_code}||${outRow.product_code}`
+          
+          // 1. 如果本次同一批次里的入库单有，直接放行
+          if (currentInDspKeys.has(key)) continue
+
+          // 2. 如果本批次没有，去数据库查历史是否已有 DSP入库
+          const { data: existDspIn, error: dspErr } = await supabase.from('bill_order')
+            .select('id')
+            .eq('vendor_code', myVendorCode)
+            .in('bill_type', ['DSP入库'])
+            .eq('owner_code', outRow.owner_code)
+            .eq('product_code', outRow.product_code)
+            .limit(1)
+
+          if (dspErr) {
+            return msgEl.innerHTML = msg('校验 DSP 前置单据失败，请重试', false)
+          }
+          
+          // 3. 如果都没有，拦截并提示
+          if (!existDspIn || existDspIn.length === 0) {
+            return msgEl.innerHTML = msg(`提交失败：出库单第 ${validOut.indexOf(outRow) + 1} 行，商品「${outRow.product_code}」没有对应的 DSP入库 记录。请先提交同货主、同商品的 DSP入库单。`, false)
+          }
+        }
+      }
+      // ===== ★ DSP核验结束 =====
 
       let vendorAuthId
       if (isLogistics) {

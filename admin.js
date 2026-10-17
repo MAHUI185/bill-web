@@ -213,7 +213,7 @@ async function renderBills(v) {
     <div class="card" style="box-shadow:none;padding:0;">
       <h2>单据查询</h2>
       <div class="row">
-        <input id="b-search" placeholder="来源单号/商品代码" />
+        <input id="b-search" placeholder="输入厂商名称或厂编查询" />
         <select id="b-wh"><option value="">全部仓库</option>${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
         <select id="b-exported"><option value="">全部</option><option value="0">未导出</option><option value="1">已导出</option></select>
         <button id="btn-b-search" class="secondary">查询</button>
@@ -346,7 +346,7 @@ async function renderBills(v) {
     const kw = document.getElementById('b-search').value.trim()
     const wh = document.getElementById('b-wh').value
     const ex = document.getElementById('b-exported').value
-    if (kw) q = q.or(`source_no.ilike.%${kw}%,product_code.ilike.%${kw}%`)
+    if (kw) q = q.or(`vendor_code.ilike.%${kw}%,vendor_name.ilike.%${kw}%`)
     if (wh) q = q.eq('warehouse_code', wh)
     if (ex === '0') q = q.eq('exported', false)
     if (ex === '1') q = q.eq('exported', true)
