@@ -330,30 +330,197 @@ async function renderVendors(v) {
       <div id="batch-preview" style="margin-top:12px;"></div>
     </div>
     <div class="card" style="box-shadow:none;padding:0;">
-      <h2>厂商列表（${vps.length}）</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="margin:0;">厂商列表（<span id="v-total-count">${vps.length}</span>）</h2>
+        <div style="display:flex; align-items:center; gap:8px; width:300px;">
+          <input id="v-search" placeholder="输入厂编/名称/联系人/手机/仓库搜索" style="margin:0;" />
+          <button class="secondary small" id="btn-v-clear" style="display:none; padding:8px;">清空</button>
+        </div>
+      </div>
       <div class="scroll">
         <table>
           <tr><th>厂编</th><th>名称</th><th>联系人</th><th>手机</th><th>授权仓库</th><th>状态</th><th>操作</th></tr>
-          <tbody>${vps.map(p => `<tr>
-            <td>${p.vendor_code||''}</td>
-            <td>${p.vendor_name||''}</td>
-            <td>${p.contact_name||''}</td>
-            <td>${p.contact_phone||''}</td>
-            <td>${(vwMap[p.id]||[]).join(', ')||'-'}</td>
-            <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">禁用</span>'}</td>
-            <td>
-              <button class="small secondary" data-act="edit" data-id="${p.id}">修改</button>
-              <button class="small secondary" data-act="toggle" data-id="${p.id}" data-enable="${p.status===1?'0':'1'}">${p.status===1?'禁用':'启用'}</button>
-              <button class="small secondary" data-act="grant" data-id="${p.id}" data-code="${p.vendor_code}">授权</button>
-              <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
-              ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
-            </td>
-          </tr>`).join('') || '<tr><td colspan="7">无数据</td></tr>'}</tbody>
+          <tbody id="v-table-body"></tbody>
         </table>
       </div>
     </div>
     <div id="vendor-edit-panel"></div>`
 
+  // 渲染表格函数
+  const renderVendorTable = (keyword = '') => {
+    const kw = keyword.toLowerCase().trim()
+    const filtered = vps.filter(p => {
+      const whsStr = (vwMap[p.id] || []).join(', ').toLowerCase()
+      const matchCode = (p.vendor_code || '').toLowerCase().includes(kw)
+      const matchName = (p.vendor_name || '').toLowerCase().includes(kw)
+      const matchContact = (p.contact_name || '').toLowerCase().includes(kw)
+      const matchPhone = (p.contact_phone || '').includes(kw)
+      const matchWh = whsStr.includes(kw)
+      return matchCode || matchName || matchContact || matchPhone || matchWh
+    })
+
+    document.getElementById('v-total-count').innerText = kw ? `${filtered.length}/${vps.length}` : vps.length
+
+    const tbody = document.getElementById('v-table-body')
+    tbody.innerHTML = filtered.map(p => `<tr>
+      <td>${p.vendor_code||''}</td>
+      <td>${p.vendor_name||''}</td>
+      <td>${p.contact_name||''}</td>
+      <td>${p.contact_phone||''}</td>
+      <td>${(vwMap[p.id]||[]).join(', ')||'-'}</td>
+      <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">禁用</span>'}</td>
+      <td>
+        <button class="small secondary" data-act="edit" data-id="${p.id}">修改</button>
+        <button class="small secondary" data-act="toggle" data-id="${p.id}" data-enable="${p.status===1?'0':'1'}">${p.status===1?'禁用':'启用'}</button>
+        <button class="small secondary" data-act="grant" data-id="${p.id}" data-code="${p.vendor_code}">授权</button>
+        <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
+        ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
+      </td>
+    </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:#999;">暂无匹配数据</td></tr>'
+
+    bindTableActions()
+  }
+
+  // 绑定表格按钮事件
+  const bindTableActions = () => {
+    v.querySelectorAll('button[data-act]').forEach(b => {
+      b.onclick = async () => {
+        const id = b.dataset.id
+        const act = b.dataset.act
+
+        if (act === 'edit') {
+          const p = vps.find(x => x.id === id)
+          if (!p) return
+          const panel = document.getElementById('vendor-edit-panel')
+          panel.innerHTML = `
+            <div class="card" style="border:2px solid #1677ff;">
+              <h2>修改厂商 · ${p.vendor_code}</h2>
+              <div id="ve-msg"></div>
+              <div class="row">
+                <div><label>厂商名称 *</label><input id="ve-name" value="${p.vendor_name||''}" /></div>
+                <div><label>联系人 *</label><input id="ve-contact" value="${p.contact_name||''}" /></div>
+                <div><label>手机号 *</label><input id="ve-phone" value="${p.contact_phone||''}" /></div>
+              </div>
+              <button id="btn-ve-save">保存</button>
+              <button class="secondary" id="btn-ve-cancel">取消</button>
+            </div>`
+          document.getElementById('btn-ve-cancel').onclick = () => panel.innerHTML = ''
+          document.getElementById('btn-ve-save').onclick = async () => {
+            const msgEl = document.getElementById('ve-msg')
+            const name = document.getElementById('ve-name').value.trim()
+            const contact = document.getElementById('ve-contact').value.trim()
+            const phone = document.getElementById('ve-phone').value.trim()
+            if (!name || !contact || !phone) {
+              msgEl.innerHTML = ctx.msg('厂商名称、联系人、手机号为必填', false); return
+            }
+            const { error } = await ctx.supabase.from('vendor_profile')
+              .update({ vendor_name: name, contact_name: contact, contact_phone: phone })
+              .eq('id', id)
+            if (error) {
+              msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
+            }
+            alert('已保存')
+            renderTab('vendors')
+          }
+          return
+        }
+
+        if (act === 'toggle') {
+          const enable = b.dataset.enable === '1'
+          const action = enable ? '启用' : '禁用'
+          if (!confirm(`确定${action}该厂商？`)) return
+          const { data: { session } } = await ctx.supabase.auth.getSession()
+          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ user_id: id, account_type: 'vendor', enable })
+          })
+          const json = await res.json()
+          alert(res.ok ? `已${action}` : `${action}失败：` + ctx.translateError(json.error || '未知错误'))
+          if (res.ok) renderTab('vendors')
+          return
+        }
+
+        if (act === 'grant') {
+          const code = b.dataset.code
+          const cur = (vwMap[id]||[]).join(',')
+          const input = prompt(`输入授权仓库代码（逗号分隔），当前：${cur}`, cur)
+          if (input === null) return
+          const codes = input.split(',').map(s => s.trim()).filter(Boolean)
+          const { data: { session } } = await ctx.supabase.auth.getSession()
+          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-warehouse`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ vendor_id: id, vendor_code: code, warehouse_codes: codes })
+          })
+          alert(res.ok ? '授权成功' : '授权失败，请重试')
+          if (res.ok) renderTab('vendors')
+          return
+        }
+
+        if (act === 'reset') {
+          const pwd = prompt('输入新密码（至少 6 位）')
+          if (!pwd || pwd.length < 6) return alert('密码太短')
+          const { data: { session } } = await ctx.supabase.auth.getSession()
+          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/reset-password`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ user_id: id, new_password: pwd })
+          })
+          alert(res.ok ? '重置成功' : '重置失败，请重试')
+          return
+        }
+
+        if (act === 'del') {
+          const code = b.dataset.code
+          if (!confirm(`确定删除厂商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 厂商档案\n- 仓库授权\n\n此操作不可撤销！`)) return
+
+          const { data: { session } } = await ctx.supabase.auth.getSession()
+          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-vendor`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ vendor_id: id })
+          })
+          const json = await res.json()
+          alert(res.ok ? '已删除' : '删除失败：' + ctx.translateError(json.error || '未知错误'))
+          if (res.ok) renderTab('vendors')
+          return
+        }
+      }
+    })
+  }
+
+  // 绑定搜索事件
+  const searchInput = document.getElementById('v-search')
+  const clearBtn = document.getElementById('btn-v-clear')
+  
+  searchInput.oninput = (e) => {
+    const val = e.target.value
+    clearBtn.style.display = val ? 'block' : 'none'
+    renderVendorTable(val)
+  }
+
+  clearBtn.onclick = () => {
+    searchInput.value = ''
+    clearBtn.style.display = 'none'
+    renderVendorTable('')
+  }
+
+  renderVendorTable()
+
+  // 创建厂商逻辑
   document.getElementById('btn-create-vendor').onclick = async () => {
     const whSel = document.getElementById('v-wh')
     const whsSel = Array.from(whSel.selectedOptions).map(o => o.value)
@@ -381,7 +548,7 @@ async function renderVendors(v) {
     if (res.ok) renderTab('vendors')
   }
 
-  // ★ 批量导入厂商
+  // 批量导入厂商逻辑 (同原逻辑)
   const btnBatchImport = document.getElementById('btn-batch-import')
   if (btnBatchImport) btnBatchImport.onclick = async () => {
     const file = document.getElementById('batch-file').files[0]
@@ -514,124 +681,10 @@ async function renderVendors(v) {
       msgEl.innerHTML = ctx.msg('解析失败：' + e.message, false)
     }
   }
-
-  v.querySelectorAll('button[data-act]').forEach(b => {
-    b.onclick = async () => {
-      const id = b.dataset.id
-      const act = b.dataset.act
-
-      if (act === 'edit') {
-        const p = vps.find(x => x.id === id)
-        if (!p) return
-        const panel = document.getElementById('vendor-edit-panel')
-        panel.innerHTML = `
-          <div class="card" style="border:2px solid #1677ff;">
-            <h2>修改厂商 · ${p.vendor_code}</h2>
-            <div id="ve-msg"></div>
-            <div class="row">
-              <div><label>厂商名称 *</label><input id="ve-name" value="${p.vendor_name||''}" /></div>
-              <div><label>联系人 *</label><input id="ve-contact" value="${p.contact_name||''}" /></div>
-              <div><label>手机号 *</label><input id="ve-phone" value="${p.contact_phone||''}" /></div>
-            </div>
-            <button id="btn-ve-save">保存</button>
-            <button class="secondary" id="btn-ve-cancel">取消</button>
-          </div>`
-        document.getElementById('btn-ve-cancel').onclick = () => panel.innerHTML = ''
-        document.getElementById('btn-ve-save').onclick = async () => {
-          const msgEl = document.getElementById('ve-msg')
-          const name = document.getElementById('ve-name').value.trim()
-          const contact = document.getElementById('ve-contact').value.trim()
-          const phone = document.getElementById('ve-phone').value.trim()
-          if (!name || !contact || !phone) {
-            msgEl.innerHTML = ctx.msg('厂商名称、联系人、手机号为必填', false); return
-          }
-          const { error } = await ctx.supabase.from('vendor_profile')
-            .update({ vendor_name: name, contact_name: contact, contact_phone: phone })
-            .eq('id', id)
-          if (error) {
-            msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
-          }
-          alert('已保存')
-          renderTab('vendors')
-        }
-        return
-      }
-
-      if (act === 'toggle') {
-        const enable = b.dataset.enable === '1'
-        const action = enable ? '启用' : '禁用'
-        if (!confirm(`确定${action}该厂商？`)) return
-        const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify({ user_id: id, account_type: 'vendor', enable })
-        })
-        const json = await res.json()
-        alert(res.ok ? `已${action}` : `${action}失败：` + ctx.translateError(json.error || '未知错误'))
-        if (res.ok) renderTab('vendors')
-        return
-      }
-
-      if (act === 'grant') {
-        const code = b.dataset.code
-        const cur = (vwMap[id]||[]).join(',')
-        const input = prompt(`输入授权仓库代码（逗号分隔），当前：${cur}`, cur)
-        if (input === null) return
-        const codes = input.split(',').map(s => s.trim()).filter(Boolean)
-        const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-warehouse`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify({ vendor_id: id, vendor_code: code, warehouse_codes: codes })
-        })
-        alert(res.ok ? '授权成功' : '授权失败，请重试')
-        if (res.ok) renderTab('vendors')
-      }
-
-      if (act === 'reset') {
-        const pwd = prompt('输入新密码（至少 6 位）')
-        if (!pwd || pwd.length < 6) return alert('密码太短')
-        const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/reset-password`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify({ user_id: id, new_password: pwd })
-        })
-        alert(res.ok ? '重置成功' : '重置失败，请重试')
-      }
-
-      if (act === 'del') {
-        const code = b.dataset.code
-        if (!confirm(`确定删除厂商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 厂商档案\n- 仓库授权\n\n此操作不可撤销！`)) return
-
-        const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-vendor`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify({ vendor_id: id })
-        })
-        const json = await res.json()
-        alert(res.ok ? '已删除' : '删除失败：' + ctx.translateError(json.error || '未知错误'))
-        if (res.ok) renderTab('vendors')
-      }
-    }
-  })
 }
 
 // ================= 3.5 物流商管理 =================
+// (逻辑保持原样，不涉及此次修改)
 function buildVendorPicker(rootId, allVendors, initialSelected = []) {
   const root = document.getElementById(rootId)
   if (!root) return { getSelected: () => [] }
@@ -902,6 +955,7 @@ async function renderLogistics(v) {
 }
 
 // ================= 4. 管理员管理 =================
+// (逻辑保持原样，不涉及此次修改)
 async function renderAdmins(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data: admins } = await ctx.supabase.from('admin_users').select('*').order('created_at', { ascending: false })
@@ -1095,6 +1149,7 @@ async function renderAdmins(v) {
 }
 
 // ================= 5. 基础数据 =================
+// (此部分保持原样)
 async function renderBase(v) {
   v.innerHTML = `
     <div class="tabs" id="base-tabs">
@@ -1436,6 +1491,7 @@ async function renderMap(v) {
 }
 
 // ================= 6. 提报规则 =================
+// (此部分保持原样)
 async function renderRules(v) {
   v.innerHTML = `
     <div class="tabs" id="rule-tabs">
@@ -1571,6 +1627,7 @@ async function renderBypass(v) {
 }
 
 // ================= 7. 导出批次 =================
+// (此部分保持原样)
 async function renderBatches(v) {
   const { data } = await ctx.supabase.from('export_batch_detail').select('*').order('id', { ascending: false }).limit(100)
   v.innerHTML = `
@@ -1585,6 +1642,7 @@ async function renderBatches(v) {
 }
 
 // ================= 8. 操作日志 =================
+// (此部分保持原样)
 async function renderLogs(v) {
   const { data: ops } = await ctx.supabase.from('operation_log')
     .select('*').order('id', { ascending: false }).limit(200)
@@ -1661,6 +1719,7 @@ async function renderLogs(v) {
 }
 
 // ================= 9. 系统配置 =================
+// (此部分保持原样)
 async function renderSys(v) {
   const { data: cfgs } = await ctx.supabase.from('system_config').select('*').order('config_key')
   const { data: vers } = await ctx.supabase.from('version_history').select('*').order('id', { ascending: false }).limit(50)

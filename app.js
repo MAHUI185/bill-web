@@ -365,7 +365,6 @@ function addOneDay(d) {
   return dt.toISOString().slice(0, 10)
 }
 
-// ★ 新增：加 N 天
 function addDays(d, n) {
   if (!d) return null
   const dt = new Date(d + 'T00:00:00Z')
@@ -373,7 +372,6 @@ function addDays(d, n) {
   return dt.toISOString().slice(0, 10)
 }
 
-// ★ 新增：北京时间当天 yyyy-MM-dd
 function todayBj() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
   const y = now.getFullYear()
@@ -387,6 +385,8 @@ function getModeByType(billType) {
   if (billType === 'DSP入库') return 'LIKECROSS'
   if (billType === 'VMI出库') return 'LIKECROSS'
   if (billType === 'DSP出库') return 'LIKECROSS'
+  if (billType === '济转西RT') return 'LIKECROSS' // 沿用原有逻辑，具体视业务而定
+  if (billType === '济转西DSP') return 'LIKECROSS'
   return 'UNIFY'
 }
 
@@ -406,6 +406,13 @@ function calcOutFields(billType, supplierInput, defaultStore) {
   }
   if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
+  }
+  // 新增逻辑
+  if (billType === '济转西RT') {
+    return { owner_code: '8888', store_code: '8205RT' }
+  }
+  if (billType === '济转西DSP') {
+    return { owner_code: '8888', store_code: '8205DSP' }
   }
   return { owner_code: '', store_code: '' }
 }
@@ -545,7 +552,6 @@ async function renderFill(view) {
   let inRows = [newInRowForVendor(myVendorCode)]
   let outRows = [newOutRowForVendor(myVendorCode)]
 
-  // ★ 入库行：到货日期 = 当天 + 1
   function newInRowForVendor(vc) {
     const f = calcInFields('VMI入库', vc)
     return {
@@ -553,17 +559,16 @@ async function renderFill(view) {
       vendor_code: f.vendor_code, owner_code: f.owner_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
       product_code: '', spec: '', quantity: '',
-      arrival_date: addDays(todayBj(), 1),   // ★ 当天+1
+      arrival_date: addDays(todayBj(), 1),
       product_name: ''
     }
   }
-  // ★ 出库行：配货日期 = 当天 + 2
   function newOutRowForVendor(vc) {
     const f = calcOutFields('VMI出库', vc, defaultStoreCode)
     return {
       bill_type: 'VMI出库', owner_code: f.owner_code, store_code: f.store_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
-      pick_date: addDays(todayBj(), 2),   // ★ 当天+2
+      pick_date: addDays(todayBj(), 2),
       product_code: '', spec: '', quantity: '',
       product_name: ''
     }
@@ -928,11 +933,13 @@ async function renderFill(view) {
         <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
           <option ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
           <option ${r.bill_type==='DSP出库'?'selected':''}>DSP出库</option>
+          <option ${r.bill_type==='济转西RT'?'selected':''}>济转西RT</option>
+          <option ${r.bill_type==='济转西DSP'?'selected':''}>济转西DSP</option>
         </select>
       </td>
       <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
       <td>
-        ${r.bill_type === 'VMI出库'
+        ${(r.bill_type === 'VMI出库' || r.bill_type === '济转西RT' || r.bill_type === '济转西DSP')
           ? `<input data-i="${i}" data-f="store_code" value="${r.store_code}" readonly style="width:120px;margin:0;background:#f5f5f5;" />`
           : `<select data-i="${i}" data-f="store_code" style="width:140px;margin:0;">
                <option value="">请选择门店</option>
@@ -1033,6 +1040,7 @@ async function renderFill(view) {
 }
 
 // ================= 商品资料 =================
+// (此部分保持原样)
 async function renderProducts(view) {
   if (isAdmin) {
     view.innerHTML = `<div class="card"><h2>商品资料</h2><p style="color:#999;">管理员请到管理后台的商品主数据里维护。</p></div>`
@@ -1233,6 +1241,7 @@ async function renderProducts(view) {
 }
 
 // ================= 我的单据 =================
+// (此部分保持原样)
 async function renderMy(view) {
   let q = supabase.from('bill_order')
     .select('*')
