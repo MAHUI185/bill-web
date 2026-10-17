@@ -666,12 +666,12 @@ async function renderFill(view) {
         <div id="fill-msg"></div>
 
         <h3 style="margin:16px 0 8px;">入库单</h3>
-        <div style="overflow:auto;">
-          <table>
+        <div style="overflow-x:auto;">
+          <table style="white-space:nowrap;">
             <thead>
               <tr>
-                <th>单据类型</th><th>供应商代码</th><th>货主代码</th>
-                <th>仓位</th><th>商品代码</th><th>包装规格</th>
+                <th>类型</th><th>供应商代码</th><th>货主代码</th>
+                <th>仓位</th><th>商品代码</th><th>规格</th>
                 <th>数量</th><th>到货日期</th><th>操作</th>
               </tr>
             </thead>
@@ -682,13 +682,13 @@ async function renderFill(view) {
 
         <h3 style="margin:24px 0 8px;">出库单</h3>
         <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：提交「DSP出库」前，必须已经提交过同货主、同商品的「DSP入库」单据。</p>
-        <div style="overflow:auto;">
-          <table>
+        <div style="overflow-x:auto;">
+          <table style="white-space:nowrap;">
             <thead>
               <tr>
-                <th>配单类型</th><th>采购单号(来源)</th><th>货主代码</th><th>门店代码</th>
+                <th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th>
                 <th>仓位</th><th>配货日期</th>
-                <th>商品代码</th><th>包装规格</th><th>数量</th><th>操作</th>
+                <th>商品代码</th><th>规格</th><th>数量</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="out-body"></tbody>
@@ -806,7 +806,6 @@ async function renderFill(view) {
       const dspOutRows = validOut.filter(r => r.bill_type === 'DSP出库' || r.bill_type === 'DSP出货')
       
       if (dspOutRows.length > 0) {
-        // 获取当前填写的入库行里是否有同货主、同商品的DSP入库
         const currentInDspKeys = new Set()
         validIn.forEach(r => {
           if (r.bill_type === 'DSP入库') {
@@ -816,11 +815,8 @@ async function renderFill(view) {
 
         for (const outRow of dspOutRows) {
           const key = `${outRow.owner_code}||${outRow.product_code}`
-          
-          // 1. 如果本次同一批次里的入库单有，直接放行
           if (currentInDspKeys.has(key)) continue
 
-          // 2. 如果本批次没有，去数据库查历史是否已有 DSP入库
           const { data: existDspIn, error: dspErr } = await supabase.from('bill_order')
             .select('id')
             .eq('vendor_code', myVendorCode)
@@ -833,7 +829,6 @@ async function renderFill(view) {
             return msgEl.innerHTML = msg('校验 DSP 前置单据失败，请重试', false)
           }
           
-          // 3. 如果都没有，拦截并提示
           if (!existDspIn || existDspIn.length === 0) {
             return msgEl.innerHTML = msg(`提交失败：出库单第 ${validOut.indexOf(outRow) + 1} 行，商品「${outRow.product_code}」没有对应的 DSP入库 记录。请先提交同货主、同商品的 DSP入库单。`, false)
           }
@@ -928,23 +923,23 @@ async function renderFill(view) {
       if (autoSource) r.source_no = autoSource
       return `<tr>
       <td>
-        <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
+        <select data-i="${i}" data-f="bill_type" style="width:100px;margin:0;padding:4px;">
           <option ${r.bill_type==='VMI入库'?'selected':''}>VMI入库</option>
           <option ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
+      <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" readonly style="width:80px;margin:0;padding:4px;background:#f5f5f5;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:80px;margin:0;padding:4px;background:#f5f5f5;" /></td>
       <td>
-        <select data-i="${i}" data-f="location_code" style="width:80px;margin:0;">
+        <select data-i="${i}" data-f="location_code" style="width:70px;margin:0;padding:4px;">
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
-      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
-      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
-      <td><button class="small danger" data-del-in="${i}">删除</button></td>
+      <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:110px;margin:0;padding:4px;" placeholder="输入或选择" /></td>
+      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:80px;margin:0;padding:4px;" /></td>
+      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:60px;margin:0;padding:4px;" /></td>
+      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" readonly style="width:110px;margin:0;padding:4px;background:#f5f5f5;" /></td>
+      <td><button class="small danger" data-del-in="${i}" style="padding:4px 8px;">删除</button></td>
     </tr>`
     }).join('')
 
@@ -1011,33 +1006,33 @@ async function renderFill(view) {
     if (!tbody) return
     tbody.innerHTML = outRows.map((r, i) => `<tr>
       <td>
-        <select data-i="${i}" data-f="bill_type" style="width:110px;margin:0;">
+        <select data-i="${i}" data-f="bill_type" style="width:100px;margin:0;padding:4px;">
           <option ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
           <option ${r.bill_type==='DSP出库'?'selected':''}>DSP出库</option>
           <option ${r.bill_type==='济转西RT'?'selected':''}>济转西RT</option>
           <option ${r.bill_type==='济转西DSP'?'selected':''}>济转西DSP</option>
         </select>
       </td>
-      <td><input data-i="${i}" data-f="source_no" value="${r.source_no || ''}" placeholder="采购单号" style="width:140px;margin:0;" /></td>
-      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:100px;margin:0;background:#f5f5f5;" /></td>
+      <td><input data-i="${i}" data-f="source_no" value="${r.source_no || ''}" placeholder="采购单号" style="width:100px;margin:0;padding:4px;" /></td>
+      <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:80px;margin:0;padding:4px;background:#f5f5f5;" /></td>
       <td>
         ${(r.bill_type === 'VMI出库' || r.bill_type === '济转西RT' || r.bill_type === '济转西DSP')
-          ? `<input data-i="${i}" data-f="store_code" value="${r.store_code}" readonly style="width:120px;margin:0;background:#f5f5f5;" />`
-          : `<select data-i="${i}" data-f="store_code" style="width:140px;margin:0;">
+          ? `<input data-i="${i}" data-f="store_code" value="${r.store_code}" readonly style="width:90px;margin:0;padding:4px;background:#f5f5f5;" />`
+          : `<select data-i="${i}" data-f="store_code" style="width:110px;margin:0;padding:4px;">
                <option value="">请选择门店</option>
                ${myStores.map(s => `<option value="${s.store_code}" ${r.store_code===s.store_code?'selected':''}>${s.store_code}${s.store_name?' - '+s.store_name:''}</option>`).join('')}
              </select>`}
       </td>
       <td>
-        <select data-i="${i}" data-f="location_code" style="width:80px;margin:0;">
+        <select data-i="${i}" data-f="location_code" style="width:70px;margin:0;padding:4px;">
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" readonly style="width:140px;margin:0;background:#f5f5f5;" /></td>
-      <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:140px;margin:0;" placeholder="输入或选择" /></td>
-      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:100px;margin:0;" /></td>
-      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:80px;margin:0;" /></td>
-      <td><button class="small danger" data-del-out="${i}">删除</button></td>
+      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" readonly style="width:110px;margin:0;padding:4px;background:#f5f5f5;" /></td>
+      <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:110px;margin:0;padding:4px;" placeholder="输入或选择" /></td>
+      <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:80px;margin:0;padding:4px;" /></td>
+      <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:60px;margin:0;padding:4px;" /></td>
+      <td><button class="small danger" data-del-out="${i}" style="padding:4px 8px;">删除</button></td>
     </tr>`).join('')
 
     tbody.querySelectorAll('input,select').forEach(el => {
@@ -1092,11 +1087,11 @@ async function renderFill(view) {
     const validIn = inRows.filter(r => r.product_code && r.quantity)
     const validOut = outRows.filter(r => r.product_code && r.quantity)
     box.innerHTML = `
-      <div style="margin-bottom:12px;">
+      <div style="margin-bottom:12px; overflow-x:auto;">
         <strong>入库 ${validIn.length} 条：</strong>
         ${validIn.length === 0 ? '<span style="color:#999;">无</span>' : `
-        <table style="margin-top:6px;">
-          <tr><th>单据类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th><th>到货日期</th></tr>
+        <table style="margin-top:6px; white-space:nowrap;">
+          <tr><th>类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th><th>到货日期</th></tr>
           ${validIn.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.vendor_code}</td><td>${r.owner_code}</td>
             <td>${r.location_code}</td><td>${r.product_code}</td><td>${r.product_name||''}</td><td>${r.spec}</td>
@@ -1104,11 +1099,11 @@ async function renderFill(view) {
           </tr>`).join('')}
         </table>`}
       </div>
-      <div>
+      <div style="overflow-x:auto;">
         <strong>出库 ${validOut.length} 条：</strong>
         ${validOut.length === 0 ? '<span style="color:#999;">无</span>' : `
-        <table style="margin-top:6px;">
-          <tr><th>配单类型</th><th>采购单号(来源)</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th></tr>
+        <table style="margin-top:6px; white-space:nowrap;">
+          <tr><th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th></tr>
           ${validOut.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.source_no || '-'}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
             <td>${r.location_code}</td><td>${r.pick_date || '-'}</td>
