@@ -1,9 +1,22 @@
 // admin.js — 管理后台
 
 let ctx = null
+let operatorName = '未知'
 
 export async function renderAdmin(view, context) {
   ctx = context
+
+  // 确定操作人姓名：管理员用 admin_users.name，厂商用 contact_name
+  if (context.currentRole) {
+    const { data: au } = await context.supabase.from('admin_users')
+      .select('name').eq('id', context.currentUser.id).maybeSingle()
+    operatorName = au?.name || context.currentProfile?.contact_name || '管理员'
+  } else {
+    operatorName = context.currentProfile?.contact_name
+      || context.currentProfile?.vendor_name || '未知'
+  }
+  ctx.operatorName = operatorName
+
   view.innerHTML = `
     <div class="card">
       <h2>管理后台</h2>
@@ -14,9 +27,7 @@ export async function renderAdmin(view, context) {
         <button data-t="logistics">物流商管理</button>
         <button data-t="admins">管理员管理</button>
         <button data-t="base">基础数据</button>
-        <button data-t="rules">提报规则</button>
-        <button data-t="batches">导出批次</button>
-        <button data-t="logs">操作日志</button>
+        <button data-t="logs">日志</button>
         <button data-t="sys">系统配置</button>
       </div>
       <div id="admin-view"></div>
@@ -41,17 +52,70 @@ async function renderTab(key) {
     if (key === 'logistics') return renderLogistics(v)
     if (key === 'admins') return renderAdmins(v)
     if (key === 'base') return renderBase(v)
-    if (key === 'rules') return renderRules(v)
-    if (key === 'batches') return renderBatches(v)
     if (key === 'logs') return renderLogs(v)
     if (key === 'sys') return renderSys(v)
   } catch (e) {
+    console.error(e)
     v.innerHTML = ctx.msg('加载失败，请刷新重试', false)
   }
 }
 
 function isSuper() {
   return ctx.currentRole === 'super_admin'
+}
+
+// ========== 日志辅助 ==========
+async function logOp(action, target, detail = {}) {
+  try {
+    await ctx.supabase.from('operation_log').insert({
+      operator_id: ctx.currentUser.id,
+      operator_name: ctx.operatorName,
+      action,
+      target,
+      detail
+    })
+  } catch (e) {
+    console.warn('写操作日志失败', e)
+  }
+}
+
+const ACTION_CN = {
+  create_vendor: '创建厂商',
+  batch_import_vendor: '批量导入厂商',
+  update_vendor: '修改厂商',
+  delete_vendor: '删除厂商',
+  toggle_vendor: '启用/禁用厂商',
+  grant_vendor_warehouse: '授权厂商仓库',
+  reset_vendor_pwd: '重置厂商密码',
+  create_logistics: '创建物流商',
+  delete_logistics: '删除物流商',
+  grant_logistics_vendors: '修改物流商负责厂商',
+  reset_logistics_pwd: '重置物流商密码',
+  create_admin: '创建管理员',
+  update_admin: '修改管理员',
+  delete_admin: '删除管理员',
+  toggle_admin: '启用/禁用管理员',
+  reset_admin_pwd: '重置管理员密码',
+  import_bills: '导入单据',
+  export_bills: '导出单据',
+  create_warehouse: '新增仓库',
+  delete_warehouse: '删除仓库',
+  create_location: '新增仓位',
+  delete_location: '删除仓位',
+  create_store: '新增门店',
+  delete_store: '删除门店',
+  create_product: '新增商品',
+  delete_product: '删除商品',
+  create_deadline: '新增提报时间段',
+  delete_deadline: '删除提报时间段',
+  create_holiday: '新增节假日',
+  delete_holiday: '删除节假日',
+  create_bypass: '新增强制放行',
+  delete_bypass: '删除强制放行',
+  save_cleanup_config: '修改清理配置',
+  save_system_config: '保存系统配置',
+  delete_system_config: '删除系统配置',
+  add_version: '新增版本记录'
 }
 
 // ================= 1. 提报进度 =================
@@ -71,7 +135,7 @@ async function renderProgress(v) {
       <table>
         <tr>
           <th>厂编</th><th>厂商名称</th><th>仓库</th><th>联系人</th><th>手机</th>
-          <th>今日登录</th><th>今日提报</th><th>今日条数</th><th>最后提报</th>
+          <th>登录状态</th><th>今日提报</th><th>今日条数</th><th>最后提报</th><th>最后活跃</th>
         </tr>
         <tbody id="p-body"></tbody>
       </table>
@@ -92,11 +156,18 @@ async function renderProgress(v) {
       <td>${r.warehouse_name || r.warehouse_code || ''}</td>
       <td>${r.contact_name || ''}</td>
       <td>${r.contact_phone || ''}</td>
-      <td>${r.logged_in_today ? '<span class="stat ok">已登录</span>' : '<span class="stat no">未登录</span>'}</td>
+      <td>${
+        r.login_status === '在线'
+          ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;">● 在线</span>'
+          : r.login_status === '今日已登录'
+            ? '<span class="stat ok">已登录</span>'
+            : '<span class="stat no">未登录</span>'
+      }</td>
       <td>${r.reported_today ? '<span class="stat ok">已提报</span>' : '<span class="stat no">未提报</span>'}</td>
       <td>${r.today_count || 0}</td>
       <td>${r.last_report_at ? new Date(r.last_report_at).toLocaleString() : '-'}</td>
-    </tr>`).join('') || '<tr><td colspan="9">无数据</td></tr>'
+      <td>${r.last_active_at ? new Date(r.last_active_at).toLocaleString() : '-'}</td>
+    </tr>`).join('') || '<tr><td colspan="10">无数据</td></tr>'
   }
   document.getElementById('p-search').oninput = render
   document.getElementById('p-status').onchange = render
@@ -151,6 +222,12 @@ async function renderBills(v) {
           <tbody id="b-body"></tbody>
         </table>
       </div>
+    </div>
+    <div class="card" style="box-shadow:none;padding:0;">
+      <details>
+        <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">导出批次（点击展开）</summary>
+        <div id="batch-body" style="margin-top:12px;">加载中...</div>
+      </details>
     </div>`
 
   document.getElementById('btn-show-rule').onclick = async () => {
@@ -202,7 +279,7 @@ async function renderBills(v) {
         body: JSON.stringify({
           import_type: importType,
           rows,
-          operator_name: ctx.currentProfile?.vendor_name || 'admin'
+          operator_name: ctx.operatorName
         })
       })
       const json = await res.json()
@@ -213,6 +290,9 @@ async function renderBills(v) {
             ${json.errors.map(e => `<div>${e}</div>`).join('')}</div>`
         }
         document.getElementById('import-msg').innerHTML = h
+        await logOp('import_bills', '单据导入 ' + importType, {
+          success: json.success_count, failed: json.fail_count
+        })
       } else {
         document.getElementById('import-msg').innerHTML = ctx.msg(
           json.error || `导入失败，请检查文件格式`, false)
@@ -223,6 +303,9 @@ async function renderBills(v) {
   }
 
   document.getElementById('btn-export').onclick = async () => {
+    const warehouse_code = document.getElementById('exp-wh').value
+    const start_date = document.getElementById('exp-start').value
+    const end_date = document.getElementById('exp-end').value
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/export-bills`, {
       method: 'POST',
@@ -231,9 +314,7 @@ async function renderBills(v) {
         'Authorization': `Bearer ${session.access_token}`
       },
       body: JSON.stringify({
-        warehouse_code: document.getElementById('exp-wh').value,
-        start_date: document.getElementById('exp-start').value,
-        end_date: document.getElementById('exp-end').value,
+        warehouse_code, start_date, end_date,
         include_exported: document.getElementById('exp-include')?.checked || false
       })
     })
@@ -254,6 +335,7 @@ async function renderBills(v) {
     a.download = `export_${Date.now()}.xlsx`
     a.click()
     document.getElementById('export-msg').innerHTML = ctx.msg('导出成功', true)
+    await logOp('export_bills', '导出 ' + warehouse_code, { start_date, end_date })
   }
 
   const search = async () => {
@@ -276,8 +358,28 @@ async function renderBills(v) {
   }
   document.getElementById('btn-b-search').onclick = search
   search()
-}
 
+  // 加载导出批次
+  ;(async () => {
+    const { data: batches } = await ctx.supabase
+      .from('export_batch_detail').select('*')
+      .order('id', { ascending: false }).limit(100)
+    const el = document.getElementById('batch-body')
+    if (!el) return
+    el.innerHTML = `
+      <div class="scroll">
+        <table><tr><th>批次号</th><th>仓库</th><th>开始</th><th>结束</th><th>类型</th><th>条数</th><th>操作人</th><th>时间</th></tr>
+          <tbody>${(batches||[]).map(r=>`<tr>
+            <td>${r.batch_no}</td><td>${r.warehouse_code||''}</td>
+            <td>${r.start_date||''}</td><td>${r.end_date||''}</td>
+            <td>${r.bill_type||''}</td>
+            <td>${r.bill_count_snapshot ?? r.count ?? 0}（实际 ${r.actual_count||0}）</td>
+            <td>${r.operator||''}</td>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+          </tr>`).join('') || '<tr><td colspan="8">无数据</td></tr>'}</tbody></table>
+      </div>`
+  })()
+}
 // ================= 3. 厂商管理 =================
 async function renderVendors(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
@@ -346,7 +448,6 @@ async function renderVendors(v) {
     </div>
     <div id="vendor-edit-panel"></div>`
 
-  // 渲染表格函数
   const renderVendorTable = (keyword = '') => {
     const kw = keyword.toLowerCase().trim()
     const filtered = vps.filter(p => {
@@ -373,7 +474,7 @@ async function renderVendors(v) {
         <button class="small secondary" data-act="edit" data-id="${p.id}">修改</button>
         <button class="small secondary" data-act="toggle" data-id="${p.id}" data-enable="${p.status===1?'0':'1'}">${p.status===1?'禁用':'启用'}</button>
         <button class="small secondary" data-act="grant" data-id="${p.id}" data-code="${p.vendor_code}">授权</button>
-        <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
+        <button class="small secondary" data-act="reset" data-id="${p.id}" data-code="${p.vendor_code}">重置密码</button>
         ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
       </td>
     </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:#999;">暂无匹配数据</td></tr>'
@@ -381,7 +482,6 @@ async function renderVendors(v) {
     bindTableActions()
   }
 
-  // 绑定表格按钮事件
   const bindTableActions = () => {
     v.querySelectorAll('button[data-act]').forEach(b => {
       b.onclick = async () => {
@@ -419,6 +519,9 @@ async function renderVendors(v) {
             if (error) {
               msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
             }
+            await logOp('update_vendor', '厂商 ' + p.vendor_code, {
+              fields: ['vendor_name','contact_name','contact_phone']
+            })
             alert('已保存')
             renderTab('vendors')
           }
@@ -428,6 +531,7 @@ async function renderVendors(v) {
         if (act === 'toggle') {
           const enable = b.dataset.enable === '1'
           const action = enable ? '启用' : '禁用'
+          const p = vps.find(x => x.id === id)
           if (!confirm(`确定${action}该厂商？`)) return
           const { data: { session } } = await ctx.supabase.auth.getSession()
           const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
@@ -439,8 +543,13 @@ async function renderVendors(v) {
             body: JSON.stringify({ user_id: id, account_type: 'vendor', enable })
           })
           const json = await res.json()
-          alert(res.ok ? `已${action}` : `${action}失败：` + ctx.translateError(json.error || '未知错误'))
-          if (res.ok) renderTab('vendors')
+          if (res.ok) {
+            await logOp('toggle_vendor', '厂商 ' + (p?.vendor_code || id), { enable })
+            alert(`已${action}`)
+            renderTab('vendors')
+          } else {
+            alert(`${action}失败：` + ctx.translateError(json.error || '未知错误'))
+          }
           return
         }
 
@@ -459,12 +568,18 @@ async function renderVendors(v) {
             },
             body: JSON.stringify({ vendor_id: id, vendor_code: code, warehouse_codes: codes })
           })
-          alert(res.ok ? '授权成功' : '授权失败，请重试')
-          if (res.ok) renderTab('vendors')
+          if (res.ok) {
+            await logOp('grant_vendor_warehouse', '厂商 ' + code, { warehouse_codes: codes })
+            alert('授权成功')
+            renderTab('vendors')
+          } else {
+            alert('授权失败，请重试')
+          }
           return
         }
 
         if (act === 'reset') {
+          const p = vps.find(x => x.id === id)
           const pwd = prompt('输入新密码（至少 6 位）')
           if (!pwd || pwd.length < 6) return alert('密码太短')
           const { data: { session } } = await ctx.supabase.auth.getSession()
@@ -476,7 +591,12 @@ async function renderVendors(v) {
             },
             body: JSON.stringify({ user_id: id, new_password: pwd })
           })
-          alert(res.ok ? '重置成功' : '重置失败，请重试')
+          if (res.ok) {
+            await logOp('reset_vendor_pwd', '厂商 ' + (p?.vendor_code || id))
+            alert('重置成功')
+          } else {
+            alert('重置失败，请重试')
+          }
           return
         }
 
@@ -494,37 +614,46 @@ async function renderVendors(v) {
             body: JSON.stringify({ vendor_id: id })
           })
           const json = await res.json()
-          alert(res.ok ? '已删除' : '删除失败：' + ctx.translateError(json.error || '未知错误'))
-          if (res.ok) renderTab('vendors')
+          if (res.ok) {
+            await logOp('delete_vendor', '厂商 ' + code)
+            alert('已删除')
+            renderTab('vendors')
+          } else {
+            alert('删除失败：' + ctx.translateError(json.error || '未知错误'))
+          }
           return
         }
       }
     })
   }
 
-  // 绑定搜索事件
   const searchInput = document.getElementById('v-search')
   const clearBtn = document.getElementById('btn-v-clear')
-  
   searchInput.oninput = (e) => {
     const val = e.target.value
     clearBtn.style.display = val ? 'block' : 'none'
     renderVendorTable(val)
   }
-
   clearBtn.onclick = () => {
     searchInput.value = ''
     clearBtn.style.display = 'none'
     renderVendorTable('')
   }
-
   renderVendorTable()
 
-  // 创建厂商逻辑
+  // 创建厂商
   document.getElementById('btn-create-vendor').onclick = async () => {
     const whSel = document.getElementById('v-wh')
     const whsSel = Array.from(whSel.selectedOptions).map(o => o.value)
     if (!whsSel.length) return document.getElementById('vendor-msg').innerHTML = ctx.msg('请选择授权仓库', false)
+    const code = document.getElementById('v-code').value.trim()
+    const name = document.getElementById('v-name').value.trim()
+    const contact = document.getElementById('v-contact').value.trim()
+    const phone = document.getElementById('v-phone').value.trim()
+    const pwd = document.getElementById('v-pwd').value
+    if (!code || !name || !contact || !phone || !pwd) {
+      return document.getElementById('vendor-msg').innerHTML = ctx.msg('厂编、名称、联系人、手机号、密码为必填', false)
+    }
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-vendor`, {
       method: 'POST',
@@ -533,22 +662,22 @@ async function renderVendors(v) {
         'Authorization': `Bearer ${session.access_token}`
       },
       body: JSON.stringify({
-        vendor_code: document.getElementById('v-code').value.trim(),
-        vendor_name: document.getElementById('v-name').value.trim(),
-        contact_name: document.getElementById('v-contact').value.trim(),
-        contact_phone: document.getElementById('v-phone').value.trim(),
-        password: document.getElementById('v-pwd').value,
-        warehouse_codes: whsSel
+        vendor_code: code, vendor_name: name,
+        contact_name: contact, contact_phone: phone,
+        password: pwd, warehouse_codes: whsSel
       })
     })
     const json = await res.json()
-    document.getElementById('vendor-msg').innerHTML = res.ok
-      ? ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
-      : ctx.msg(ctx.translateError(json.error), false)
-    if (res.ok) renderTab('vendors')
+    if (res.ok) {
+      document.getElementById('vendor-msg').innerHTML = ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
+      await logOp('create_vendor', '厂商 ' + code, { vendor_name: name, contact_name: contact })
+      renderTab('vendors')
+    } else {
+      document.getElementById('vendor-msg').innerHTML = ctx.msg(ctx.translateError(json.error), false)
+    }
   }
 
-  // 批量导入厂商逻辑 (同原逻辑)
+  // 批量导入厂商
   const btnBatchImport = document.getElementById('btn-batch-import')
   if (btnBatchImport) btnBatchImport.onclick = async () => {
     const file = document.getElementById('batch-file').files[0]
@@ -609,13 +738,11 @@ async function renderVendors(v) {
 
         const success = []
         const failed = []
-
         const { data: { session } } = await ctx.supabase.auth.getSession()
 
         for (let i = 0; i < list.length; i++) {
           const item = list[i]
           msgEl.innerHTML = ctx.msg(`导入中（${i+1} / ${list.length}）：${item.vendor_code} ${item.vendor_name}...`, true)
-
           try {
             const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-vendor`, {
               method: 'POST',
@@ -632,18 +759,22 @@ async function renderVendors(v) {
                 warehouse_codes: ['2608']
               })
             })
-
             const json = await res.json()
-
-            if (res.ok && json.ok) {
-              success.push(item)
-            } else {
-              failed.push({ ...item, error: json.error || '未知错误' })
-            }
+            if (res.ok && json.ok) success.push(item)
+            else failed.push({ ...item, error: json.error || '未知错误' })
           } catch (e) {
             failed.push({ ...item, error: String(e) })
           }
         }
+
+        // 汇总一条日志
+        await logOp('batch_import_vendor', '批量导入厂商', {
+          total: list.length,
+          success: success.length,
+          failed: failed.length,
+          success_list: success.map(x => x.vendor_code),
+          failed_list: failed.map(x => ({ vendor_code: x.vendor_code, error: x.error }))
+        })
 
         let html = `
           <div class="msg ${failed.length === 0 ? 'ok' : 'err'}" style="margin-top:12px;">
@@ -652,7 +783,6 @@ async function renderVendors(v) {
             失败：${failed.length} 个
           </div>
         `
-
         if (failed.length > 0) {
           html += `
             <details style="margin-top:8px;">
@@ -670,12 +800,8 @@ async function renderVendors(v) {
             </details>
           `
         }
-
         msgEl.innerHTML = html
-
-        if (success.length > 0) {
-          setTimeout(() => renderTab('vendors'), 2000)
-        }
+        if (success.length > 0) setTimeout(() => renderTab('vendors'), 2000)
       }
     } catch (e) {
       msgEl.innerHTML = ctx.msg('解析失败：' + e.message, false)
@@ -684,7 +810,6 @@ async function renderVendors(v) {
 }
 
 // ================= 3.5 物流商管理 =================
-// (逻辑保持原样，不涉及此次修改)
 function buildVendorPicker(rootId, allVendors, initialSelected = []) {
   const root = document.getElementById(rootId)
   if (!root) return { getSelected: () => [] }
@@ -816,7 +941,7 @@ async function renderLogistics(v) {
             <td>${p.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">禁用</span>'}</td>
             <td>
               <button class="small secondary" data-act="manage-vendors" data-id="${p.id}" data-code="${p.vendor_code}">管理厂商</button>
-              <button class="small secondary" data-act="reset" data-id="${p.id}">重置密码</button>
+              <button class="small secondary" data-act="reset" data-id="${p.id}" data-code="${p.vendor_code}">重置密码</button>
               ${isSuper() ? `<button class="small danger" data-act="del" data-id="${p.id}" data-code="${p.vendor_code}">删除</button>` : ''}
             </td>
           </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody>
@@ -858,6 +983,7 @@ async function renderLogistics(v) {
     const json = await res.json()
     if (res.ok) {
       msgEl.innerHTML = ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
+      await logOp('create_logistics', '物流商 ' + code, { vendor_codes: codes })
       renderTab('logistics')
     } else {
       msgEl.innerHTML = ctx.msg(ctx.translateError(json.error || '创建失败'), false)
@@ -868,9 +994,9 @@ async function renderLogistics(v) {
     b.onclick = async () => {
       const id = b.dataset.id
       const act = b.dataset.act
+      const code = b.dataset.code
 
       if (act === 'manage-vendors') {
-        const code = b.dataset.code
         const modal = document.getElementById('modal-root')
         modal.innerHTML = `
           <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;">
@@ -893,7 +1019,6 @@ async function renderLogistics(v) {
 
         document.getElementById('btn-modal-save').onclick = async () => {
           const finalCodes = mvPicker.getSelected()
-
           const { data: { session } } = await ctx.supabase.auth.getSession()
           const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
             method: 'POST',
@@ -904,6 +1029,7 @@ async function renderLogistics(v) {
             body: JSON.stringify({ logistics_id: id, vendor_codes: finalCodes })
           })
           if (res.ok) {
+            await logOp('grant_logistics_vendors', '物流商 ' + code, { vendor_codes: finalCodes })
             modal.innerHTML = ''
             renderTab('logistics')
           } else {
@@ -928,12 +1054,16 @@ async function renderLogistics(v) {
           },
           body: JSON.stringify({ user_id: id, new_password: pwd })
         })
-        alert(res.ok ? '重置成功' : '重置失败，请重试')
+        if (res.ok) {
+          await logOp('reset_logistics_pwd', '物流商 ' + code)
+          alert('重置成功')
+        } else {
+          alert('重置失败，请重试')
+        }
         return
       }
 
       if (act === 'del') {
-        const code = b.dataset.code
         if (!confirm(`确定删除物流商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 物流商档案\n- 负责厂商关联\n\n此操作不可撤销！`)) return
 
         const { data: { session } } = await ctx.supabase.auth.getSession()
@@ -946,8 +1076,13 @@ async function renderLogistics(v) {
           body: JSON.stringify({ logistics_id: id })
         })
         const json = await res.json()
-        alert(res.ok ? '已删除' : '删除失败：' + ctx.translateError(json.error || '未知错误'))
-        if (res.ok) renderTab('logistics')
+        if (res.ok) {
+          await logOp('delete_logistics', '物流商 ' + code)
+          alert('已删除')
+          renderTab('logistics')
+        } else {
+          alert('删除失败：' + ctx.translateError(json.error || '未知错误'))
+        }
         return
       }
     }
@@ -955,7 +1090,6 @@ async function renderLogistics(v) {
 }
 
 // ================= 4. 管理员管理 =================
-// (逻辑保持原样，不涉及此次修改)
 async function renderAdmins(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data: admins } = await ctx.supabase.from('admin_users').select('*').order('created_at', { ascending: false })
@@ -995,8 +1129,8 @@ async function renderAdmins(v) {
             <td>${a.created_at ? new Date(a.created_at).toLocaleString() : ''}</td>
             <td>
               <button class="small secondary" data-act="edit" data-id="${a.id}">修改</button>
-              <button class="small secondary" data-act="toggle" data-id="${a.id}" data-enable="${a.status===1?'0':'1'}">${a.status===1?'禁用':'启用'}</button>
-              <button class="small secondary" data-act="pwd" data-id="${a.id}">重置密码</button>
+              <button class="small secondary" data-act="toggle" data-id="${a.id}" data-enable="${a.status===1?'0':'1'}" data-name="${a.name||''}">${a.status===1?'禁用':'启用'}</button>
+              <button class="small secondary" data-act="pwd" data-id="${a.id}" data-name="${a.name||''}">重置密码</button>
               ${isSuper() ? `<button class="small danger" data-act="del" data-id="${a.id}" data-name="${a.name||''}">删除</button>` : ''}
             </td>
           </tr>`).join('') || '<tr><td colspan="6">无数据</td></tr>'}</tbody>
@@ -1005,8 +1139,7 @@ async function renderAdmins(v) {
     </div>
     <div id="admin-edit-panel"></div>`
 
-  const btn = document.getElementById('btn-create-admin')
-  if (btn) btn.onclick = async () => {
+  document.getElementById('btn-create-admin').onclick = async () => {
     const elLogin = document.getElementById('ad-login')
     const elName = document.getElementById('ad-name')
     const elPhone = document.getElementById('ad-phone')
@@ -1044,6 +1177,7 @@ async function renderAdmins(v) {
     const json = await res.json()
     if (res.ok) {
       msgEl.innerHTML = ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
+      await logOp('create_admin', '管理员 ' + name, { role })
       renderTab('admins')
     } else {
       msgEl.innerHTML = ctx.msg(ctx.translateError(json.error || '创建失败'), false)
@@ -1054,6 +1188,7 @@ async function renderAdmins(v) {
     b.onclick = async () => {
       const id = b.dataset.id
       const act = b.dataset.act
+      const nameAttr = b.dataset.name
 
       if (act === 'edit') {
         const a = admins.find(x => x.id === id)
@@ -1094,6 +1229,7 @@ async function renderAdmins(v) {
           if (error) {
             msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
           }
+          await logOp('update_admin', '管理员 ' + name, { fields: ['name','phone','role'] })
           alert('已保存')
           renderTab('admins')
         }
@@ -1115,8 +1251,13 @@ async function renderAdmins(v) {
           body: JSON.stringify({ user_id: id, account_type: 'admin', enable })
         })
         const json = await res.json()
-        alert(res.ok ? `已${action}` : `${action}失败：` + ctx.translateError(json.error || '未知错误'))
-        if (res.ok) renderTab('admins')
+        if (res.ok) {
+          await logOp('toggle_admin', '管理员 ' + nameAttr, { enable })
+          alert(`已${action}`)
+          renderTab('admins')
+        } else {
+          alert(`${action}失败：` + ctx.translateError(json.error || '未知错误'))
+        }
         return
       }
 
@@ -1132,33 +1273,38 @@ async function renderAdmins(v) {
           },
           body: JSON.stringify({ user_id: id, new_password: pwd })
         })
-        alert(res.ok ? '重置成功' : '重置失败，请重试')
+        if (res.ok) {
+          await logOp('reset_admin_pwd', '管理员 ' + nameAttr)
+          alert('重置成功')
+        } else {
+          alert('重置失败，请重试')
+        }
+        return
       }
 
       if (act === 'del') {
         if (id === ctx.currentUser.id) return alert('不能删除自己')
-        if (!confirm(`确定删除管理员「${b.dataset.name}」？`)) return
+        if (!confirm(`确定删除管理员「${nameAttr}」？`)) return
         const { error } = await ctx.supabase.from('admin_users').delete().eq('id', id)
         if (error) return alert(ctx.translateError(error.message))
         await ctx.supabase.from('vendor_profile').delete().eq('id', id)
+        await logOp('delete_admin', '管理员 ' + nameAttr)
         alert('已删除')
         renderTab('admins')
       }
     }
   })
 }
-
 // ================= 5. 基础数据 =================
-// (此部分保持原样)
 async function renderBase(v) {
   v.innerHTML = `
     <div class="tabs" id="base-tabs">
       <button data-t="wh" class="active">仓库</button>
-      <button data-t="loc">仓位</button>
       <button data-t="store">门店</button>
-      <button data-t="mode">物流方式</button>
       <button data-t="product">商品主数据</button>
-      <button data-t="map">仓位映射</button>
+      <button data-t="deadline">提报时间段</button>
+      <button data-t="holiday">节假日</button>
+      <button data-t="bypass">强制放行</button>
     </div>
     <div id="base-view"></div>`
   document.querySelectorAll('#base-tabs button').forEach(b => {
@@ -1175,87 +1321,162 @@ async function renderBaseSub(key) {
   const v = document.getElementById('base-view')
   v.innerHTML = '加载中...'
   if (key === 'wh') return renderWh(v)
-  if (key === 'loc') return renderLoc(v)
   if (key === 'store') return renderStore(v)
-  if (key === 'mode') return renderMode(v)
   if (key === 'product') return renderProduct(v)
-  if (key === 'map') return renderMap(v)
+  if (key === 'deadline') return renderDeadline(v)
+  if (key === 'holiday') return renderHoliday(v)
+  if (key === 'bypass') return renderBypass(v)
 }
 
+// ===== 5.1 仓库（三块合一：仓库 + 仓位 + 映射只读） =====
 async function renderWh(v) {
-  const { data } = await ctx.supabase.from('warehouse').select('*').order('warehouse_code')
-  v.innerHTML = `
-    <div class="row">
-      <input id="w-code" placeholder="仓库代码 *" />
-      <input id="w-name" placeholder="仓库名称 *" />
-      <input id="w-region" placeholder="区域" />
-      <button id="btn-w-add">新增</button>
-    </div>
-    <div id="w-msg"></div>
-    <table><tr><th>代码</th><th>名称</th><th>区域</th><th>默认门店</th><th>状态</th><th>操作</th></tr>
-      <tbody>${(data||[]).map(r=>`<tr>
-        <td>${r.warehouse_code}</td><td>${r.warehouse_name}</td><td>${r.region||''}</td>
-        <td>${r.default_store_code||'-'}</td>
-        <td>${r.status===1?'启用':'停用'}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
-      </tr>`).join('')}</tbody></table>`
-  document.getElementById('btn-w-add').onclick = async () => {
-    const { error } = await ctx.supabase.from('warehouse').insert({
-      warehouse_code: document.getElementById('w-code').value.trim(),
-      warehouse_name: document.getElementById('w-name').value.trim(),
-      region: document.getElementById('w-region').value.trim() || null
-    })
-    document.getElementById('w-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderBaseSub('wh')
-  }
-  v.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('确定删除？')) return
-      const { error } = await ctx.supabase.from('warehouse').delete().eq('id', b.dataset.del)
-      if (error) return alert(ctx.translateError(error.message))
-      renderBaseSub('wh')
+  const { data: whs } = await ctx.supabase.from('warehouse').select('*').order('warehouse_code')
+  const list = whs || []
+  let selectedCode = list.length ? list[0].warehouse_code : null
+
+  const renderAll = async () => {
+    const sel = list.find(w => w.warehouse_code === selectedCode)
+
+    let locs = []
+    let maps = []
+    if (selectedCode) {
+      const { data: l } = await ctx.supabase.from('location_config_detail')
+        .select('*').eq('warehouse_code', selectedCode).order('location_code')
+      locs = l || []
+      const { data: m } = await ctx.supabase.from('location_warehouse_map')
+        .select('*').eq('warehouse_code', selectedCode).order('location_code')
+      maps = m || []
     }
-  })
+
+    v.innerHTML = `
+      <div class="card" style="box-shadow:none;padding:0 0 16px;">
+        <h2>仓库</h2>
+        <div class="row">
+          <input id="w-code" placeholder="仓库代码 *" />
+          <input id="w-name" placeholder="仓库名称 *" />
+          <input id="w-region" placeholder="区域" />
+          <button id="btn-w-add">新增</button>
+        </div>
+        <div id="w-msg"></div>
+        <table>
+          <tr><th>代码</th><th>名称</th><th>区域</th><th>默认门店</th><th>状态</th><th>操作</th></tr>
+          <tbody>${list.map(r=>`<tr ${r.warehouse_code===selectedCode?'style="background:#e6f4ff;"':''}>
+            <td><a href="javascript:;" data-pick-wh="${r.warehouse_code}" style="color:#1677ff;">${r.warehouse_code}</a></td>
+            <td>${r.warehouse_name}</td><td>${r.region||''}</td>
+            <td>${r.default_store_code||'-'}</td>
+            <td>${r.status===1?'启用':'停用'}</td>
+            <td>${isSuper() ? `<button class="small danger" data-del-wh="${r.id}" data-code="${r.warehouse_code}">删除</button>` : ''}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+      <div class="card" style="box-shadow:none;padding:0 0 16px;">
+        <h2>当前仓库：${sel ? sel.warehouse_code + ' ' + sel.warehouse_name : '未选择'}</h2>
+        <div class="row">
+          <input id="l-code" placeholder="仓位代码 *" />
+          <input id="l-name" placeholder="仓位名称" />
+          <button id="btn-l-add">新增仓位</button>
+        </div>
+        <div id="l-msg"></div>
+        <table>
+          <tr><th>仓位代码</th><th>名称</th><th>单据数</th><th>状态</th><th>操作</th></tr>
+          <tbody>${locs.map(r=>`<tr>
+            <td>${r.location_code}</td><td>${r.location_name||''}</td><td>${r.bill_count||0}</td>
+            <td>${r.status===1?'启用':'停用'}</td>
+            <td>${isSuper() ? `<button class="small danger" data-del-loc="${r.id}" data-code="${r.location_code}">删除</button>` : ''}</td>
+          </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="card" style="box-shadow:none;padding:0;">
+        <h2>仓位映射（只读）</h2>
+        <div class="scroll">
+          <table>
+            <tr><th>仓位代码</th><th>仓库代码</th><th>仓库名称</th><th>状态</th></tr>
+            <tbody>${maps.map(r=>`<tr>
+              <td>${r.location_code}</td><td>${r.warehouse_code}</td>
+              <td>${r.warehouse_name||''}</td><td>${r.status===1?'启用':'停用'}</td>
+            </tr>`).join('') || '<tr><td colspan="4">无数据</td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>`
+
+    v.querySelectorAll('[data-pick-wh]').forEach(a => {
+      a.onclick = () => { selectedCode = a.dataset.pickWh; renderAll() }
+    })
+
+    document.getElementById('btn-w-add').onclick = async () => {
+      const code = document.getElementById('w-code').value.trim()
+      const name = document.getElementById('w-name').value.trim()
+      const region = document.getElementById('w-region').value.trim() || null
+      if (!code || !name) return
+      const { error } = await ctx.supabase.from('warehouse').insert({
+        warehouse_code: code, warehouse_name: name, region
+      })
+      if (error) {
+        document.getElementById('w-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+        return
+      }
+      await logOp('create_warehouse', '仓库 ' + code)
+      document.getElementById('w-msg').innerHTML = ctx.msg('已新增', true)
+      renderWh(v)
+    }
+
+    document.getElementById('btn-l-add').onclick = async () => {
+      if (!selectedCode) return
+      const code = document.getElementById('l-code').value.trim()
+      const name = document.getElementById('l-name').value.trim() || null
+      if (!code) return
+      const { error } = await ctx.supabase.from('location_config').insert({
+        warehouse_code: selectedCode,
+        location_code: code,
+        location_name: name,
+        created_by: ctx.operatorName
+      })
+      if (error) {
+        document.getElementById('l-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+        return
+      }
+      // 同步写映射表（import-bills 依赖）
+      await ctx.supabase.from('location_warehouse_map').insert({
+        location_code: code,
+        warehouse_code: selectedCode,
+        warehouse_name: sel?.warehouse_name || null
+      })
+      await logOp('create_location', '仓位 ' + selectedCode + '/' + code)
+      document.getElementById('l-msg').innerHTML = ctx.msg('已新增', true)
+      renderAll()
+    }
+
+    v.querySelectorAll('[data-del-wh]').forEach(b => {
+      b.onclick = async () => {
+        const id = b.dataset.delWh
+        const code = b.dataset.code
+        const { data: cnt } = await ctx.supabase.from('location_config')
+          .select('id').eq('warehouse_code', code).limit(1)
+        if (cnt && cnt.length) return alert('该仓库下还有仓位，请先删除仓位')
+        if (!confirm('确定删除该仓库？')) return
+        const { error } = await ctx.supabase.from('warehouse').delete().eq('id', id)
+        if (error) return alert(ctx.translateError(error.message))
+        await logOp('delete_warehouse', '仓库 ' + code)
+        renderWh(v)
+      }
+    })
+
+    v.querySelectorAll('[data-del-loc]').forEach(b => {
+      b.onclick = async () => {
+        const code = b.dataset.code
+        if (!confirm('确定删除该仓位？')) return
+        const { error } = await ctx.supabase.from('location_config').delete().eq('id', b.dataset.delLoc)
+        if (error) return alert(ctx.translateError(error.message))
+        await logOp('delete_location', '仓位 ' + code)
+        renderAll()
+      }
+    })
+  }
+
+  renderAll()
 }
 
-async function renderLoc(v) {
-  const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
-  const { data } = await ctx.supabase.from('location_config_detail').select('*')
-  v.innerHTML = `
-    <div class="row">
-      <select id="l-wh">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-      <input id="l-code" placeholder="仓位代码 *" />
-      <input id="l-name" placeholder="仓位名称" />
-      <button id="btn-l-add">新增</button>
-    </div>
-    <div id="l-msg"></div>
-    <table><tr><th>仓库</th><th>仓位代码</th><th>名称</th><th>单据数</th><th>状态</th><th>操作</th></tr>
-      <tbody>${(data||[]).map(r=>`<tr>
-        <td>${r.warehouse_name||r.warehouse_code}</td>
-        <td>${r.location_code}</td><td>${r.location_name||''}</td><td>${r.bill_count||0}</td>
-        <td>${r.status===1?'启用':'停用'}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
-      </tr>`).join('')}</tbody></table>`
-  document.getElementById('btn-l-add').onclick = async () => {
-    const { error } = await ctx.supabase.from('location_config').insert({
-      warehouse_code: document.getElementById('l-wh').value,
-      location_code: document.getElementById('l-code').value.trim(),
-      location_name: document.getElementById('l-name').value.trim() || null,
-      created_by: ctx.currentProfile?.vendor_name || 'admin'
-    })
-    document.getElementById('l-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderBaseSub('loc')
-  }
-  v.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('确定删除？')) return
-      const { error } = await ctx.supabase.from('location_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(ctx.translateError(error.message))
-      renderBaseSub('loc')
-    }
-  })
-}
-
+// ===== 5.2 门店 =====
 async function renderStore(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data } = await ctx.supabase.from('store_config_detail').select('*')
@@ -1271,64 +1492,37 @@ async function renderStore(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.warehouse_name||''}</td><td>${r.store_code}</td><td>${r.store_name||''}</td>
         <td>${r.bill_count||0}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.store_code}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-s-add').onclick = async () => {
+    const code = document.getElementById('s-code').value.trim()
+    if (!code) return
     const { error } = await ctx.supabase.from('store_config').insert({
       warehouse_code: document.getElementById('s-wh').value || null,
-      store_code: document.getElementById('s-code').value.trim(),
+      store_code: code,
       store_name: document.getElementById('s-name').value.trim() || null,
-      created_by: ctx.currentProfile?.vendor_name || 'admin'
+      created_by: ctx.operatorName
     })
-    document.getElementById('s-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderBaseSub('store')
+    if (error) {
+      document.getElementById('s-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    await logOp('create_store', '门店 ' + code)
+    document.getElementById('s-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('store')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('store_config').delete().eq('id', b.dataset.del)
       if (error) return alert(ctx.translateError(error.message))
+      await logOp('delete_store', '门店 ' + b.dataset.code)
       renderBaseSub('store')
     }
   })
 }
 
-async function renderMode(v) {
-  const { data } = await ctx.supabase.from('logistics_mode_config_detail').select('*').order('sort_order')
-  v.innerHTML = `
-    <div class="row">
-      <input id="m-code" placeholder="模式代码 *" />
-      <input id="m-name" placeholder="模式名称 *" />
-      <input id="m-sort" type="number" placeholder="排序" value="0" />
-      <button id="btn-m-add">新增</button>
-    </div>
-    <div id="m-msg"></div>
-    <table><tr><th>代码</th><th>名称</th><th>排序</th><th>单据数</th><th>状态</th><th>操作</th></tr>
-      <tbody>${(data||[]).map(r=>`<tr>
-        <td>${r.mode_code}</td><td>${r.mode_name}</td><td>${r.sort_order||0}</td>
-        <td>${r.bill_count||0}</td><td>${r.status===1?'启用':'停用'}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
-      </tr>`).join('')}</tbody></table>`
-  document.getElementById('btn-m-add').onclick = async () => {
-    const { error } = await ctx.supabase.from('logistics_mode_config').insert({
-      mode_code: document.getElementById('m-code').value.trim(),
-      mode_name: document.getElementById('m-name').value.trim(),
-      sort_order: Number(document.getElementById('m-sort').value) || 0,
-      created_by: ctx.currentProfile?.vendor_name || 'admin'
-    })
-    document.getElementById('m-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderBaseSub('mode')
-  }
-  v.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('确定删除？')) return
-      const { error } = await ctx.supabase.from('logistics_mode_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(ctx.translateError(error.message))
-      renderBaseSub('mode')
-    }
-  })
-}
-
+// ===== 5.3 商品主数据 =====
 async function renderProduct(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data } = await ctx.supabase.from('product_master').select('*').order('id', { ascending: false }).limit(200)
@@ -1364,7 +1558,7 @@ async function renderProduct(v) {
             <td>${r.warehouse_code||''}</td><td>${r.product_code}</td><td>${r.product_name||''}</td>
             <td>${r.spec||''}</td><td>${r.default_vendor_code||''}</td>
             <td>${r.default_location_code||''}</td><td>${r.default_logistics_mode||''}</td>
-            <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+            <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.product_code}">删除</button>` : ''}</td>
           </tr>`).join('')}</tbody></table>
       </div>
     </div>`
@@ -1400,8 +1594,12 @@ async function renderProduct(v) {
       })
     })
     const json = await res.json()
-    document.getElementById('p-msg').innerHTML = res.ok      ? ctx.msg(`导入 ${json.count} 条`, true) : ctx.msg(ctx.translateError(json.error || '导入失败'), false)
-    if (res.ok) renderBaseSub('product')
+    if (res.ok) {
+      document.getElementById('p-msg').innerHTML = ctx.msg(`导入 ${json.count} 条`, true)
+      renderBaseSub('product')
+    } else {
+      document.getElementById('p-msg').innerHTML = ctx.msg(ctx.translateError(json.error || '导入失败'), false)
+    }
   }
 
   document.getElementById('btn-pm-add').onclick = async () => {
@@ -1441,6 +1639,7 @@ async function renderProduct(v) {
       msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
       return
     }
+    await logOp('create_product', '商品 ' + code, { warehouse_code: wh, vendor })
     msgEl.innerHTML = ctx.msg('新增成功', true)
     setTimeout(() => renderBaseSub('product'), 600)
   }
@@ -1450,74 +1649,13 @@ async function renderProduct(v) {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('product_master').delete().eq('id', b.dataset.del)
       if (error) return alert(ctx.translateError(error.message))
+      await logOp('delete_product', '商品 ' + b.dataset.code)
       renderBaseSub('product')
     }
   })
 }
 
-async function renderMap(v) {
-  const { data } = await ctx.supabase.from('location_warehouse_map').select('*').order('location_code')
-  v.innerHTML = `
-    <div class="row">
-      <input id="mp-loc" placeholder="仓位代码 * 如 01" />
-      <input id="mp-wh" placeholder="仓库代码 * 如 2608" />
-      <input id="mp-name" placeholder="仓库名称 如 济南冻仓" />
-      <button id="btn-mp-add">新增</button>
-    </div>
-    <div id="mp-msg"></div>
-    <table><tr><th>仓位代码</th><th>仓库代码</th><th>仓库名称</th><th>状态</th><th>操作</th></tr>
-      <tbody>${(data||[]).map(r=>`<tr>
-        <td>${r.location_code}</td><td>${r.warehouse_code}</td><td>${r.warehouse_name||''}</td>
-        <td>${r.status===1?'启用':'停用'}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
-      </tr>`).join('')}</tbody></table>`
-  document.getElementById('btn-mp-add').onclick = async () => {
-    const { error } = await ctx.supabase.from('location_warehouse_map').insert({
-      location_code: document.getElementById('mp-loc').value.trim(),
-      warehouse_code: document.getElementById('mp-wh').value.trim(),
-      warehouse_name: document.getElementById('mp-name').value.trim() || null
-    })
-    document.getElementById('mp-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderBaseSub('map')
-  }
-  v.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('确定删除？')) return
-      const { error } = await ctx.supabase.from('location_warehouse_map').delete().eq('id', b.dataset.del)
-      if (error) return alert(ctx.translateError(error.message))
-      renderBaseSub('map')
-    }
-  })
-}
-
-// ================= 6. 提报规则 =================
-// (此部分保持原样)
-async function renderRules(v) {
-  v.innerHTML = `
-    <div class="tabs" id="rule-tabs">
-      <button data-t="deadline" class="active">提报时间段</button>
-      <button data-t="holiday">节假日</button>
-      <button data-t="bypass">强制放行</button>
-    </div>
-    <div id="rule-view"></div>`
-  document.querySelectorAll('#rule-tabs button').forEach(b => {
-    b.onclick = () => {
-      document.querySelectorAll('#rule-tabs button').forEach(x => x.classList.remove('active'))
-      b.classList.add('active')
-      renderRuleSub(b.dataset.t)
-    }
-  })
-  renderRuleSub('deadline')
-}
-
-async function renderRuleSub(key) {
-  const v = document.getElementById('rule-view')
-  v.innerHTML = '加载中...'
-  if (key === 'deadline') return renderDeadline(v)
-  if (key === 'holiday') return renderHoliday(v)
-  if (key === 'bypass') return renderBypass(v)
-}
-
+// ===== 5.4 提报时间段 =====
 async function renderDeadline(v) {
   const { data } = await ctx.supabase.from('deadline_config').select('*').order('id')
   v.innerHTML = `
@@ -1533,29 +1671,38 @@ async function renderDeadline(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.vendor_code||'（全部）'}</td><td>${r.warehouse_code||'（全部）'}</td>
         <td>${r.day_type}</td><td>${r.config_value}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-value="${r.config_value}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-d-add').onclick = async () => {
+    const configValue = document.getElementById('d-value').value.trim()
+    if (!configValue) return
     const { error } = await ctx.supabase.from('deadline_config').insert({
       vendor_code: document.getElementById('d-vendor').value.trim() || null,
       warehouse_code: document.getElementById('d-wh').value.trim() || null,
       day_type: document.getElementById('d-type').value,
-      config_value: document.getElementById('d-value').value.trim(),
-      updated_by: ctx.currentProfile?.vendor_name || 'admin'
+      config_value: configValue,
+      updated_by: ctx.operatorName
     })
-    document.getElementById('d-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderRuleSub('deadline')
+    if (error) {
+      document.getElementById('d-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    await logOp('create_deadline', '提报时间段 ' + configValue)
+    document.getElementById('d-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('deadline')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('deadline_config').delete().eq('id', b.dataset.del)
       if (error) return alert(ctx.translateError(error.message))
-      renderRuleSub('deadline')
+      await logOp('delete_deadline', '提报时间段 ' + b.dataset.value)
+      renderBaseSub('deadline')
     }
   })
 }
 
+// ===== 5.5 节假日 =====
 async function renderHoliday(v) {
   const { data } = await ctx.supabase.from('holiday_config').select('*').order('holiday_date')
   v.innerHTML = `
@@ -1568,26 +1715,35 @@ async function renderHoliday(v) {
     <table><tr><th>日期</th><th>说明</th><th>操作</th></tr>
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.holiday_date}</td><td>${r.description||''}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-date="${r.holiday_date}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-h-add').onclick = async () => {
+    const date = document.getElementById('h-date').value
+    if (!date) return
     const { error } = await ctx.supabase.from('holiday_config').insert({
-      holiday_date: document.getElementById('h-date').value,
+      holiday_date: date,
       description: document.getElementById('h-desc').value.trim() || null
     })
-    document.getElementById('h-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderRuleSub('holiday')
+    if (error) {
+      document.getElementById('h-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    await logOp('create_holiday', '节假日 ' + date)
+    document.getElementById('h-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('holiday')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('holiday_config').delete().eq('id', b.dataset.del)
       if (error) return alert(ctx.translateError(error.message))
-      renderRuleSub('holiday')
+      await logOp('delete_holiday', '节假日 ' + b.dataset.date)
+      renderBaseSub('holiday')
     }
   })
 }
 
+// ===== 5.6 强制放行 =====
 async function renderBypass(v) {
   const { data } = await ctx.supabase.from('bypass_list').select('*').order('bypass_date', { ascending: false })
   v.innerHTML = `
@@ -1603,46 +1759,39 @@ async function renderBypass(v) {
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.vendor_code}</td><td>${r.warehouse_code||'（全部）'}</td>
         <td>${r.bypass_date}</td><td>${r.reason||''}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-vendor="${r.vendor_code}" data-date="${r.bypass_date}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-b-add').onclick = async () => {
+    const vendor = document.getElementById('b-vendor').value.trim()
+    const date = document.getElementById('b-date').value
+    if (!vendor || !date) return
     const { error } = await ctx.supabase.from('bypass_list').insert({
-      vendor_code: document.getElementById('b-vendor').value.trim(),
+      vendor_code: vendor,
       warehouse_code: document.getElementById('b-wh').value.trim() || null,
-      bypass_date: document.getElementById('b-date').value,
+      bypass_date: date,
       reason: document.getElementById('b-reason').value.trim() || null,
-      created_by: ctx.currentProfile?.vendor_name || 'admin'
+      created_by: ctx.operatorName
     })
-    document.getElementById('b-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderRuleSub('bypass')
+    if (error) {
+      document.getElementById('b-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    await logOp('create_bypass', '强制放行 ' + vendor, { bypass_date: date })
+    document.getElementById('b-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('bypass')
   }
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('bypass_list').delete().eq('id', b.dataset.del)
       if (error) return alert(ctx.translateError(error.message))
-      renderRuleSub('bypass')
+      await logOp('delete_bypass', '强制放行 ' + b.dataset.vendor, { bypass_date: b.dataset.date })
+      renderBaseSub('bypass')
     }
   })
 }
 
-// ================= 7. 导出批次 =================
-// (此部分保持原样)
-async function renderBatches(v) {
-  const { data } = await ctx.supabase.from('export_batch_detail').select('*').order('id', { ascending: false }).limit(100)
-  v.innerHTML = `
-    <table><tr><th>批次号</th><th>仓库</th><th>开始</th><th>结束</th><th>类型</th><th>条数</th><th>操作人</th><th>时间</th></tr>
-      <tbody>${(data||[]).map(r=>`<tr>
-        <td>${r.batch_no}</td><td>${r.warehouse_code||''}</td>
-        <td>${r.start_date||''}</td><td>${r.end_date||''}</td>
-        <td>${r.bill_type||''}</td><td>${r.count||0}（实际 ${r.actual_count||0}）</td>
-        <td>${r.operator||''}</td>
-        <td>${new Date(r.created_at).toLocaleString()}</td>
-      </tr>`).join('') || '<tr><td colspan="8">无数据</td></tr>'}</tbody></table>`
-}
-
-// ================= 8. 操作日志 =================
-// (此部分保持原样)
+// ================= 6. 日志 =================
 async function renderLogs(v) {
   const { data: ops } = await ctx.supabase.from('operation_log')
     .select('*').order('id', { ascending: false }).limit(200)
@@ -1663,11 +1812,48 @@ async function renderLogs(v) {
           <tbody>${(ops||[]).map(r=>`<tr>
             <td>${new Date(r.created_at).toLocaleString()}</td>
             <td>${r.operator_name||''}</td>
-            <td>${r.action}</td>
+            <td>${ACTION_CN[r.action] || r.action || ''}</td>
             <td>${r.target||''}</td>
-            <td style="font-size:11px;">${JSON.stringify(r.detail||{})}</td>
+            <td><button class="small secondary" data-detail="${r.id}">查看</button></td>
           </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody></table>
-      </div>`
+      </div>
+      <div id="log-detail-panel"></div>`
+
+    document.querySelectorAll('[data-detail]').forEach(btn => {
+      btn.onclick = () => {
+        const id = Number(btn.dataset.detail)
+        const r = (ops||[]).find(x => x.id === id)
+        if (!r) return
+        const d = r.detail || {}
+        let html = `<div class="card" style="margin-top:12px;border:2px solid #1677ff;">
+          <h2>详情 · ${ACTION_CN[r.action] || r.action}</h2>
+          <p style="font-size:13px;color:#666;margin-bottom:8px;">
+            操作人：${r.operator_name||''} ｜ 目标：${r.target||''} ｜ 时间：${new Date(r.created_at).toLocaleString()}
+          </p>`
+
+        if (Array.isArray(d.success_list) || Array.isArray(d.failed_list)) {
+          html += `<div style="margin-bottom:8px;"><strong>成功 ${d.success || 0} 条：</strong>
+            ${(d.success_list||[]).join(', ') || '无'}</div>`
+          html += `<div><strong>失败 ${d.failed || 0} 条：</strong>`
+          if ((d.failed_list||[]).length) {
+            html += `<table style="margin-top:6px;"><tr><th>厂编</th><th>原因</th></tr>
+              ${d.failed_list.map(f => `<tr><td>${f.vendor_code||''}</td><td style="color:#cf1322;">${f.error||''}</td></tr>`).join('')}
+            </table>`
+          } else {
+            html += ' 无'
+          }
+          html += '</div>'
+        } else {
+          html += `<pre style="font-size:12px;background:#fafafa;padding:8px;border-radius:4px;overflow:auto;">${JSON.stringify(d, null, 2)}</pre>`
+        }
+
+        html += `<button class="secondary" id="btn-close-detail" style="margin-top:8px;">关闭</button></div>`
+        document.getElementById('log-detail-panel').innerHTML = html
+        document.getElementById('btn-close-detail').onclick = () => {
+          document.getElementById('log-detail-panel').innerHTML = ''
+        }
+      }
+    })
   }
 
   const renderEdit = () => {
@@ -1718,11 +1904,33 @@ async function renderLogs(v) {
   renderOp()
 }
 
-// ================= 9. 系统配置 =================
-// (此部分保持原样)
+// ================= 7. 系统配置 =================
+const CONFIG_CN = {
+  app_version: '系统版本',
+  app_name: '系统名称',
+  release_notes: '更新说明',
+  release_date: '发布日期',
+  maintenance_mode: '维护模式',
+  cleanup_days: '清理保留天数',
+  cleanup_time: '清理执行时间'
+}
+
+function formatConfigValue(key, val) {
+  if (key === 'maintenance_mode') return val === 'true' ? '开启' : '关闭'
+  if (key === 'cleanup_days') return (val || '') + ' 天'
+  if (key === 'cleanup_time') return '每天 ' + (val || '')
+  return val || ''
+}
+
 async function renderSys(v) {
   const { data: cfgs } = await ctx.supabase.from('system_config').select('*').order('config_key')
   const { data: vers } = await ctx.supabase.from('version_history').select('*').order('id', { ascending: false }).limit(50)
+
+  const cfgMap = {}
+  ;(cfgs||[]).forEach(x => cfgMap[x.config_key] = x.config_value)
+  const cleanupDays = cfgMap.cleanup_days || '7'
+  const cleanupTime = cfgMap.cleanup_time || '03:00'
+
   v.innerHTML = `
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
       <h2>系统配置</h2>
@@ -1732,53 +1940,110 @@ async function renderSys(v) {
         <button id="btn-c-save">保存</button>
       </div>
       <div id="c-msg"></div>
-      <table><tr><th>键</th><th>值</th><th>更新时间</th><th>操作</th></tr>
+      <table><tr><th>配置项</th><th>值</th><th>更新时间</th><th>操作</th></tr>
         <tbody>${(cfgs||[]).map(r=>`<tr>
-          <td>${r.config_key}</td><td>${r.config_value||''}</td>
+          <td>${CONFIG_CN[r.config_key] || r.config_key}</td>
+          <td>${formatConfigValue(r.config_key, r.config_value)}</td>
           <td>${new Date(r.updated_at).toLocaleString()}</td>
-          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-key="${r.config_key}">删除</button>` : ''}</td>
         </tr>`).join('')}</tbody></table>
     </div>
-    <div class="card" style="box-shadow:none;padding:0;">
-      <h2>版本历史</h2>
+    <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #91caff;">
+      <h2>定时清理配置（仅超管）</h2>
+      <p style="font-size:12px;color:#666;margin:8px 0;">
+        清理 <strong>${cleanupDays}</strong> 天前已导出单据及相关记录；每天 <strong>${cleanupTime}</strong> 执行。
+      </p>
       <div class="row">
-        <input id="v-version" placeholder="版本号 *" />
-        <input id="v-notes" placeholder="更新说明" />
-        <button id="btn-v-add">新增</button>
+        <div>
+          <label>保留天数（1–365）</label>
+          <input id="cleanup-days" type="number" min="1" max="365" value="${cleanupDays}" />
+        </div>
+        <div>
+          <label>每天执行时间</label>
+          <input id="cleanup-time" type="time" value="${cleanupTime}" />
+        </div>
       </div>
-      <div id="v-msg"></div>
-      <table><tr><th>版本</th><th>说明</th><th>发布时间</th></tr>
-        <tbody>${(vers||[]).map(r=>`<tr>
-          <td>${r.version}</td><td>${r.notes||''}</td>
-          <td>${new Date(r.released_at).toLocaleString()}</td>
-        </tr>`).join('')}</tbody></table>
+      <button id="btn-save-cleanup" ${isSuper() ? '' : 'disabled'}>保存（立即生效）</button>
+      <div id="cleanup-msg"></div>
+    </div>
+    <div class="card" style="box-shadow:none;padding:0;">
+      <details>
+        <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">版本历史（点击展开）</summary>
+        <div style="margin-top:12px;">
+          <div class="row">
+            <input id="v-version" placeholder="版本号 *" />
+            <input id="v-notes" placeholder="更新说明" />
+            <button id="btn-v-add">新增</button>
+          </div>
+          <div id="v-msg"></div>
+          <table><tr><th>版本</th><th>说明</th><th>发布时间</th></tr>
+            <tbody>${(vers||[]).map(r=>`<tr>
+              <td>${r.version}</td><td>${r.notes||''}</td>
+              <td>${new Date(r.released_at).toLocaleString()}</td>
+            </tr>`).join('')}</tbody></table>
+        </div>
+      </details>
     </div>`
+
   document.getElementById('btn-c-save').onclick = async () => {
     const key = document.getElementById('c-key').value.trim()
     const val = document.getElementById('c-val').value
     if (!key) return
     const { error } = await ctx.supabase.from('system_config')
-      .upsert({ config_key: key, config_value: val, updated_by: ctx.currentProfile?.vendor_name || 'admin' },
+      .upsert({ config_key: key, config_value: val, updated_by: ctx.operatorName },
               { onConflict: 'config_key' })
-    document.getElementById('c-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已保存', true)
-    if (!error) renderTab('sys')
+    if (error) {
+      document.getElementById('c-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    await logOp('save_system_config', '配置 ' + (CONFIG_CN[key] || key), { value: val })
+    document.getElementById('c-msg').innerHTML = ctx.msg('已保存', true)
+    renderTab('sys')
   }
+
+  document.getElementById('btn-save-cleanup').onclick = async () => {
+    if (!isSuper()) return alert('只有超级管理员可以修改')
+    const d = Number(document.getElementById('cleanup-days').value)
+    const t = document.getElementById('cleanup-time').value
+    if (!d || d < 1 || d > 365) {
+      return document.getElementById('cleanup-msg').innerHTML = ctx.msg('天数需在 1–365', false)
+    }
+    if (!t) {
+      return document.getElementById('cleanup-msg').innerHTML = ctx.msg('请选择时间', false)
+    }
+    const { error } = await ctx.supabase.rpc('save_cleanup_config', { p_days: d, p_time: t })
+    if (error) {
+      document.getElementById('cleanup-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    await logOp('save_cleanup_config', '清理配置', { days: d, time: t })
+    document.getElementById('cleanup-msg').innerHTML = ctx.msg('已保存，新配置立即生效', true)
+    setTimeout(() => renderTab('sys'), 800)
+  }
+
   document.getElementById('btn-v-add').onclick = async () => {
     const version = document.getElementById('v-version').value.trim()
     if (!version) return
     const { error } = await ctx.supabase.from('version_history').insert({
       version,
       notes: document.getElementById('v-notes').value.trim() || null,
-      released_by: ctx.currentProfile?.vendor_name || 'admin'
+      released_by: ctx.operatorName
     })
-    document.getElementById('v-msg').innerHTML = error ? ctx.msg(ctx.translateError(error.message), false) : ctx.msg('已新增', true)
-    if (!error) renderTab('sys')
+    if (error) {
+      document.getElementById('v-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    await logOp('add_version', '版本 ' + version)
+    document.getElementById('v-msg').innerHTML = ctx.msg('已新增', true)
+    renderTab('sys')
   }
+
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定删除？')) return
       const { error } = await ctx.supabase.from('system_config').delete().eq('id', b.dataset.del)
       if (error) return alert(ctx.translateError(error.message))
+      await logOp('delete_system_config', '配置 ' + (CONFIG_CN[b.dataset.key] || b.dataset.key))
       renderTab('sys')
     }
   })
