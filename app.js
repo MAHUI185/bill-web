@@ -407,9 +407,8 @@ function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
   }
-  // 新增逻辑
   if (billType === '济转西RT') {
-    return { owner_code: '8888', store_code: '8205RT' }
+    return { owner_code: supplierInput, store_code: '8205RT' }
   }
   if (billType === '济转西DSP') {
     return { owner_code: '8888', store_code: '8205DSP' }
@@ -1040,7 +1039,6 @@ async function renderFill(view) {
 }
 
 // ================= 商品资料 =================
-// (此部分保持原样)
 async function renderProducts(view) {
   if (isAdmin) {
     view.innerHTML = `<div class="card"><h2>商品资料</h2><p style="color:#999;">管理员请到管理后台的商品主数据里维护。</p></div>`
@@ -1241,7 +1239,6 @@ async function renderProducts(view) {
 }
 
 // ================= 我的单据 =================
-// (此部分保持原样)
 async function renderMy(view) {
   let q = supabase.from('bill_order')
     .select('*')
