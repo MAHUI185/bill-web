@@ -147,7 +147,7 @@ function renderMaintenance() {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;text-align:center;">
       <h1>系统维护中</h1>
-      <p style="margin:16px 0;color:#666;">系统正在部署更新，暂时无法提交数据，请稍后再试。</p>
+      <p style="margin:16px 0;color:#666;">系统正在部署更新，暂时无法操作数据，请稍后再试。</p>
       <button id="btn-retry">刷新</button>
     </div>`
   document.getElementById('btn-retry').onclick = () => location.reload()
@@ -164,7 +164,7 @@ function renderMaintenance() {
 function renderLogin(errMsg = '') {
   app.innerHTML = `
     <div class="card" style="max-width:400px;margin:80px auto;">
-      <h1>厂商留库数据提交系统</h1>
+      <h1>厂商留库预约系统</h1>
       <div id="login-msg">${errMsg ? msg(errMsg, false) : ''}</div>
       <input id="email" placeholder="邮箱" />
       <input id="password" type="password" placeholder="密码" />
@@ -315,9 +315,12 @@ function renderMain() {
   const roleTag = isAdmin ? '（管理员）' : isLogistics ? '（物流商）' : ''
   app.innerHTML = `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
-      <div>
-        <h1 style="margin-bottom:4px;">厂商留库数据提交系统</h1>
-        <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <img src="./logo.png" style="height:45px; width:auto; object-fit:contain; border-radius:6px;" />
+        <div>
+          <h1 style="margin-bottom:4px;">厂商留库预约系统</h1>
+          <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
+        </div>
       </div>
       ${!isAdmin ? `
         <div id="main-countdown" style="display:none;flex:0 0 auto;">
@@ -514,7 +517,7 @@ function calcCountdown(range) {
     }
   }
   return {
-    text: '今日提报已截止',
+    text: '今日预约已截止',
     bg: 'linear-gradient(135deg,#fff2f0 0%,#ffccc7 100%)',
     border: '#ffa39e',
     color: '#cf1322'
@@ -681,7 +684,7 @@ async function renderFill(view) {
         <button class="secondary small" id="btn-add-in" style="margin-top:8px;">+ 添加入库行</button>
 
         <h3 style="margin:24px 0 8px;">出库单</h3>
-        <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：提交「DSP出库」前，必须已经提交过同货主、同商品的「DSP入库」单据。</p>
+        <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：预约「DSP出库」前，必须已经预约过同货主、同商品的「DSP入库」单据。</p>
         <div style="overflow-x:auto;">
           <table style="white-space:nowrap;">
             <thead>
@@ -752,7 +755,7 @@ async function renderFill(view) {
       const { data: cfg } = await supabase.from('system_config')
         .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
       if (cfg?.config_value === 'true') {
-        return msgEl.innerHTML = msg('系统部署维护中，暂时无法提交，请稍后再试', false)
+        return msgEl.innerHTML = msg('系统部署维护中，暂时无法预约，请稍后再试', false)
       }
 
       const filledIn = inRows.filter(isInRowFilled)
@@ -802,7 +805,7 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
-                     // ===== ★ DSP核验：包含当天已提交的数据 =====
+      // ===== ★ DSP核验：包含当天已提交的数据 =====
       const dspOutRows = validOut.filter(r => r.bill_type === 'DSP出库' || r.bill_type === 'DSP出货')
       
       if (dspOutRows.length > 0) {
@@ -848,7 +851,7 @@ async function renderFill(view) {
         // 5. 拦截
         if (finalMissing.length > 0) {
           const errCodes = [...new Set(finalMissing)].join('、')
-          return msgEl.innerHTML = msg(`提交失败：商品 [${errCodes}] 在今天没有对应的 DSP入库 记录。请先提交同货主、同商品的 DSP入库单。`, false)
+          return msgEl.innerHTML = msg(`提交失败：商品 [${errCodes}] 在今天没有对应的 DSP入库 记录。请先预约同货主、同商品的 DSP入库单。`, false)
         }
       }
       // ===== ★ DSP核验结束 =====
@@ -915,7 +918,7 @@ async function renderFill(view) {
       }))
 
       const all = [...inPayloads, ...outPayloads]
-      msgEl.innerHTML = msg('提交中...', true)
+      msgEl.innerHTML = msg('预约中...', true)
 
       const { error } = await supabase.from('bill_order').insert(all)
       if (error) {
@@ -923,7 +926,7 @@ async function renderFill(view) {
         return
       }
 
-      msgEl.innerHTML = msg(`提交成功：入库 ${inPayloads.length} 条，出库 ${outPayloads.length} 条`, true)
+      msgEl.innerHTML = msg(`预约成功：入库 ${inPayloads.length} 条，出库 ${outPayloads.length} 条`, true)
       inRows = [newInRowForVendor(myVendorCode)]
       outRows = [newOutRowForVendor(myVendorCode)]
       setTimeout(() => render(), 800)
