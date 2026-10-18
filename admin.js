@@ -459,8 +459,21 @@ async function renderBills(v) {
         if (btn.dataset.act === 'del-bill') {
           if (!confirm(`确定删除单据 #${id} 吗？此操作不可撤销！`)) return
           ;(async () => {
-            const { error } = await ctx.supabase.from('bill_order').delete().eq('id', id)
-            if (error) return alert(ctx.translateError(error.message))
+            const { data: { session } } = await ctx.supabase.auth.getSession()
+            const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-bill`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session.access_token}`
+              },
+              body: JSON.stringify({ bill_id: id })
+            })
+            if (!res.ok) {
+              const txt = await res.text()
+              let m = '删除失败，请重试'
+              try { m = ctx.translateError(JSON.parse(txt).error) } catch(e) {}
+              return alert(m)
+            }
             await logOp('delete_bill', '删除单据 ' + id)
             alert('已删除')
             await search()
