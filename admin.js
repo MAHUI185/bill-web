@@ -422,7 +422,12 @@ async function renderBills(v) {
             const product = document.getElementById('ab-product').value.trim()
             const spec = document.getElementById('ab-spec').value.trim()
             const qty = Number(document.getElementById('ab-qty').value)
-            if (!product || !spec || !qty) return msgEl.innerHTML = ctx.msg('商品、规格、数量为必填', false)
+            
+            if (!product || !spec || !qty) {
+              return msgEl.innerHTML = ctx.msg('商品、规格、数量为必填', false)
+            }
+
+            msgEl.innerHTML = ctx.msg('保存中...', true)
 
             const patch = {
               product_code: product,
@@ -433,12 +438,21 @@ async function renderBills(v) {
               effective_date: document.getElementById('ab-effective').value || null,
               remark: document.getElementById('ab-remark').value.trim()
             }
+            
             const { error } = await ctx.supabase.from('bill_order').update(patch).eq('id', id)
-            if (error) return msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+            
+            if (error) {
+              msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+              return
+            }
             
             await logOp('update_bill', '修改单据 ' + id)
-            alert('已保存')
-            search()
+            
+            // 1. 关闭面板
+            panel.innerHTML = ''
+            
+            // 2. 重新查询刷新表格
+            await search()
           }
         }
 
@@ -449,7 +463,7 @@ async function renderBills(v) {
             if (error) return alert(ctx.translateError(error.message))
             await logOp('delete_bill', '删除单据 ' + id)
             alert('已删除')
-            search()
+            await search()
           })()
         }
       }
