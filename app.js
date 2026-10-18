@@ -1,6 +1,6 @@
 import { supabase } from './supabase.js'
 
-const SUPABASE_URL = 'https://gpjdzgakvqhnpykuqbfr.supabase.co'
+const SUPABASE_URL = 'https://api.mahui.pw'
 
 const app = document.getElementById('app')
 let currentUser = null
@@ -172,6 +172,11 @@ function renderLogin(errMsg = '') {
       <button class="secondary" id="btn-goto-change" style="width:100%;margin-top:8px;">修改密码</button>
     </div>`
   document.getElementById('btn-login').onclick = async () => {
+    const btn = document.getElementById('btn-login')
+    const originalText = btn.innerText
+    btn.disabled = true
+    btn.innerText = '登录中...'
+    
     const email = document.getElementById('email').value.trim()
     const password = document.getElementById('password').value
     const { error } = await supabase.auth.signInWithPassword({ email, password })
@@ -181,6 +186,8 @@ function renderLogin(errMsg = '') {
           ? '登录失败，账号可能已禁用或密码错误，请联系管理员'
           : translateError(error.message),
         false)
+      btn.disabled = false
+      btn.innerText = originalText
       return
     }
 
@@ -313,8 +320,7 @@ function renderMain() {
   app.innerHTML = `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
       <div style="display:flex; align-items:center; gap:12px;">
-        <!-- ★ 引用本地 logo.png，如果丢失则自动隐藏防碎图 -->
-        <img src="./logo.png" style="height:45px; width:auto; object-fit:contain;" onerror="this.style.display='none'" />
+        <img src="./logo.png" style="height:45px;width:auto;object-fit:contain;" onerror="this.style.display='none'" />
         <div>
           <h1 style="margin-bottom:4px;">厂商留库预约系统</h1>
           <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
