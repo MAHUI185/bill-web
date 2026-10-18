@@ -458,25 +458,42 @@ async function renderBills(v) {
 
         if (btn.dataset.act === 'del-bill') {
           if (!confirm(`确定删除单据 #${id} 吗？此操作不可撤销！`)) return
+          
+          btn.disabled = true
+          btn.innerText = '删除中...'
+
           ;(async () => {
-            const { data: { session } } = await ctx.supabase.auth.getSession()
-            const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-bill`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${session.access_token}`
-              },
-              body: JSON.stringify({ bill_id: id })
-            })
-            if (!res.ok) {
-              const txt = await res.text()
-              let m = '删除失败，请重试'
-              try { m = ctx.translateError(JSON.parse(txt).error) } catch(e) {}
-              return alert(m)
+            try {
+              const { data: { session } } = await ctx.supabase.auth.getSession()
+              const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-bill`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${session?.access_token}`
+                },
+                body: JSON.stringify({ bill_id: id })
+              })
+              
+              const text = await res.text()
+              
+              if (!res.ok) {
+                // 如果服务器返回了错误，弹窗提示
+                alert('删除失败！错误信息：' + text)
+                btn.disabled = false
+                btn.innerText = '删除'
+                return
+              }
+              
+              // 成功
+              await logOp('delete_bill', '删除单据 ' + id)
+              alert('已成功删除')
+              await search()
+              
+            } catch (err) {
+              alert('网络异常：' + err.message)
+              btn.disabled = false
+              btn.innerText = '删除'
             }
-            await logOp('delete_bill', '删除单据 ' + id)
-            alert('已删除')
-            await search()
           })()
         }
       }
