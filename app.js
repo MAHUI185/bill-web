@@ -184,7 +184,6 @@ function renderLogin(errMsg = '') {
       return
     }
 
-    // ★ 登录成功：写登录日志 + 更新最后登录/活跃时间
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
@@ -199,9 +198,7 @@ function renderLogin(errMsg = '') {
           })
           .eq('id', user.id)
       }
-    } catch (e) {
-      console.warn('写登录日志失败', e)
-    }
+    } catch (e) {}
 
     await init()
   }
@@ -316,7 +313,7 @@ function renderMain() {
   app.innerHTML = `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
       <div style="display:flex; align-items:center; gap:12px;">
-        <img src="./logo.png" style="height:45px; width:auto; object-fit:contain; border-radius:6px;" />
+        <img src="data:image/png;base64,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" style="height:45px; width:auto; object-fit:contain; border-radius:6px;" />
         <div>
           <h1 style="margin-bottom:4px;">厂商留库预约系统</h1>
           <p style="margin:0;">当前用户：${currentProfile?.vendor_name || currentUser.email} ${roleTag}</p>
@@ -358,7 +355,6 @@ function renderMain() {
   nav.querySelector('button').classList.add('active')
   renderView(tabs[0][0])
 
-  // ★ 活跃心跳：每 3 分钟更新 last_active_at
   if (activeHeartbeatTimer) { clearInterval(activeHeartbeatTimer); activeHeartbeatTimer = null }
   if (currentUser) {
     const beat = async () => {
@@ -675,7 +671,7 @@ async function renderFill(view) {
               <tr>
                 <th>类型</th><th>供应商代码</th><th>货主代码</th>
                 <th>仓位</th><th>商品代码</th><th>规格</th>
-                <th>数量</th><th>到货日期</th><th>操作</th>
+                <th>箱数</th><th>到货日期</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="in-body"></tbody>
@@ -691,7 +687,7 @@ async function renderFill(view) {
               <tr>
                 <th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th>
                 <th>仓位</th><th>配货日期</th>
-                <th>商品代码</th><th>规格</th><th>数量</th><th>操作</th>
+                <th>商品代码</th><th>规格</th><th>箱数</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="out-body"></tbody>
@@ -772,7 +768,7 @@ async function renderFill(view) {
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
         if (!r.spec) missing.push('包装规格')
-        if (!r.quantity) missing.push('数量')
+        if (!r.quantity) missing.push('箱数')
         if (!r.arrival_date) missing.push('到货日期')
         if (missing.length) errors.push(`入库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
       })
@@ -786,7 +782,7 @@ async function renderFill(view) {
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
         if (!r.spec) missing.push('包装规格')
-        if (!r.quantity) missing.push('数量')
+        if (!r.quantity) missing.push('箱数')
         if (!r.pick_date) missing.push('配货日期')
         if (r.bill_type === 'DSP出库' && !r.store_code) missing.push('门店代码')
         if (missing.length) errors.push(`出库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
@@ -873,6 +869,17 @@ async function renderFill(view) {
         return msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false)
       }
 
+      // ★ 新增：解析规格并计算真实数量（例如 1*1*30 填 2 箱，结果为 60）
+      function calcQty(specStr, boxQty) {
+        if (!boxQty) return 0
+        if (!specStr) return Number(boxQty)
+        const parts = String(specStr).split('*')
+        // 取最后一个数字作为乘数
+        const multiplier = Number(parts[parts.length - 1])
+        if (isNaN(multiplier) || multiplier === 0) return Number(boxQty)
+        return Number(boxQty) * multiplier
+      }
+
       const inPayloads = validIn.map(r => ({
         vendor_id: vendorAuthId,
         warehouse_code: defaultWh,
@@ -884,7 +891,7 @@ async function renderFill(view) {
         logistics_mode: getModeByType(r.bill_type),
         product_code: r.product_code,
         spec: r.spec,
-        quantity: Number(r.quantity),
+        quantity: calcQty(r.spec, r.quantity),  // ★ 乘以规格得数量
         price: 1,
         arrival_date: r.arrival_date || null,
         effective_date: addOneDay(r.arrival_date),
@@ -909,7 +916,7 @@ async function renderFill(view) {
         effective_date: addOneDay(r.pick_date),
         product_code: r.product_code,
         spec: r.spec,
-        quantity: Number(r.quantity),
+        quantity: calcQty(r.spec, r.quantity),  // ★ 乘以规格得数量
         price: 1,
         group_name: null, split_flag: null, split_desc: null,
         product_remark: r.product_name || null,
@@ -1111,7 +1118,7 @@ async function renderFill(view) {
         <strong>入库 ${validIn.length} 条：</strong>
         ${validIn.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px; white-space:nowrap;">
-          <tr><th>类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th><th>到货日期</th></tr>
+          <tr><th>类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>品名</th><th>规格</th><th>箱数</th><th>到货日期</th></tr>
           ${validIn.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.vendor_code}</td><td>${r.owner_code}</td>
             <td>${r.location_code}</td><td>${r.product_code}</td><td>${r.product_name||''}</td><td>${r.spec}</td>
@@ -1123,7 +1130,7 @@ async function renderFill(view) {
         <strong>出库 ${validOut.length} 条：</strong>
         ${validOut.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px; white-space:nowrap;">
-          <tr><th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>数量</th></tr>
+          <tr><th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>箱数</th></tr>
           ${validOut.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.source_no || '-'}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
             <td>${r.location_code}</td><td>${r.pick_date || '-'}</td>
