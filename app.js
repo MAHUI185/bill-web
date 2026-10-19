@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-19 最终完整版）
+// app.js — 主逻辑（2026-10-19 最终完整版：含极速粘贴极严谨解析）
 
 import { supabase } from './supabase.js'
 
@@ -786,6 +786,20 @@ async function renderFill(view) {
 
         <h3 style="margin:24px 0 8px;">出库单</h3>
         <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：预约「DSP出库」前，必须已经预约过同货主、同商品的「DSP入库」单据。</p>
+        
+        <!-- ★ 新增：极速粘贴区 -->
+        <div style="background:#f0f5ff; border:1px dashed #91caff; border-radius:4px; padding:12px; margin-bottom:12px;">
+          <div style="font-size:13px; color:#1677ff; margin-bottom:8px; font-weight:bold;">
+            ⚡ 极速录入（从 Excel 复制：采购单号 / 货号 / 箱数）
+          </div>
+          <textarea id="out-paste-area" placeholder="在此粘贴，支持多行。例如：&#10;262881558   4303389   2&#10;262891373   4303387   2" style="width:100%; height:80px; padding:8px; border:1px solid #ccc; border-radius:4px; font-family:monospace; margin-bottom:8px;"></textarea>
+          <div style="display:flex; gap:8px;">
+            <button type="button" class="secondary" id="btn-parse-out" style="background:#e6f4ff; border-color:#1677ff; color:#1677ff;">解析并添加到下方表格</button>
+            <button type="button" class="secondary" id="btn-clear-paste" style="background:#fff; color:#666;">清空</button>
+          </div>
+        </div>
+        <!-- ★ 结束 -->
+
         <div style="overflow-x:auto;">
           <table style="white-space:nowrap;">
             <thead>
@@ -839,6 +853,98 @@ async function renderFill(view) {
       outRows.push(newOutRowForVendor(myVendorCode))
       renderOutTable()
       renderPreview()
+    }
+
+    // ★ 严谨版解析粘贴内容
+    document.getElementById('btn-parse-out').onclick = () => {
+      const txt = document.getElementById('out-paste-area').value.trim()
+      if (!txt) return alert('请先粘贴数据')
+
+      const lines = txt.split(/\r?\n/).filter(l => l.trim())
+      const parsedMap = new Map()
+      let errorMsgs = []
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        const cols = line.split(/\t|\s{2,}/).map(s => s.trim()).filter(Boolean)
+        
+        if (cols.length < 3) {
+          errorMsgs.push(`第 ${i+1} 行：列数不足（需包含 采购单号/货号/箱数）`)
+          continue
+        }
+
+        const source_no = cols[0]
+        const product_code = cols[1]
+        const boxQtyStr = cols[cols.length - 1]
+        const boxQty = Number(boxQtyStr)
+
+        if (!/^\d{9}$/.test(source_no)) {
+          errorMsgs.push(`第 ${i+1} 行：单号 [${source_no}] 格式错误，必须是 9 位纯数字`)
+          continue
+        }
+
+        if (isNaN(boxQty) || boxQty <= 0) {
+          errorMsgs.push(`第 ${i+1} 行：箱数 [${boxQtyStr}] 必须是大于 0 的数字`)
+          continue
+        }
+
+        const p = findProduct(product_code)
+        if (!p) {
+          errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 在商品库不存在，请先去“商品资料”添加`)
+          continue
+        }
+        
+        if (!isValidSpec(p.spec)) {
+          errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 规格 [${p.spec || '空'}] 不合规（必须是 1*1*X）`)
+          continue
+        }
+
+        const key = `${source_no}_${product_code}`
+        if (parsedMap.has(key)) {
+          parsedMap.get(key).quantity += boxQty
+        } else {
+          parsedMap.set(key, {
+            source_no,
+            product_code,
+            product_name: p.product_name || '',
+            spec: p.spec,
+            quantity: boxQty
+          })
+        }
+      }
+
+      if (errorMsgs.length > 0) {
+        alert(`❌ 解析失败，请修正后重试：\n\n` + errorMsgs.slice(0, 5).join('\n') + (errorMsgs.length > 5 ? '\n...等更多错误' : ''))
+        return
+      }
+
+      let addedCount = 0
+      parsedMap.forEach(item => {
+        const existRow = outRows.find(r => r.source_no === item.source_no && r.product_code === item.product_code)
+        
+        if (existRow) {
+          existRow.quantity = Number(existRow.quantity) + item.quantity
+        } else {
+          const newRow = newOutRowForVendor(myVendorCode)
+          newRow.source_no = item.source_no
+          newRow.product_code = item.product_code
+          newRow.product_name = item.product_name
+          newRow.spec = item.spec
+          newRow.quantity = item.quantity
+          outRows.push(newRow)
+          addedCount++
+        }
+      })
+
+      document.getElementById('out-paste-area').value = ''
+      renderOutTable()
+      renderPreview()
+      
+      alert(`✅ 解析成功！共处理 ${parsedMap.size} 个商品。${addedCount > 0 ? `(新增 ${addedCount} 行)` : '(已合并到现有行)'}`)
+    }
+
+    document.getElementById('btn-clear-paste').onclick = () => {
+      document.getElementById('out-paste-area').value = ''
     }
 
     const btnClear = document.getElementById('btn-clear-all')
