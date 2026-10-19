@@ -1,12 +1,17 @@
-// admin.js — 管理后台
+// admin.js — 管理后台（2026-10-19 最终完整版）
 
 let ctx = null
 let operatorName = '未知'
 
+function isValidSpec(spec) {
+  if (!spec) return false
+  return /^1\*1\*[1-9]\d*$/.test(String(spec).trim())
+}
+const SIZE_EMPTY_MSG = '长、宽、高、重量为必填，请到「商品资料」补全'
+
 export async function renderAdmin(view, context) {
   ctx = context
 
-  // 确定操作人姓名：管理员用 admin_users.name，厂商用 contact_name
   if (context.currentRole) {
     const { data: au } = await context.supabase.from('admin_users')
       .select('name').eq('id', context.currentUser.id).maybeSingle()
@@ -17,7 +22,6 @@ export async function renderAdmin(view, context) {
   }
   ctx.operatorName = operatorName
 
-  // ★ 根据角色分配菜单
   let menuHtml = ''
   if (context.currentRole === 'super_admin') {
     menuHtml = `
@@ -37,7 +41,7 @@ export async function renderAdmin(view, context) {
       <button data-t="vendors">厂商管理</button>
       <button data-t="logistics">物流商管理</button>
     `
-  } else { // 助理 assistant
+  } else {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
       <button data-t="bills">单据管理</button>
@@ -52,7 +56,7 @@ export async function renderAdmin(view, context) {
       </div>
       <div id="admin-view"></div>
     </div>`
-    
+
   document.querySelectorAll('#admin-tabs button').forEach(b => {
     b.onclick = () => {
       document.querySelectorAll('#admin-tabs button').forEach(x => x.classList.remove('active'))
@@ -85,7 +89,6 @@ function isSuper() {
   return ctx.currentRole === 'super_admin'
 }
 
-// ========== 日志辅助 ==========
 async function logOp(action, target, detail = {}) {
   try {
     await ctx.supabase.from('operation_log').insert({
@@ -148,7 +151,7 @@ async function renderProgress(v) {
     <div class="row" style="margin-bottom:12px;">
       <input id="p-search" placeholder="搜索厂编/名称" />
       <select id="p-status">
-        <option value="">全部</option>
+        <option value="">全部状态</option>
         <option value="reported">今日已提报</option>
         <option value="not">今日未提报</option>
         <option value="nologin">今日未登录</option>
@@ -200,6 +203,10 @@ async function renderProgress(v) {
 // ================= 2. 单据管理 =================
 async function renderBills(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
+  const { data: vendors } = await ctx.supabase.from('vendor_profile').select('vendor_code, vendor_name').eq('account_type', 'vendor')
+  const vMap = {}
+  ;(vendors || []).forEach(x => { vMap[x.vendor_code] = x.vendor_name })
+
   v.innerHTML = `
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
       <h2>Excel 导入单据</h2>
@@ -231,28 +238,35 @@ async function renderBills(v) {
       </div>
       <div id="export-msg"></div>
     </div>
-    <div class="card" style="box-shadow:none;padding:0;">
+    <div class="card" style="box-shadow:none;padding:0;" id="bill-query-card">
       <h2>单据查询</h2>
       <div class="row">
         <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" />
         <select id="b-wh"><option value="">全部仓库</option>${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
         <select id="b-exported"><option value="">全部</option><option value="0">未导出</option><option value="1">已导出</option></select>
-        <button id="btn-b-search" class="secondary">查询</button>
+        <button id="btn-b-search" class="secondary" style="margin-left:8px;">查询明细</button>
       </div>
-      <div class="scroll">
+      <div class="row" style="background:#fafafa;padding:12px;border-radius:4px;margin-bottom:12px;align-items:flex-end;">
+        <div style="flex:0 0 200px;">
+          <label style="font-size:12px;color:#666;">统计开始日期</label>
+          <input id="stat-start" type="date" style="margin-bottom:0;" />
+        </div>
+        <div style="flex:0 0 200px;">
+          <label style="font-size:12px;color:#666;">统计结束日期</label>
+          <input id="stat-end" type="date" style="margin-bottom:0;" />
+        </div>
+        <div style="flex:0 0 auto;">
+          <button id="btn-stat" class="secondary" style="background:#e6f4ff;color:#1677ff;border-color:#91caff;">统计箱数</button>
+        </div>
+      </div>
+      <div class="scroll" id="query-result-box">
         <table>
-          <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
+          <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           <tbody id="b-body"></tbody>
         </table>
       </div>
     </div>
-    <div id="admin-edit-bill-panel"></div>
-    <div class="card" style="box-shadow:none;padding:0;">
-      <details>
-        <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">导出批次（点击展开）</summary>
-        <div id="batch-body" style="margin-top:12px;">加载中...</div>
-      </details>
-    </div>`
+    <div id="admin-edit-bill-panel"></div>`
 
   document.getElementById('btn-show-rule').onclick = async () => {
     const type = document.getElementById('imp-type').value
@@ -363,20 +377,27 @@ async function renderBills(v) {
   }
 
   const search = async () => {
+    document.getElementById('query-result-box').innerHTML = `
+      <table>
+        <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
+        <tbody id="b-body"></tbody>
+      </table>`
+    
     let q = ctx.supabase.from('bill_order').select('*').order('id', { ascending: false }).limit(200)
     const kw = document.getElementById('b-search').value.trim()
     const wh = document.getElementById('b-wh').value
     const ex = document.getElementById('b-exported').value
-    
+
     if (kw) q = q.or(`vendor_code.ilike.%${kw}%,source_no.ilike.%${kw}%,product_code.ilike.%${kw}%`)
-    
+
     if (wh) q = q.eq('warehouse_code', wh)
     if (ex === '0') q = q.eq('exported', false)
     if (ex === '1') q = q.eq('exported', true)
     const { data } = await q
     document.getElementById('b-body').innerHTML = (data||[]).map(b => `<tr>
       <td>${b.id}</td><td>${b.source_no||''}</td><td>${b.bill_type||''}</td>
-      <td>${b.vendor_code||''}</td><td>${b.warehouse_name||b.warehouse_code||''}</td>
+      <td>${b.vendor_code||''}</td><td>${vMap[b.vendor_code] || ''}</td>
+      <td>${b.warehouse_name||b.warehouse_code||''}</td>
       <td>${b.product_code||''}</td><td>${b.quantity||''}</td>
       <td>${b.exported ? '是' : '否'}</td>
       <td>${new Date(b.created_at).toLocaleString()}</td>
@@ -384,7 +405,7 @@ async function renderBills(v) {
         <button class="small secondary" data-act="edit-bill" data-id="${b.id}">修改</button>
         ${isSuper() ? `<button class="small danger" data-act="del-bill" data-id="${b.id}">删除</button>` : ''}
       </td>
-    </tr>`).join('') || '<tr><td colspan="10">无数据</td></tr>'
+    </tr>`).join('') || '<tr><td colspan="11">无数据</td></tr>'
 
     document.querySelectorAll('#b-body button[data-act]').forEach(btn => {
       btn.onclick = () => {
@@ -422,7 +443,7 @@ async function renderBills(v) {
             const product = document.getElementById('ab-product').value.trim()
             const spec = document.getElementById('ab-spec').value.trim()
             const qty = Number(document.getElementById('ab-qty').value)
-            
+
             if (!product || !spec || !qty) {
               return msgEl.innerHTML = ctx.msg('商品、规格、数量为必填', false)
             }
@@ -438,27 +459,24 @@ async function renderBills(v) {
               effective_date: document.getElementById('ab-effective').value || null,
               remark: document.getElementById('ab-remark').value.trim()
             }
-            
+
             const { error } = await ctx.supabase.from('bill_order').update(patch).eq('id', id)
-            
+
             if (error) {
               msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
               return
             }
-            
+
             await logOp('update_bill', '修改单据 ' + id)
-            
-            // 1. 关闭面板
+
             panel.innerHTML = ''
-            
-            // 2. 重新查询刷新表格
             await search()
           }
         }
 
         if (btn.dataset.act === 'del-bill') {
           if (!confirm(`确定删除单据 #${id} 吗？此操作不可撤销！`)) return
-          
+
           btn.disabled = true
           btn.innerText = '删除中...'
 
@@ -473,22 +491,20 @@ async function renderBills(v) {
                 },
                 body: JSON.stringify({ bill_id: id })
               })
-              
+
               const text = await res.text()
-              
+
               if (!res.ok) {
-                // 如果服务器返回了错误，弹窗提示
                 alert('删除失败！错误信息：' + text)
                 btn.disabled = false
                 btn.innerText = '删除'
                 return
               }
-              
-              // 成功
+
               await logOp('delete_bill', '删除单据 ' + id)
               alert('已成功删除')
               await search()
-              
+
             } catch (err) {
               alert('网络异常：' + err.message)
               btn.disabled = false
@@ -500,27 +516,67 @@ async function renderBills(v) {
     })
   }
   document.getElementById('btn-b-search').onclick = search
-  search()
+  
+  document.getElementById('btn-stat').onclick = async () => {
+    const start = document.getElementById('stat-start').value
+    const end = document.getElementById('stat-end').value
+    if (!start || !end) return alert('请选择完整的开始和结束日期')
 
-  ;(async () => {
-    const { data: batches } = await ctx.supabase
-      .from('export_batch_detail').select('*')
-      .order('id', { ascending: false }).limit(100)
-    const el = document.getElementById('batch-body')
-    if (!el) return
-    el.innerHTML = `
-      <div class="scroll">
-        <table><tr><th>批次号</th><th>仓库</th><th>开始</th><th>结束</th><th>类型</th><th>条数</th><th>操作人</th><th>时间</th></tr>
-          <tbody>${(batches||[]).map(r=>`<tr>
-            <td>${r.batch_no}</td><td>${r.warehouse_code||''}</td>
-            <td>${r.start_date||''}</td><td>${r.end_date||''}</td>
-            <td>${r.bill_type||''}</td>
-            <td>${r.bill_count_snapshot ?? r.count ?? 0}（实际 ${r.actual_count||0}）</td>
-            <td>${r.operator||''}</td>
-            <td>${new Date(r.created_at).toLocaleString()}</td>
-          </tr>`).join('') || '<tr><td colspan="8">无数据</td></tr>'}</tbody></table>
-      </div>`
-  })()
+    const resultBox = document.getElementById('query-result-box')
+    resultBox.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">统计中...</div>'
+
+    const { data, error } = await ctx.supabase.from('bill_order')
+      .select('bill_type, spec, quantity, created_at')
+      .gte('created_at', start + 'T00:00:00+08:00')
+      .lte('created_at', end + 'T23:59:59+08:00')
+
+    if (error) return resultBox.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    if (!data || !data.length) return resultBox.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">该时间段内无数据</div>'
+
+    const summary = {}
+    data.forEach(b => {
+      const bjDate = new Date(b.created_at).toLocaleString('en-CA', {
+        timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
+      }).slice(0, 10)
+      const isIn = b.bill_type.includes('入库')
+      const type = isIn ? '入库' : '出库'
+      const multiplier = Number(String(b.spec || '1').split('*').pop()) || 1
+      const boxes = Math.round(b.quantity / multiplier)
+
+      const key = `${bjDate}_${type}`
+      if (!summary[key]) summary[key] = { date: bjDate, type, boxes: 0, count: 0 }
+      summary[key].boxes += boxes
+      summary[key].count += 1
+    })
+
+    const list = Object.values(summary).sort((a, b) => {
+      if (a.date !== b.date) return b.date.localeCompare(a.date)
+      return a.type === '入库' ? -1 : 1
+    })
+
+    const totalIn = list.filter(r => r.type === '入库').reduce((s, r) => s + r.boxes, 0)
+    const totalOut = list.filter(r => r.type === '出库').reduce((s, r) => s + r.boxes, 0)
+
+    resultBox.innerHTML = `
+      <div style="padding:12px;background:#f0f5ff;border:1px solid #adc6ff;border-radius:4px;margin-bottom:12px;font-size:14px;">
+        <strong>统计区间：</strong>${start} ~ ${end}
+        <span style="margin-left:24px;color:#1677ff;"><strong>入库合计：</strong>${totalIn} 箱</span>
+        <span style="margin-left:24px;color:#d46b08;"><strong>出库合计：</strong>${totalOut} 箱</span>
+      </div>
+      <table>
+        <tr><th>日期</th><th>类型</th><th>单据数</th><th>合计箱数</th></tr>
+        <tbody>${list.map(r => `<tr>
+          <td>${r.date}</td>
+          <td>${r.type === '入库'
+            ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;">入库</span>'
+            : '<span class="stat ok" style="background:#fff7e6;color:#d46b08;">出库</span>'}</td>
+          <td>${r.count}</td>
+          <td style="font-weight:bold;font-size:15px;">${r.boxes} 箱</td>
+        </tr>`).join('')}</tbody>
+      </table>`
+  }
+
+  search()
 }
 
 // ================= 3. 厂商管理 =================
@@ -784,7 +840,6 @@ async function renderVendors(v) {
   }
   renderVendorTable()
 
-  // 创建厂商
   document.getElementById('btn-create-vendor').onclick = async () => {
     const whSel = document.getElementById('v-wh')
     const whsSel = Array.from(whSel.selectedOptions).map(o => o.value)
@@ -820,7 +875,6 @@ async function renderVendors(v) {
     }
   }
 
-  // 批量导入厂商
   const btnBatchImport = document.getElementById('btn-batch-import')
   if (btnBatchImport) btnBatchImport.onclick = async () => {
     const file = document.getElementById('batch-file').files[0]
@@ -910,7 +964,6 @@ async function renderVendors(v) {
           }
         }
 
-        // 汇总一条日志
         await logOp('batch_import_vendor', '批量导入厂商', {
           total: list.length,
           success: success.length,
@@ -1059,7 +1112,7 @@ async function renderLogistics(v) {
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
       <h2>创建物流商</h2>
       <div class="row">
-        <input id="lg-code" placeholder="物流商编号 *" />
+        <input id="lg-code" placeholder="物流商编号 (必须 999 开头) *" />
         <input id="lg-name" placeholder="物流商名称 *" />
         <input id="lg-pwd" placeholder="初始密码 *" />
       </div>
@@ -1103,6 +1156,10 @@ async function renderLogistics(v) {
     const codes = lgPicker.getSelected()
 
     if (!code) { msgEl.innerHTML = ctx.msg('请填写物流商编号', false); return }
+    if (!/^999\d+$/.test(code)) {
+      msgEl.innerHTML = ctx.msg('物流商编号必须是以 999 开头的纯数字（如 999001）', false);
+      return
+    }
     if (!name) { msgEl.innerHTML = ctx.msg('请填写物流商名称', false); return }
     if (!pwd || pwd.length < 6) { msgEl.innerHTML = ctx.msg('密码至少 6 位', false); return }
     if (!codes.length) { msgEl.innerHTML = ctx.msg('请至少选择一个负责厂商', false); return }
@@ -1579,7 +1636,6 @@ async function renderWh(v) {
         document.getElementById('l-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
         return
       }
-      // 同步写映射表（import-bills 依赖）
       await ctx.supabase.from('location_warehouse_map').insert({
         location_code: code,
         warehouse_code: selectedCode,
@@ -1689,7 +1745,13 @@ async function renderProduct(v) {
       </div>
       <div class="row">
         <input id="pm-name" placeholder="品名 *" />
-        <input id="pm-spec" placeholder="规格 *" />
+        <input id="pm-spec" placeholder="规格 * (1*1*X)" />
+      </div>
+      <div class="row">
+        <input id="pm-length" type="number" step="0.01" min="0.01" placeholder="长 *" />
+        <input id="pm-width"  type="number" step="0.01" min="0.01" placeholder="宽 *" />
+        <input id="pm-height" type="number" step="0.01" min="0.01" placeholder="高 *" />
+        <input id="pm-weight" type="number" step="0.01" min="0.01" placeholder="重量 *" />
       </div>
       <button id="btn-pm-add">新增商品</button>
       <div id="pm-msg"></div>
@@ -1697,10 +1759,13 @@ async function renderProduct(v) {
     <div class="card" style="box-shadow:none;padding:0;">
       <h2>商品列表</h2>
       <div class="scroll">
-        <table><tr><th>仓库</th><th>商品代码</th><th>商品名称</th><th>规格</th><th>默认厂编</th><th>默认仓位</th><th>默认物流</th><th>操作</th></tr>
+        <table><tr><th>仓库</th><th>商品代码</th><th>商品名称</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>默认厂编</th><th>默认仓位</th><th>默认物流</th><th>操作</th></tr>
           <tbody>${(data||[]).map(r=>`<tr>
             <td>${r.warehouse_code||''}</td><td>${r.product_code}</td><td>${r.product_name||''}</td>
-            <td>${r.spec||''}</td><td>${r.default_vendor_code||''}</td>
+            <td>${r.spec||''}</td>
+            <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''}</td>
+            <td>${r.weight ?? ''}</td>
+            <td>${r.default_vendor_code||''}</td>
             <td>${r.default_location_code||''}</td><td>${r.default_logistics_mode||''}</td>
             <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.product_code}">删除</button>` : ''}</td>
           </tr>`).join('')}</tbody></table>
@@ -1718,6 +1783,10 @@ async function renderProduct(v) {
       product_code: r['商品代码'] || r['product_code'],
       product_name: r['商品名称'] || r['商品标识'] || r['product_name'],
       spec: r['包装规格'] || r['spec'],
+      length: r['长'] || r['length'],
+      width: r['宽'] || r['width'],
+      height: r['高'] || r['height'],
+      weight: r['重量'] || r['weight'],
       default_vendor_code: r['默认厂编'] || r['default_vendor_code'],
       default_owner_code: r['默认货主'] || r['default_owner_code'],
       default_location_code: r['默认仓位'] || r['default_location_code'],
@@ -1739,7 +1808,14 @@ async function renderProduct(v) {
     })
     const json = await res.json()
     if (res.ok) {
-      document.getElementById('p-msg').innerHTML = ctx.msg(`导入 ${json.count} 条`, true)
+      let h = ctx.msg(`导入 ${json.count} 条`, true)
+      if (json.fail_count > 0 && json.errors?.length) {
+        h += `<div class="scroll" style="max-height:200px;font-size:12px;color:#cf1322;margin-top:8px;">
+          <div style="margin-bottom:4px;">失败 ${json.fail_count} 条：</div>
+          ${json.errors.map(e => `<div>${e}</div>`).join('')}
+        </div>`
+      }
+      document.getElementById('p-msg').innerHTML = h
       renderBaseSub('product')
     } else {
       document.getElementById('p-msg').innerHTML = ctx.msg(ctx.translateError(json.error || '导入失败'), false)
@@ -1748,14 +1824,31 @@ async function renderProduct(v) {
 
   document.getElementById('btn-pm-add').onclick = async () => {
     const msgEl = document.getElementById('pm-msg')
-    const wh = document.getElementById('pm-wh').value
-    const code = document.getElementById('pm-code').value.trim()
+    const wh     = document.getElementById('pm-wh').value
+    const code   = document.getElementById('pm-code').value.trim()
     const vendor = document.getElementById('pm-vendor').value.trim()
-    const name = document.getElementById('pm-name').value.trim()
-    const spec = document.getElementById('pm-spec').value.trim()
+    const name   = document.getElementById('pm-name').value.trim()
+    const spec   = document.getElementById('pm-spec').value.trim()
+    const length = document.getElementById('pm-length').value.trim()
+    const width  = document.getElementById('pm-width').value.trim()
+    const height = document.getElementById('pm-height').value.trim()
+    const weight = document.getElementById('pm-weight').value.trim()
 
-    if (!code || !vendor || !name || !spec) {
-      msgEl.innerHTML = ctx.msg('商品代码、厂编、品名、规格为必填', false); return
+    if (!code || !vendor || !name) {
+      msgEl.innerHTML = ctx.msg('商品代码、厂编、品名为必填', false); return
+    }
+    if (!spec) {
+      msgEl.innerHTML = ctx.msg('包装规格为必填', false); return
+    }
+    if (!isValidSpec(spec)) {
+      msgEl.innerHTML = ctx.msg('包装规格格式错误，必须是 1*1*X（X 为正整数，如 1*1*24）', false); return
+    }
+    if (!length || !width || !height || !weight) {
+      msgEl.innerHTML = ctx.msg(SIZE_EMPTY_MSG, false); return
+    }
+    const nums = [length, width, height, weight].map(v => Number(v))
+    if (nums.some(v => isNaN(v) || v <= 0)) {
+      msgEl.innerHTML = ctx.msg('长、宽、高、重量必须为正数', false); return
     }
 
     const { data: exist } = await ctx.supabase.from('product_master')
@@ -1775,6 +1868,10 @@ async function renderProduct(v) {
       product_code: code,
       product_name: name,
       spec,
+      length: Number(length),
+      width:  Number(width),
+      height: Number(height),
+      weight: Number(weight),
       default_vendor_code: vendor,
       default_owner_code: vendor
     })
@@ -1814,7 +1911,7 @@ async function renderDeadline(v) {
     <table><tr><th>厂编</th><th>仓库</th><th>日类型</th><th>时间段</th><th>操作</th></tr>
       <tbody>${(data||[]).map(r=>`<tr>
         <td>${r.vendor_code||'（全部）'}</td><td>${r.warehouse_code||'（全部）'}</td>
-        <td>${r.day_type}</td><td>${r.config_value}</td>
+        <td>${r.day_type === 'weekday' ? '工作日' : r.day_type === 'weekend' ? '周末' : '全部'}</td><td>${r.config_value}</td>
         <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-value="${r.config_value}">删除</button>` : ''}</td>
       </tr>`).join('')}</tbody></table>`
   document.getElementById('btn-d-add').onclick = async () => {
@@ -1941,25 +2038,31 @@ async function renderLogs(v) {
     .select('*').order('id', { ascending: false }).limit(200)
   const { data: edits } = await ctx.supabase.from('vendor_edit_log')
     .select('*').order('id', { ascending: false }).limit(200)
+  
+  const { data: batches } = await ctx.supabase.from('export_batch_detail')
+    .select('*').order('id', { ascending: false }).limit(200)
 
   v.innerHTML = `
     <div class="tabs" id="log-tabs">
       <button data-t="op" class="active">操作日志</button>
       <button data-t="edit">厂商修改记录</button>
+      <button data-t="batch">导出批次</button>
     </div>
     <div id="log-view"></div>`
 
   const renderOp = () => {
     document.getElementById('log-view').innerHTML = `
       <div class="scroll">
-        <table><tr><th>时间</th><th>操作人</th><th>动作</th><th>目标</th><th>详情</th></tr>
+        <table>
+          <tr><th>操作时间</th><th>操作用户</th><th>操作动作</th><th>目标对象</th><th>详细内容</th></tr>
           <tbody>${(ops||[]).map(r=>`<tr>
             <td>${new Date(r.created_at).toLocaleString()}</td>
             <td>${r.operator_name||''}</td>
             <td>${ACTION_CN[r.action] || r.action || ''}</td>
             <td>${r.target||''}</td>
-            <td><button class="small secondary" data-detail="${r.id}">查看</button></td>
-          </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody></table>
+            <td><button class="small secondary" data-detail="${r.id}">查看详情</button></td>
+          </tr>`).join('') || '<tr><td colspan="5">暂无数据</td></tr>'}</tbody>
+        </table>
       </div>
       <div id="log-detail-panel"></div>`
 
@@ -1970,9 +2073,9 @@ async function renderLogs(v) {
         if (!r) return
         const d = r.detail || {}
         let html = `<div class="card" style="margin-top:12px;border:2px solid #1677ff;">
-          <h2>详情 · ${ACTION_CN[r.action] || r.action}</h2>
+          <h2>日志详情 · ${ACTION_CN[r.action] || r.action}</h2>
           <p style="font-size:13px;color:#666;margin-bottom:8px;">
-            操作人：${r.operator_name||''} ｜ 目标：${r.target||''} ｜ 时间：${new Date(r.created_at).toLocaleString()}
+            操作用户：${r.operator_name||''} ｜ 目标对象：${r.target||''} ｜ 操作时间：${new Date(r.created_at).toLocaleString()}
           </p>`
 
         if (Array.isArray(d.success_list) || Array.isArray(d.failed_list)) {
@@ -1980,7 +2083,7 @@ async function renderLogs(v) {
             ${(d.success_list||[]).join(', ') || '无'}</div>`
           html += `<div><strong>失败 ${d.failed || 0} 条：</strong>`
           if ((d.failed_list||[]).length) {
-            html += `<table style="margin-top:6px;"><tr><th>厂编</th><th>原因</th></tr>
+            html += `<table style="margin-top:6px;"><tr><th>厂编</th><th>失败原因</th></tr>
               ${d.failed_list.map(f => `<tr><td>${f.vendor_code||''}</td><td style="color:#cf1322;">${f.error||''}</td></tr>`).join('')}
             </table>`
           } else {
@@ -2003,14 +2106,16 @@ async function renderLogs(v) {
   const renderEdit = () => {
     document.getElementById('log-view').innerHTML = `
       <div class="scroll">
-        <table><tr><th>时间</th><th>单据ID</th><th>厂编</th><th>修改字段</th><th>操作</th></tr>
+        <table>
+          <tr><th>修改时间</th><th>单据ID</th><th>厂编</th><th>修改字段</th><th>操作</th></tr>
           <tbody>${(edits||[]).map(r=>`<tr>
             <td>${new Date(r.created_at).toLocaleString()}</td>
             <td>${r.bill_id}</td>
             <td>${r.vendor_code||''}</td>
             <td style="font-size:11px;">${(r.changed_fields||[]).join(', ')}</td>
-            <td><button class="small secondary" data-detail="${r.id}">详情</button></td>
-          </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}</tbody></table>
+            <td><button class="small secondary" data-detail="${r.id}">查看详情</button></td>
+          </tr>`).join('') || '<tr><td colspan="5">暂无数据</td></tr>'}</tbody>
+        </table>
       </div>`
 
     document.querySelectorAll('[data-detail]').forEach(btn => {
@@ -2021,8 +2126,8 @@ async function renderLogs(v) {
         const before = r.before_data || {}
         const after = r.after_data || {}
         const fields = r.changed_fields || []
-        let html = `<div class="card" style="margin-top:12px;"><h2>修改详情 #${r.bill_id}</h2><table>
-          <tr><th>字段</th><th>修改前</th><th>修改后</th></tr>`
+        let html = `<div class="card" style="margin-top:12px;"><h2>修改详情（单据 #${r.bill_id}）</h2><table>
+          <tr><th>字段名</th><th>修改前</th><th>修改后</th></tr>`
         fields.forEach(f => {
           html += `<tr>
             <td>${f}</td>
@@ -2036,12 +2141,30 @@ async function renderLogs(v) {
     })
   }
 
+  const renderBatch = () => {
+    document.getElementById('log-view').innerHTML = `
+      <div class="scroll">
+        <table>
+          <tr><th>批次号</th><th>仓库</th><th>开始日期</th><th>结束日期</th><th>类型</th><th>条数</th><th>操作人</th><th>时间</th></tr>
+          <tbody>${(batches||[]).map(r=>`<tr>
+            <td>${r.batch_no}</td><td>${r.warehouse_code||''}</td>
+            <td>${r.start_date||''}</td><td>${r.end_date||''}</td>
+            <td>${r.bill_type||''}</td>
+            <td>${r.bill_count_snapshot ?? r.count ?? 0}（实际 ${r.actual_count||0}）</td>
+            <td>${r.operator||''}</td>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+          </tr>`).join('') || '<tr><td colspan="8">暂无数据</td></tr>'}</tbody>
+        </table>
+      </div>`
+  }
+
   document.querySelectorAll('#log-tabs button').forEach(b => {
     b.onclick = () => {
       document.querySelectorAll('#log-tabs button').forEach(x => x.classList.remove('active'))
       b.classList.add('active')
       if (b.dataset.t === 'op') renderOp()
-      else renderEdit()
+      else if (b.dataset.t === 'edit') renderEdit()
+      else renderBatch()
     }
   })
 
@@ -2074,10 +2197,29 @@ async function renderSys(v) {
   ;(cfgs||[]).forEach(x => cfgMap[x.config_key] = x.config_value)
   const cleanupDays = cfgMap.cleanup_days || '7'
   const cleanupTime = cfgMap.cleanup_time || '03:00'
+  
+  const isMaintenance = cfgMap.maintenance_mode === 'true'
 
   v.innerHTML = `
+    <div class="card" style="box-shadow:none;padding:0 0 16px; ${isMaintenance ? 'border:2px solid #ff4d4f;' : ''}">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h2 style="margin:0; color:${isMaintenance ? '#cf1322' : '#333'};">
+            维护模式：${isMaintenance ? '⚠️ 已开启（全站拦截）' : '正常运行中'}
+          </h2>
+          <p style="font-size:12px;color:#666;margin-top:8px;">
+            开启后，所有正在进行操作的账号将被强制踢出，并无法提交任何单据。
+          </p>
+        </div>
+        <button id="btn-toggle-maintenance" style="${isMaintenance ? 'background:#389e0d;' : 'background:#ff4d4f;'}">
+          ${isMaintenance ? '关闭维护模式' : '开启维护模式'}
+        </button>
+      </div>
+      <div id="maintenance-msg" style="margin-top:12px;"></div>
+    </div>
+
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
-      <h2>系统配置</h2>
+      <h2>系统配置（手动修改）</h2>
       <div class="row">
         <input id="c-key" placeholder="配置键 *" />
         <input id="c-val" placeholder="配置值" />
@@ -2092,6 +2234,7 @@ async function renderSys(v) {
           <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-key="${r.config_key}">删除</button>` : ''}</td>
         </tr>`).join('')}</tbody></table>
     </div>
+
     <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #91caff;">
       <h2>定时清理配置（仅超管）</h2>
       <p style="font-size:12px;color:#666;margin:8px 0;">
@@ -2110,6 +2253,7 @@ async function renderSys(v) {
       <button id="btn-save-cleanup" ${isSuper() ? '' : 'disabled'}>保存（立即生效）</button>
       <div id="cleanup-msg"></div>
     </div>
+    
     <div class="card" style="box-shadow:none;padding:0;">
       <details>
         <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">版本历史（点击展开）</summary>
@@ -2128,6 +2272,26 @@ async function renderSys(v) {
         </div>
       </details>
     </div>`
+
+  document.getElementById('btn-toggle-maintenance').onclick = async () => {
+    const newStatus = isMaintenance ? 'false' : 'true'
+    const action = isMaintenance ? '关闭' : '开启'
+    if (!confirm(`确定要${action}维护模式吗？\n\n开启会强制踢出所有在线用户！`)) return
+
+    const msgEl = document.getElementById('maintenance-msg')
+    msgEl.innerHTML = ctx.msg('切换中...', true)
+
+    const { error } = await ctx.supabase.from('system_config')
+      .upsert({ config_key: 'maintenance_mode', config_value: newStatus, updated_by: ctx.operatorName }, { onConflict: 'config_key' })
+    
+    if (error) {
+      msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      return
+    }
+    
+    await logOp('save_system_config', `维护模式-${action}`, { value: newStatus })
+    renderTab('sys')
+  }
 
   document.getElementById('btn-c-save').onclick = async () => {
     const key = document.getElementById('c-key').value.trim()

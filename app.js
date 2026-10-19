@@ -1,6 +1,11 @@
+// app.js — 主逻辑（2026-10-19 最终完整版）
+
 import { supabase } from './supabase.js'
 
-const SUPABASE_URL = 'https://api.mahui.pw'
+// 动态判断请求地址：手机/平板走代理，电脑直连
+const SUPABASE_URL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent)
+  ? 'https://api.mahui.pw'
+  : 'https://gpjdzgakvqhnpykuqbfr.supabase.co'
 
 const app = document.getElementById('app')
 let currentUser = null
@@ -11,12 +16,28 @@ let isLogistics = false
 let myVendors = []
 let countdownTimer = null
 let activeHeartbeatTimer = null
+let maintenanceCheckTimer = null
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
 }
 
-// 统一错误翻译（Auth + DB + 网络）
+// ========== 商品规格与尺寸校验工具 ==========
+
+function isValidSpec(spec) {
+  if (!spec) return false
+  return /^1\*1\*[1-9]\d*$/.test(String(spec).trim())
+}
+
+const SPEC_EMPTY_MSG = '包装规格为空，请先到「商品资料」补全规格后再提报'
+const SIZE_EMPTY_MSG = '长、宽、高、重量为必填，请到「商品资料」补全'
+
+function isValidSize(length, width, height, weight) {
+  const vals = [length, width, height, weight].map(v => Number(v))
+  return vals.every(v => !isNaN(v) && v > 0)
+}
+
+// 统一错误翻译
 function translateError(errMsg) {
   if (!errMsg) return '操作失败'
   const m = String(errMsg).toLowerCase()
@@ -90,22 +111,58 @@ function translateError(errMsg) {
   return '操作失败：' + errMsg
 }
 
-async function init() {
-  const { data: cfg } = await supabase.from('system_config')
-    .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
-  if (cfg?.config_value === 'true') return renderMaintenance()
+// 带超时机制
+function withTimeout(promise, ms = 5000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
+  ])
+}
 
-  const { data: { session } } = await supabase.auth.getSession()
-  if (!session) return renderLogin()
-  currentUser = session.user
-  const ok = await loadProfile()
-  if (!ok) return
-  renderMain()
+async function init() {
+  try {
+    const { data: cfg } = await withTimeout(
+      supabase.from('system_config').select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
+    , 3000)
+    
+    // ★ 超管豁免：维护模式下，如果是超管则放行
+    if (cfg?.config_value === 'true') {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) {
+        const { data: admin } = await supabase.from('admin_users').select('role').eq('id', session.user.id).maybeSingle()
+        if (admin?.role !== 'super_admin') {
+          return renderMaintenance() 
+        }
+      } else {
+        return renderMaintenance() 
+      }
+    }
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) return renderLogin()
+    currentUser = session.user
+    const ok = await loadProfile()
+    if (!ok) return
+    renderMain()
+  } catch (e) {
+    if (e.message === 'timeout') {
+      app.innerHTML = `<div class="card" style="max-width:400px;margin:80px auto;text-align:center;">
+        <h2>网络延迟过高</h2>
+        <p style="margin:16px 0;color:#666;">加载超时，请刷新页面重试。</p>
+        <button onclick="location.reload()">刷新</button>
+      </div>`
+    } else {
+      console.error(e)
+      renderLogin('加载失败，请重新登录')
+    }
+  }
 }
 
 async function loadProfile() {
-  const { data: profile } = await supabase.from('vendor_profile')
-    .select('*').eq('id', currentUser.id).single()
+  const p1 = supabase.from('vendor_profile').select('*').eq('id', currentUser.id).single()
+  const p2 = supabase.from('admin_users').select('role, status').eq('id', currentUser.id).maybeSingle()
+
+  const [{ data: profile }, { data: admin }] = await withTimeout(Promise.all([p1, p2]), 5000)
 
   if (profile?.status === 0) {
     await supabase.auth.signOut()
@@ -119,25 +176,17 @@ async function loadProfile() {
   }
 
   currentProfile = profile
-
-  const { data: admin } = await supabase.from('admin_users')
-    .select('role, status').eq('id', currentUser.id).maybeSingle()
-
-  if (admin?.status === 0) {
-    await supabase.auth.signOut()
-    renderLogin('账号已禁用，请联系管理员')
-    return false
-  }
-
   isAdmin = !!admin
   currentRole = admin?.role || null
   isLogistics = profile?.account_type === 'logistics'
 
   if (isLogistics) {
-    const { data: lv } = await supabase.from('logistics_vendor')
-      .select('vendor_code, vendor_name')
-      .eq('logistics_id', currentUser.id)
-      .order('vendor_code')
+    const { data: lv } = await withTimeout(
+      supabase.from('logistics_vendor')
+        .select('vendor_code, vendor_name')
+        .eq('logistics_id', currentUser.id)
+        .order('vendor_code')
+    , 3000)
     myVendors = lv || []
   }
   return true
@@ -151,11 +200,14 @@ function renderMaintenance() {
       <button id="btn-retry">刷新</button>
     </div>`
   document.getElementById('btn-retry').onclick = () => location.reload()
+  
   const timer = setInterval(async () => {
     const { data } = await supabase.from('system_config')
       .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
+      
     if (data?.config_value !== 'true') {
       clearInterval(timer)
+      await supabase.auth.signOut()
       location.reload()
     }
   }, 10000)
@@ -166,20 +218,37 @@ function renderLogin(errMsg = '') {
     <div class="card" style="max-width:400px;margin:80px auto;">
       <h1>厂商留库预约系统</h1>
       <div id="login-msg">${errMsg ? msg(errMsg, false) : ''}</div>
-      <input id="email" placeholder="邮箱" />
+      <input id="email" placeholder="请输入账号" />
       <input id="password" type="password" placeholder="密码" />
       <button id="btn-login" style="width:100%;">登录</button>
       <button class="secondary" id="btn-goto-change" style="width:100%;margin-top:8px;">修改密码</button>
     </div>`
+
   document.getElementById('btn-login').onclick = async () => {
     const btn = document.getElementById('btn-login')
-    const originalText = btn.innerText
+    let email = document.getElementById('email').value.trim()
+    const password = document.getElementById('password').value
+
+    if (!email || !password) {
+      document.getElementById('login-msg').innerHTML = msg('请输入账号和密码', false)
+      return
+    }
+
+    if (email.includes('@')) {
+      // 原样
+    } else if (/^\d+$/.test(email)) {
+      if (email.startsWith('999')) email += '@logistics.local'
+      else email += '@vendor.local'
+    } else {
+      document.getElementById('login-msg').innerHTML = msg('账号格式错误', false)
+      return
+    }
+
     btn.disabled = true
     btn.innerText = '登录中...'
-    
-    const email = document.getElementById('email').value.trim()
-    const password = document.getElementById('password').value
+
     const { error } = await supabase.auth.signInWithPassword({ email, password })
+
     if (error) {
       document.getElementById('login-msg').innerHTML = msg(
         translateError(error.message) === '邮箱或密码错误'
@@ -187,26 +256,19 @@ function renderLogin(errMsg = '') {
           : translateError(error.message),
         false)
       btn.disabled = false
-      btn.innerText = originalText
+      btn.innerText = '登录'
       return
     }
 
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) {
-        await supabase.from('login_log').insert({
-          vendor_id: user.id,
-          user_agent: navigator.userAgent
-        })
-        await supabase.from('vendor_profile')
-          .update({
-            last_login_at: new Date().toISOString(),
-            last_active_at: new Date().toISOString()
-          })
-          .eq('id', user.id)
+        supabase.from('login_log').insert({ vendor_id: user.id, user_agent: navigator.userAgent }).then()
+        supabase.from('vendor_profile').update({ last_login_at: new Date().toISOString(), last_active_at: new Date().toISOString() }).eq('id', user.id).then()
       }
     } catch (e) {}
 
+    btn.innerText = '加载数据中...'
     await init()
   }
   document.getElementById('btn-goto-change').onclick = () => renderChangePwd()
@@ -217,7 +279,7 @@ function renderChangePwd() {
     <div class="card" style="max-width:400px;margin:80px auto;">
       <h1>修改密码</h1>
       <div id="cp-msg"></div>
-      <input id="cp-email" placeholder="邮箱" />
+      <input id="cp-email" placeholder="请输入账号" />
       <input id="cp-old" type="password" placeholder="旧密码" />
       <input id="cp-new" type="password" placeholder="新密码（至少 6 位）" />
       <input id="cp-new2" type="password" placeholder="确认新密码" />
@@ -229,7 +291,7 @@ function renderChangePwd() {
 
   document.getElementById('btn-cp-submit').onclick = async () => {
     const msgEl = document.getElementById('cp-msg')
-    const email = document.getElementById('cp-email').value.trim()
+    let email = document.getElementById('cp-email').value.trim()
     const oldPwd = document.getElementById('cp-old').value
     const newPwd = document.getElementById('cp-new').value
     const newPwd2 = document.getElementById('cp-new2').value
@@ -237,6 +299,16 @@ function renderChangePwd() {
     if (!email || !oldPwd || !newPwd || !newPwd2) {
       msgEl.innerHTML = msg('所有字段为必填', false); return
     }
+
+    if (email.includes('@')) {
+      // 原样
+    } else if (/^\d+$/.test(email)) {
+      if (email.startsWith('999')) email += '@logistics.local'
+      else email += '@vendor.local'
+    } else {
+      msgEl.innerHTML = msg('账号格式错误', false); return
+    }
+
     if (newPwd.length < 6) {
       msgEl.innerHTML = msg('新密码至少 6 位', false); return
     }
@@ -343,6 +415,7 @@ function renderMain() {
     <div id="view"></div>`
   document.getElementById('btn-logout').onclick = async () => {
     if (activeHeartbeatTimer) { clearInterval(activeHeartbeatTimer); activeHeartbeatTimer = null }
+    if (maintenanceCheckTimer) { clearInterval(maintenanceCheckTimer); maintenanceCheckTimer = null }
     await supabase.auth.signOut()
     init()
   }
@@ -374,6 +447,25 @@ function renderMain() {
     beat()
     activeHeartbeatTimer = setInterval(beat, 3 * 60 * 1000)
   }
+
+  // ★ 超管豁免：非超管才会被巡检踢出
+  if (currentRole === 'super_admin') return; 
+
+  if (maintenanceCheckTimer) { clearInterval(maintenanceCheckTimer); maintenanceCheckTimer = null }
+  maintenanceCheckTimer = setInterval(async () => {
+    try {
+      const { data } = await supabase.from('system_config')
+        .select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
+      
+      if (data?.config_value === 'true') {
+        clearInterval(maintenanceCheckTimer)
+        if (activeHeartbeatTimer) clearInterval(activeHeartbeatTimer)
+        alert('系统已进入维护模式，当前登录已失效，请稍后再试。')
+        await supabase.auth.signOut()
+        location.reload()
+      }
+    } catch (e) {}
+  }, 30000)
 }
 
 async function renderView(key) {
@@ -437,6 +529,12 @@ function calcInFields(billType, supplierInput) {
     return { vendor_code: supplierInput, owner_code: supplierInput }
   }
   if (billType === 'DSP入库') {
+    return { vendor_code: supplierInput, owner_code: '8888' }
+  }
+  if (billType === '济转西RT') {
+    return { vendor_code: supplierInput, owner_code: supplierInput }
+  }
+  if (billType === '济转西DSP') {
     return { vendor_code: supplierInput, owner_code: '8888' }
   }
   return { vendor_code: supplierInput, owner_code: '' }
@@ -607,9 +705,9 @@ async function renderFill(view) {
   function newOutRowForVendor(vc) {
     const f = calcOutFields('VMI出库', vc, defaultStoreCode)
     return {
-      bill_type: 'VMI出库', 
+      bill_type: 'VMI出库',
       source_no: '',
-      owner_code: f.owner_code, 
+      owner_code: f.owner_code,
       store_code: f.store_code,
       location_code: (locs && locs[0]) ? locs[0].location_code : '',
       pick_date: addDays(todayBj(), 2),
@@ -774,7 +872,11 @@ async function renderFill(view) {
         const missing = []
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
-        if (!r.spec) missing.push('包装规格')
+        if (!r.spec) {
+          errors.push(`入库单 第 ${idx+1} 行：商品 [${r.product_code}] ${SPEC_EMPTY_MSG}`)
+        } else if (!isValidSpec(r.spec)) {
+          errors.push(`入库单 第 ${idx+1} 行：商品 [${r.product_code}] 规格 [${r.spec}] 格式错误，必须是 1*1*X，请到「商品资料」改正`)
+        }
         if (!r.quantity) missing.push('箱数')
         if (!r.arrival_date) missing.push('到货日期')
         if (missing.length) errors.push(`入库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
@@ -783,12 +885,14 @@ async function renderFill(view) {
       outRows.forEach((r, idx) => {
         if (!isOutRowFilled(r)) return
         const missing = []
-        // ★ 只有 VMI出库 必填来源单号
         if (r.bill_type === 'VMI出库' && !r.source_no) missing.push('采购单号')
-        
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
-        if (!r.spec) missing.push('包装规格')
+        if (!r.spec) {
+          errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] ${SPEC_EMPTY_MSG}`)
+        } else if (!isValidSpec(r.spec)) {
+          errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] 规格 [${r.spec}] 格式错误，必须是 1*1*X，请到「商品资料」改正`)
+        }
         if (!r.quantity) missing.push('箱数')
         if (!r.pick_date) missing.push('配货日期')
         if (r.bill_type === 'DSP出库' && !r.store_code) missing.push('门店代码')
@@ -808,11 +912,10 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
-      // ===== ★ DSP核验：包含当天已提交的数据 =====
+      // ===== DSP 核验 =====
       const dspOutRows = validOut.filter(r => r.bill_type === 'DSP出库' || r.bill_type === 'DSP出货')
-      
+
       if (dspOutRows.length > 0) {
-        // 1. 收集当前表单中填写的 DSP入库 记录
         const validDspInKeys = new Set()
         validIn.forEach(r => {
           if (r.bill_type === 'DSP入库') {
@@ -820,7 +923,6 @@ async function renderFill(view) {
           }
         })
 
-        // 2. 查询数据库中今天该厂编所有的 DSP入库 记录
         const startOfToday = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
         startOfToday.setHours(0, 0, 0, 0)
         const startIso = startOfToday.toISOString()
@@ -835,14 +937,12 @@ async function renderFill(view) {
           return msgEl.innerHTML = msg('校验 DSP 前置单据失败，请重试', false)
         }
 
-        // 3. 将数据库查到今天的记录，也加入判断集合
         if (dbDspIns) {
           dbDspIns.forEach(r => {
             validDspInKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
           })
         }
 
-        // 4. 检查每一条 DSP出库，是否在集合中有对应记录
         const finalMissing = []
         dspOutRows.forEach(r => {
           const key = `${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`
@@ -851,13 +951,11 @@ async function renderFill(view) {
           }
         })
 
-        // 5. 拦截
         if (finalMissing.length > 0) {
           const errCodes = [...new Set(finalMissing)].join('、')
           return msgEl.innerHTML = msg(`提交失败：商品 [${errCodes}] 在今天没有对应的 DSP入库 记录。请先预约同货主、同商品的 DSP入库单。`, false)
         }
       }
-      // ===== ★ DSP核验结束 =====
 
       let vendorAuthId
       if (isLogistics) {
@@ -876,12 +974,10 @@ async function renderFill(view) {
         return msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false)
       }
 
-      // ★ 新增：解析规格并计算真实数量（例如 1*1*30 填 2 箱，结果为 60）
       function calcQty(specStr, boxQty) {
         if (!boxQty) return 0
         if (!specStr) return Number(boxQty)
         const parts = String(specStr).split('*')
-        // 取最后一个数字作为乘数
         const multiplier = Number(parts[parts.length - 1])
         if (isNaN(multiplier) || multiplier === 0) return Number(boxQty)
         return Number(boxQty) * multiplier
@@ -898,7 +994,7 @@ async function renderFill(view) {
         logistics_mode: getModeByType(r.bill_type),
         product_code: r.product_code,
         spec: r.spec,
-        quantity: calcQty(r.spec, r.quantity),  // ★ 乘以规格得数量
+        quantity: calcQty(r.spec, r.quantity),
         price: 1,
         arrival_date: r.arrival_date || null,
         effective_date: addOneDay(r.arrival_date),
@@ -914,7 +1010,7 @@ async function renderFill(view) {
         warehouse_code: defaultWh,
         bill_type: r.bill_type,
         source_no: r.source_no || null,
-        inbound_order_no: r.source_no || null,  // 自动等于来源单号
+        inbound_order_no: r.source_no || null,
         owner_code: r.owner_code,
         store_code: r.store_code,
         location_code: r.location_code,
@@ -923,7 +1019,7 @@ async function renderFill(view) {
         effective_date: addOneDay(r.pick_date),
         product_code: r.product_code,
         spec: r.spec,
-        quantity: calcQty(r.spec, r.quantity),  // ★ 乘以规格得数量
+        quantity: calcQty(r.spec, r.quantity),
         price: 1,
         group_name: null, split_flag: null, split_desc: null,
         product_remark: r.product_name || null,
@@ -960,6 +1056,8 @@ async function renderFill(view) {
         <select data-i="${i}" data-f="bill_type" style="width:100px;margin:0;padding:4px;">
           <option ${r.bill_type==='VMI入库'?'selected':''}>VMI入库</option>
           <option ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
+          <option ${r.bill_type==='济转西RT'?'selected':''}>济转西RT</option>
+          <option ${r.bill_type==='济转西DSP'?'selected':''}>济转西DSP</option>
         </select>
       </td>
       <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" readonly style="width:80px;margin:0;padding:4px;background:#f5f5f5;" /></td>
@@ -1010,6 +1108,9 @@ async function renderFill(view) {
           r.bill_type = el.value
           const f2 = calcInFields(el.value, r.vendor_code)
           r.owner_code = f2.owner_code
+          r.source_no = (r.owner_code && r.arrival_date)
+            ? r.owner_code + r.arrival_date.replace(/-/g, '')
+            : ''
           renderInTable()
           renderPreview()
           return
@@ -1175,7 +1276,7 @@ async function renderProducts(view) {
     if (!vp) return []
     const { data: vw } = await supabase.from('vendor_warehouse')
       .select('warehouse_code').eq('vendor_id', vp.id)
-    return (vw||[]).map(x => x.warehouse_code)
+    return (vw || []).map(x => x.warehouse_code)
   }
 
   async function loadList(vendorCode) {
@@ -1191,7 +1292,7 @@ async function renderProducts(view) {
 
   function renderAll() {
     const merged = {}
-    ;(list||[]).forEach(r => {
+    ;(list || []).forEach(r => {
       const k = r.product_code
       if (!merged[k]) {
         merged[k] = { ...r, warehouses: [r.warehouse_code] }
@@ -1219,7 +1320,13 @@ async function renderProducts(view) {
         <div class="row">
           <div><label>商品编码 *</label><input id="pd-code" /></div>
           <div><label>品名 *</label><input id="pd-name" /></div>
-          <div><label>规格 *</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
+          <div><label>规格 * (1*1*X)</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
+        </div>
+        <div class="row">
+          <div><label>长 *</label><input id="pd-length" type="number" step="0.01" min="0.01" /></div>
+          <div><label>宽 *</label><input id="pd-width"  type="number" step="0.01" min="0.01" /></div>
+          <div><label>高 *</label><input id="pd-height" type="number" step="0.01" min="0.01" /></div>
+          <div><label>重量 *</label><input id="pd-weight" type="number" step="0.01" min="0.01" /></div>
         </div>
         <p style="font-size:12px;color:#666;margin:8px 0;">授权仓库：${myWhs.join(', ') || '无'}（新增时会写入全部授权仓库）</p>
         <button id="btn-pd-add">新增商品</button>
@@ -1228,15 +1335,17 @@ async function renderProducts(view) {
         <h2>商品列表（${mergedList.length}）</h2>
         <div class="scroll">
           <table>
-            <tr><th>商品编码</th><th>品名</th><th>规格</th><th>仓库</th><th>操作</th></tr>
+            <tr><th>商品编码</th><th>品名</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
             <tbody>
               ${mergedList.map(r => `<tr>
                 <td>${r.product_code||''}</td>
                 <td>${r.product_name||''}</td>
                 <td>${r.spec||''}</td>
+                <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''}</td>
+                <td>${r.weight ?? ''}</td>
                 <td style="font-size:12px;">${r.warehouses.join(', ')}</td>
                 <td><button class="small secondary" data-edit="${r.product_code}">编辑</button></td>
-              </tr>`).join('') || '<tr><td colspan="5">无数据</td></tr>'}
+              </tr>`).join('') || '<tr><td colspan="7">无数据</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -1255,12 +1364,28 @@ async function renderProducts(view) {
 
     document.getElementById('btn-pd-add').onclick = async () => {
       const msgEl = document.getElementById('prod-msg')
-      const code = document.getElementById('pd-code').value.trim()
-      const name = document.getElementById('pd-name').value.trim()
-      const spec = document.getElementById('pd-spec').value.trim()
+      const code   = document.getElementById('pd-code').value.trim()
+      const name   = document.getElementById('pd-name').value.trim()
+      const spec   = document.getElementById('pd-spec').value.trim()
+      const length = document.getElementById('pd-length').value.trim()
+      const width  = document.getElementById('pd-width').value.trim()
+      const height = document.getElementById('pd-height').value.trim()
+      const weight = document.getElementById('pd-weight').value.trim()
 
-      if (!code || !name || !spec) {
-        msgEl.innerHTML = msg('商品编码、品名、规格为必填', false); return
+      if (!code || !name) {
+        msgEl.innerHTML = msg('商品编码、品名为必填', false); return
+      }
+      if (!spec) {
+        msgEl.innerHTML = msg('包装规格为必填', false); return
+      }
+      if (!isValidSpec(spec)) {
+        msgEl.innerHTML = msg('包装规格格式错误，必须是 1*1*X（X 为正整数，如 1*1*24）', false); return
+      }
+      if (!length || !width || !height || !weight) {
+        msgEl.innerHTML = msg(SIZE_EMPTY_MSG, false); return
+      }
+      if (!isValidSize(length, width, height, weight)) {
+        msgEl.innerHTML = msg('长、宽、高、重量必须为正数', false); return
       }
       if (!myWhs.length) {
         msgEl.innerHTML = msg('没有授权仓库，请联系管理员', false); return
@@ -1284,6 +1409,10 @@ async function renderProducts(view) {
         product_code: code,
         product_name: name,
         spec,
+        length: Number(length),
+        width:  Number(width),
+        height: Number(height),
+        weight: Number(weight),
         default_vendor_code: selectedVendorCode,
         default_owner_code: selectedVendorCode
       }))
@@ -1303,7 +1432,7 @@ async function renderProducts(view) {
     view.querySelectorAll('[data-edit]').forEach(btn => {
       btn.onclick = () => {
         const code = btn.dataset.edit
-        const recs = (list||[]).filter(r => r.product_code === code)
+        const recs = (list || []).filter(r => r.product_code === code)
         if (!recs.length) return
         const first = recs[0]
         const panel = document.getElementById('edit-product-panel')
@@ -1313,7 +1442,13 @@ async function renderProducts(view) {
             <div id="pedit-msg"></div>
             <div class="row">
               <div><label>品名 *</label><input id="pe-name" value="${first.product_name||''}" /></div>
-              <div><label>规格 *</label><input id="pe-spec" value="${first.spec||''}" /></div>
+              <div><label>规格 * (1*1*X)</label><input id="pe-spec" value="${first.spec||''}" /></div>
+            </div>
+            <div class="row">
+              <div><label>长 *</label><input id="pe-length" type="number" step="0.01" min="0.01" value="${first.length ?? ''}" /></div>
+              <div><label>宽 *</label><input id="pe-width"  type="number" step="0.01" min="0.01" value="${first.width ?? ''}" /></div>
+              <div><label>高 *</label><input id="pe-height" type="number" step="0.01" min="0.01" value="${first.height ?? ''}" /></div>
+              <div><label>重量 *</label><input id="pe-weight" type="number" step="0.01" min="0.01" value="${first.weight ?? ''}" /></div>
             </div>
             <p style="font-size:12px;color:#666;margin:8px 0;">将同时更新 ${recs.length} 条记录（仓库：${recs.map(r=>r.warehouse_code).join(', ')}）</p>
             <button id="btn-pe-save">保存</button>
@@ -1324,12 +1459,33 @@ async function renderProducts(view) {
 
         document.getElementById('btn-pe-save').onclick = async () => {
           const msgEl = document.getElementById('pedit-msg')
-          const name = document.getElementById('pe-name').value.trim()
-          const spec = document.getElementById('pe-spec').value.trim()
-          if (!name || !spec) {
-            msgEl.innerHTML = msg('品名、规格为必填', false); return
+          const name   = document.getElementById('pe-name').value.trim()
+          const spec   = document.getElementById('pe-spec').value.trim()
+          const length = document.getElementById('pe-length').value.trim()
+          const width  = document.getElementById('pe-width').value.trim()
+          const height = document.getElementById('pe-height').value.trim()
+          const weight = document.getElementById('pe-weight').value.trim()
+
+          if (!name) { msgEl.innerHTML = msg('品名为必填', false); return }
+          if (!spec) { msgEl.innerHTML = msg('包装规格为必填', false); return }
+          if (!isValidSpec(spec)) {
+            msgEl.innerHTML = msg('包装规格格式错误，必须是 1*1*X（X 为正整数，如 1*1*24）', false); return
           }
-          const patch = { product_name: name, spec }
+          if (!length || !width || !height || !weight) {
+            msgEl.innerHTML = msg(SIZE_EMPTY_MSG, false); return
+          }
+          if (!isValidSize(length, width, height, weight)) {
+            msgEl.innerHTML = msg('长、宽、高、重量必须为正数', false); return
+          }
+
+          const patch = {
+            product_name: name,
+            spec,
+            length: Number(length),
+            width:  Number(width),
+            height: Number(height),
+            weight: Number(weight)
+          }
           const ids = recs.map(r => r.id)
           const { error } = await supabase.from('product_master')
             .update(patch).in('id', ids)
