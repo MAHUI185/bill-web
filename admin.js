@@ -224,6 +224,7 @@ async function renderBills(v) {
       <div id="rule-display" style="display:none;margin-top:12px;padding:12px;background:#fafafa;border-radius:4px;white-space:pre-wrap;font-size:13px;line-height:1.8;"></div>
       <div id="import-msg"></div>
     </div>
+    
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
       <h2>导出 WMS 模板</h2>
       <div class="row">
@@ -238,28 +239,37 @@ async function renderBills(v) {
       </div>
       <div id="export-msg"></div>
     </div>
-    <div class="card" style="box-shadow:none;padding:0;" id="bill-query-card">
+
+    <div class="card" style="box-shadow:none;padding:0; display:flex; flex-direction:column; height: calc(100vh - 320px);" id="bill-query-card">
       <h2>单据查询</h2>
-      <div class="row">
-        <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" />
-        <select id="b-wh"><option value="">全部仓库</option>${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-        <select id="b-exported"><option value="">全部</option><option value="0">未导出</option><option value="1">已导出</option></select>
-        <button id="btn-b-search" class="secondary" style="margin-left:8px;">查询明细</button>
+      
+      <!-- 第一行：搜索与筛选 -->
+      <div class="row" style="margin-bottom:12px;">
+        <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" style="flex:2;" />
+        <select id="b-wh" style="flex:1;"><option value="">全部仓库</option>${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
+        <select id="b-exported" style="flex:1;"><option value="">全部状态</option><option value="0">未导出</option><option value="1">已导出</option></select>
+        <button id="btn-b-search" class="secondary" style="flex:0 0 auto;">查询明细</button>
       </div>
-      <div class="row" style="background:#fafafa;padding:12px;border-radius:4px;margin-bottom:12px;align-items:flex-end;">
-        <div style="flex:0 0 200px;">
-          <label style="font-size:12px;color:#666;">统计开始日期</label>
-          <input id="stat-start" type="date" style="margin-bottom:0;" />
+
+      <!-- 第二行：统计区域（满屏分布） -->
+      <div class="row" style="background:#fafafa;padding:10px 16px;border-radius:4px;margin-bottom:12px;align-items:center; justify-content:flex-start; gap:16px;">
+        <div style="display:flex; align-items:center; flex:0 0 auto;">
+          <span style="font-size:13px;color:#666;margin-right:8px;">统计区间：</span>
+          <input id="stat-start" type="date" style="width:140px;margin:0;padding:6px;" />
+          <span style="font-size:13px;color:#666;margin:0 8px;">至</span>
+          <input id="stat-end" type="date" style="width:140px;margin:0;padding:6px;" />
         </div>
-        <div style="flex:0 0 200px;">
-          <label style="font-size:12px;color:#666;">统计结束日期</label>
-          <input id="stat-end" type="date" style="margin-bottom:0;" />
+        
+        <!-- 结果展示区（自动撑开空间） -->
+        <div id="stat-result-display" style="flex:1; display:flex; align-items:center; gap:24px; padding-left:16px; border-left:1px solid #ddd; min-height:32px;">
+          <span style="color:#999;font-size:13px;">未统计</span>
         </div>
-        <div style="flex:0 0 auto;">
-          <button id="btn-stat" class="secondary" style="background:#e6f4ff;color:#1677ff;border-color:#91caff;">统计箱数</button>
-        </div>
+
+        <button id="btn-stat" class="secondary" style="flex:0 0 auto;background:#e6f4ff;color:#1677ff;border-color:#91caff;">统计箱数</button>
       </div>
-      <div class="scroll" id="query-result-box">
+
+      <!-- 第三行：明细表格（自适应占满剩余高度） -->
+      <div class="scroll" id="query-result-box" style="flex:1; overflow:auto;">
         <table>
           <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           <tbody id="b-body"></tbody>
@@ -522,58 +532,54 @@ async function renderBills(v) {
     const end = document.getElementById('stat-end').value
     if (!start || !end) return alert('请选择完整的开始和结束日期')
 
-    const resultBox = document.getElementById('query-result-box')
-    resultBox.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">统计中...</div>'
+    const btn = document.getElementById('btn-stat')
+    const displayBox = document.getElementById('stat-result-display')
+    const originalText = btn.innerText
+    btn.innerText = '统计中...'
+    btn.disabled = true
+    displayBox.innerHTML = '<span style="color:#999;font-size:13px;">计算中...</span>'
 
     const { data, error } = await ctx.supabase.from('bill_order')
-      .select('bill_type, spec, quantity, created_at')
+      .select('bill_type, spec, quantity')
       .gte('created_at', start + 'T00:00:00+08:00')
       .lte('created_at', end + 'T23:59:59+08:00')
 
-    if (error) return resultBox.innerHTML = ctx.msg(ctx.translateError(error.message), false)
-    if (!data || !data.length) return resultBox.innerHTML = '<div style="padding:20px;text-align:center;color:#999;">该时间段内无数据</div>'
+    btn.innerText = originalText
+    btn.disabled = false
 
-    const summary = {}
+    if (error) {
+      displayBox.innerHTML = `<span style="color:#cf1322;font-size:13px;">${ctx.translateError(error.message)}</span>`
+      return
+    }
+    if (!data || !data.length) {
+      displayBox.innerHTML = '<span style="color:#999;font-size:13px;">该区间无数据</span>'
+      return
+    }
+
+    let totalIn = 0
+    let totalOut = 0
     data.forEach(b => {
-      const bjDate = new Date(b.created_at).toLocaleString('en-CA', {
-        timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
-      }).slice(0, 10)
       const isIn = b.bill_type.includes('入库')
-      const type = isIn ? '入库' : '出库'
       const multiplier = Number(String(b.spec || '1').split('*').pop()) || 1
       const boxes = Math.round(b.quantity / multiplier)
-
-      const key = `${bjDate}_${type}`
-      if (!summary[key]) summary[key] = { date: bjDate, type, boxes: 0, count: 0 }
-      summary[key].boxes += boxes
-      summary[key].count += 1
+      if (isIn) totalIn += boxes
+      else totalOut += boxes
     })
 
-    const list = Object.values(summary).sort((a, b) => {
-      if (a.date !== b.date) return b.date.localeCompare(a.date)
-      return a.type === '入库' ? -1 : 1
-    })
-
-    const totalIn = list.filter(r => r.type === '入库').reduce((s, r) => s + r.boxes, 0)
-    const totalOut = list.filter(r => r.type === '出库').reduce((s, r) => s + r.boxes, 0)
-
-    resultBox.innerHTML = `
-      <div style="padding:12px;background:#f0f5ff;border:1px solid #adc6ff;border-radius:4px;margin-bottom:12px;font-size:14px;">
-        <strong>统计区间：</strong>${start} ~ ${end}
-        <span style="margin-left:24px;color:#1677ff;"><strong>入库合计：</strong>${totalIn} 箱</span>
-        <span style="margin-left:24px;color:#d46b08;"><strong>出库合计：</strong>${totalOut} 箱</span>
+    displayBox.innerHTML = `
+      <div style="display:flex; gap:32px; align-items:center;">
+        <div>
+          <span style="color:#666;font-size:13px;">入库总量：</span>
+          <span style="color:#1677ff;font-weight:bold;font-size:18px;">${totalIn}</span>
+          <span style="color:#1677ff;font-size:13px;font-weight:bold;">箱</span>
+        </div>
+        <div>
+          <span style="color:#666;font-size:13px;">出库总量：</span>
+          <span style="color:#d46b08;font-weight:bold;font-size:18px;">${totalOut}</span>
+          <span style="color:#d46b08;font-size:13px;font-weight:bold;">箱</span>
+        </div>
       </div>
-      <table>
-        <tr><th>日期</th><th>类型</th><th>单据数</th><th>合计箱数</th></tr>
-        <tbody>${list.map(r => `<tr>
-          <td>${r.date}</td>
-          <td>${r.type === '入库'
-            ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;">入库</span>'
-            : '<span class="stat ok" style="background:#fff7e6;color:#d46b08;">出库</span>'}</td>
-          <td>${r.count}</td>
-          <td style="font-weight:bold;font-size:15px;">${r.boxes} 箱</td>
-        </tr>`).join('')}</tbody>
-      </table>`
+    `
   }
 
   search()
