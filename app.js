@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-19 最终完整版：含极速粘贴极严谨解析）
+// app.js — 主逻辑（2026-10-19 最终完整版：含批量录入）
 
 import { supabase } from './supabase.js'
 
@@ -787,14 +787,14 @@ async function renderFill(view) {
         <h3 style="margin:24px 0 8px;">出库单</h3>
         <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：预约「DSP出库」前，必须已经预约过同货主、同商品的「DSP入库」单据。</p>
         
-        <!-- ★ 新增：极速粘贴区 -->
+        <!-- ★ 批量录入区 -->
         <div style="background:#f0f5ff; border:1px dashed #91caff; border-radius:4px; padding:12px; margin-bottom:12px;">
           <div style="font-size:13px; color:#1677ff; margin-bottom:8px; font-weight:bold;">
-            ⚡ 极速录入（从 Excel 复制：采购单号 / 货号 / 箱数）
+            ⚡ 批量录入（从 Excel 复制：采购单号 / 货号 / 箱数）
           </div>
           <textarea id="out-paste-area" placeholder="在此粘贴，支持多行。例如：&#10;262881558   4303389   2&#10;262891373   4303387   2" style="width:100%; height:80px; padding:8px; border:1px solid #ccc; border-radius:4px; font-family:monospace; margin-bottom:8px;"></textarea>
           <div style="display:flex; gap:8px;">
-            <button type="button" class="secondary" id="btn-parse-out" style="background:#e6f4ff; border-color:#1677ff; color:#1677ff;">解析并添加到下方表格</button>
+            <button type="button" class="secondary" id="btn-parse-out" style="background:#e6f4ff; border-color:#1677ff; color:#1677ff;">添加到下方表格</button>
             <button type="button" class="secondary" id="btn-clear-paste" style="background:#fff; color:#666;">清空</button>
           </div>
         </div>
