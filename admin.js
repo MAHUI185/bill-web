@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-19 最终完整版）
+// admin.js — 管理后台（2026-10-20 最终完整版：去除Excel导入 + 极简排版）
 
 let ctx = null
 let operatorName = '未知'
@@ -208,68 +208,62 @@ async function renderBills(v) {
   ;(vendors || []).forEach(x => { vMap[x.vendor_code] = x.vendor_name })
 
   v.innerHTML = `
-    <div class="card" style="box-shadow:none;padding:0 0 16px;">
-      <h2>Excel 导入单据</h2>
-      <div class="row">
-        <select id="imp-type">
-          <option value="vmi_in">VMI入库</option>
-          <option value="dsp_in">DSP入库</option>
-          <option value="vmi_out">VMI出库</option>
-          <option value="dsp_out">DSP出库</option>
-        </select>
-        <input id="imp-file" type="file" accept=".xlsx,.xls" />
-        <button id="btn-import">开始导入</button>
-        <button type="button" class="secondary" id="btn-show-rule">查看填写规则</button>
+    <div style="display:grid; grid-template-columns: 1fr; gap:16px; margin-bottom:16px;">
+      <!-- 导出 WMS -->
+      <div class="card" style="box-shadow:none; margin:0; padding:16px;">
+        <h2 style="margin-bottom:12px; font-size:16px;">导出 WMS 模板</h2>
+        <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center; flex-wrap:wrap;">
+          <select id="exp-wh" style="flex:1; min-width:120px; margin:0;">
+            ${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}
+          </select>
+          <input id="exp-start" type="date" style="flex:1; min-width:130px; margin:0;" />
+          <span style="color:#666; font-size:13px;">至</span>
+          <input id="exp-end" type="date" style="flex:1; min-width:130px; margin:0;" />
+          <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:13px; color:#666; cursor:pointer; white-space:nowrap;">
+            <input type="checkbox" id="exp-include" style="width:auto; margin:0;" /> 包含已导出
+          </label>
+          <button id="btn-export" style="flex:0 0 100px;">导出</button>
+        </div>
+        <div id="export-msg"></div>
       </div>
-      <div id="rule-display" style="display:none;margin-top:12px;padding:12px;background:#fafafa;border-radius:4px;white-space:pre-wrap;font-size:13px;line-height:1.8;"></div>
-      <div id="import-msg"></div>
-    </div>
-    
-    <div class="card" style="box-shadow:none;padding:0 0 16px;">
-      <h2>导出 WMS 模板</h2>
-      <div class="row">
-        <select id="exp-wh">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-        <input id="exp-start" type="date" />
-        <input id="exp-end" type="date" />
-        <button id="btn-export">导出</button>
-        <label style="display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;min-width:auto;">
-          <input type="checkbox" id="exp-include" style="width:auto;margin:0;" />
-          包含已导出
-        </label>
-      </div>
-      <div id="export-msg"></div>
     </div>
 
-    <div class="card" style="box-shadow:none;padding:0; display:flex; flex-direction:column; height: calc(100vh - 320px);" id="bill-query-card">
-      <h2>单据查询</h2>
+    <!-- 底部：单据查询 -->
+    <div class="card" style="box-shadow:none; padding:16px; margin:0;" id="bill-query-card">
+      <h2 style="margin-bottom:12px; font-size:16px;">单据查询</h2>
       
-      <!-- 第一行：搜索与筛选 -->
-      <div class="row" style="margin-bottom:12px;">
-        <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" style="flex:2;" />
-        <select id="b-wh" style="flex:1;"><option value="">全部仓库</option>${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-        <select id="b-exported" style="flex:1;"><option value="">全部状态</option><option value="0">未导出</option><option value="1">已导出</option></select>
+      <!-- 第一行：搜索筛选 -->
+      <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center;">
+        <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" style="flex:2; margin:0;" />
+        <select id="b-wh" style="flex:1; margin:0;">
+          <option value="">全部仓库</option>
+          ${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}
+        </select>
+        <select id="b-exported" style="flex:1; margin:0;">
+          <option value="">全部状态</option>
+          <option value="0">未导出</option>
+          <option value="1">已导出</option>
+        </select>
         <button id="btn-b-search" class="secondary" style="flex:0 0 auto;">查询明细</button>
       </div>
 
-      <!-- 第二行：统计区域（满屏分布） -->
-      <div class="row" style="background:#fafafa;padding:10px 16px;border-radius:4px;margin-bottom:12px;align-items:center; justify-content:flex-start; gap:16px;">
-        <div style="display:flex; align-items:center; flex:0 0 auto;">
-          <span style="font-size:13px;color:#666;margin-right:8px;">统计区间：</span>
-          <input id="stat-start" type="date" style="width:140px;margin:0;padding:6px;" />
-          <span style="font-size:13px;color:#666;margin:0 8px;">至</span>
-          <input id="stat-end" type="date" style="width:140px;margin:0;padding:6px;" />
+      <!-- 第二行：统计栏 -->
+      <div style="display:flex; align-items:center; background:#f8f9fa; padding:8px 12px; border-radius:6px; border:1px solid #eee; margin-bottom:12px;">
+        <span style="font-size:13px; color:#666; margin-right:8px;">统计区间：</span>
+        <input id="stat-start" type="date" style="width:130px; margin:0; padding:4px 8px;" />
+        <span style="font-size:13px; color:#666; margin:0 8px;">至</span>
+        <input id="stat-end" type="date" style="width:130px; margin:0; padding:4px 8px;" />
+        
+        <!-- 结果展示区 -->
+        <div id="stat-result-display" style="flex:1; display:flex; align-items:center; padding-left:16px; margin-left:16px; border-left:1px solid #ddd; min-height:24px;">
+          <span style="color:#999; font-size:13px;">未统计</span>
         </div>
         
-        <!-- 结果展示区（自动撑开空间） -->
-        <div id="stat-result-display" style="flex:1; display:flex; align-items:center; gap:24px; padding-left:16px; border-left:1px solid #ddd; min-height:32px;">
-          <span style="color:#999;font-size:13px;">未统计</span>
-        </div>
-
-        <button id="btn-stat" class="secondary" style="flex:0 0 auto;background:#e6f4ff;color:#1677ff;border-color:#91caff;">统计箱数</button>
+        <button id="btn-stat" class="secondary" style="flex:0 0 auto; background:#e6f4ff; border-color:#91caff; color:#1677ff;">统计箱数</button>
       </div>
 
-      <!-- 第三行：明细表格（自适应占满剩余高度） -->
-      <div class="scroll" id="query-result-box" style="flex:1; overflow:auto;">
+      <!-- 第三行：表格 -->
+      <div class="scroll" id="query-result-box" style="max-height: calc(100vh - 360px); overflow: auto;">
         <table>
           <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           <tbody id="b-body"></tbody>
@@ -277,78 +271,6 @@ async function renderBills(v) {
       </div>
     </div>
     <div id="admin-edit-bill-panel"></div>`
-
-  document.getElementById('btn-show-rule').onclick = async () => {
-    const type = document.getElementById('imp-type').value
-    const { data } = await ctx.supabase.from('import_rule')
-      .select('rule_text').eq('import_type', type).maybeSingle()
-    const el = document.getElementById('rule-display')
-    if (el.style.display === 'none') {
-      el.textContent = data?.rule_text || '暂无规则说明'
-      el.style.display = 'block'
-    } else {
-      el.style.display = 'none'
-    }
-  }
-
-  document.getElementById('btn-import').onclick = async () => {
-    const file = document.getElementById('imp-file').files[0]
-    if (!file) return document.getElementById('import-msg').innerHTML = ctx.msg('请选择文件', false)
-    const importType = document.getElementById('imp-type').value
-    document.getElementById('import-msg').innerHTML = ctx.msg('导入中...', true)
-    try {
-      const buf = await file.arrayBuffer()
-      const wb = XLSX.read(buf)
-      const sheetMap = {
-        vmi_in: 'VMI入库', dsp_in: 'DSP入库',
-        vmi_out: 'VMI出库', dsp_out: 'DSP出库'
-      }
-      const sheetName = wb.SheetNames.find(n => n === sheetMap[importType]) ||
-                        wb.SheetNames.find(n => {
-                          const isOut = importType.endsWith('_out')
-                          return isOut ? (n.includes('出库') && !n.includes('说明'))
-                                       : (n.includes('入库') && !n.includes('说明'))
-                        }) || wb.SheetNames[0]
-      const ws = wb.Sheets[sheetName]
-      const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false })
-      const rows = rawRows.filter((r, idx) => {
-        if (idx === 1) return false
-        const key = String(r['来源单号'] || r['配单类型'] || '')
-        if (key.includes('如上') || key.includes('固定') || key.includes('说明')) return false
-        return true
-      })
-      const { data: { session } } = await ctx.supabase.auth.getSession()
-      const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/import-bills`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
-        body: JSON.stringify({
-          import_type: importType,
-          rows,
-          operator_name: ctx.operatorName
-        })
-      })
-      const json = await res.json()
-      if (json.ok) {
-        let h = ctx.msg(`成功 ${json.success_count} 条，失败 ${json.fail_count} 条`, true)
-        if (json.errors?.length) {
-          h += `<div class="scroll" style="font-size:12px;color:#cf1322;">
-            ${json.errors.map(e => `<div>${e}</div>`).join('')}</div>`
-        }
-        document.getElementById('import-msg').innerHTML = h
-        await logOp('import_bills', '单据导入 ' + importType, {
-          success: json.success_count, failed: json.fail_count
-        })
-      } else {
-        document.getElementById('import-msg').innerHTML = ctx.msg(
-          json.error || `导入失败，请检查文件格式`, false)
-      }
-    } catch (e) {
-      document.getElementById('import-msg').innerHTML = ctx.msg('导入失败，请检查文件格式', false)
-    }
-  }
 
   document.getElementById('btn-export').onclick = async () => {
     const warehouse_code = document.getElementById('exp-wh').value
