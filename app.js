@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-20 最终完整版：含出入库双批量录入）
+// app.js — 主逻辑（2026-10-20 最终完整版：含出入库批量录入 + 尺寸单位）
 
 import { supabase } from './supabase.js'
 
@@ -1525,10 +1525,10 @@ async function renderProducts(view) {
           <div><label>规格 * (1*1*X)</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
         </div>
         <div class="row">
-          <div><label>长 *</label><input id="pd-length" type="number" step="0.01" min="0.01" /></div>
-          <div><label>宽 *</label><input id="pd-width"  type="number" step="0.01" min="0.01" /></div>
-          <div><label>高 *</label><input id="pd-height" type="number" step="0.01" min="0.01" /></div>
-          <div><label>重量 *</label><input id="pd-weight" type="number" step="0.01" min="0.01" /></div>
+          <div><label>长 (cm) *</label><input id="pd-length" type="number" step="0.01" min="0.01" placeholder="长 (cm)" /></div>
+          <div><label>宽 (cm) *</label><input id="pd-width"  type="number" step="0.01" min="0.01" placeholder="宽 (cm)" /></div>
+          <div><label>高 (cm) *</label><input id="pd-height" type="number" step="0.01" min="0.01" placeholder="高 (cm)" /></div>
+          <div><label>重量 (kg) *</label><input id="pd-weight" type="number" step="0.01" min="0.01" placeholder="重量 (kg)" /></div>
         </div>
         <p style="font-size:12px;color:#666;margin:8px 0;">授权仓库：${myWhs.join(', ') || '无'}（新增时会写入全部授权仓库）</p>
         <button id="btn-pd-add">新增商品</button>
@@ -1543,8 +1543,8 @@ async function renderProducts(view) {
                 <td>${r.product_code||''}</td>
                 <td>${r.product_name||''}</td>
                 <td>${r.spec||''}</td>
-                <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''}</td>
-                <td>${r.weight ?? ''}</td>
+                <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''} cm</td>
+                <td>${r.weight ?? ''} kg</td>
                 <td style="font-size:12px;">${r.warehouses.join(', ')}</td>
                 <td><button class="small secondary" data-edit="${r.product_code}">编辑</button></td>
               </tr>`).join('') || '<tr><td colspan="7">无数据</td></tr>'}
@@ -1647,10 +1647,10 @@ async function renderProducts(view) {
               <div><label>规格 * (1*1*X)</label><input id="pe-spec" value="${first.spec||''}" /></div>
             </div>
             <div class="row">
-              <div><label>长 *</label><input id="pe-length" type="number" step="0.01" min="0.01" value="${first.length ?? ''}" /></div>
-              <div><label>宽 *</label><input id="pe-width"  type="number" step="0.01" min="0.01" value="${first.width ?? ''}" /></div>
-              <div><label>高 *</label><input id="pe-height" type="number" step="0.01" min="0.01" value="${first.height ?? ''}" /></div>
-              <div><label>重量 *</label><input id="pe-weight" type="number" step="0.01" min="0.01" value="${first.weight ?? ''}" /></div>
+              <div><label>长 (cm) *</label><input id="pe-length" type="number" step="0.01" min="0.01" value="${first.length ?? ''}" /></div>
+              <div><label>宽 (cm) *</label><input id="pe-width"  type="number" step="0.01" min="0.01" value="${first.width ?? ''}" /></div>
+              <div><label>高 (cm) *</label><input id="pe-height" type="number" step="0.01" min="0.01" value="${first.height ?? ''}" /></div>
+              <div><label>重量 (kg) *</label><input id="pe-weight" type="number" step="0.01" min="0.01" value="${first.weight ?? ''}" /></div>
             </div>
             <p style="font-size:12px;color:#666;margin:8px 0;">将同时更新 ${recs.length} 条记录（仓库：${recs.map(r=>r.warehouse_code).join(', ')}）</p>
             <button id="btn-pe-save">保存</button>

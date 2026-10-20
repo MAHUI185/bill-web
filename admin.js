@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-20 最终完整版：去除Excel导入 + 极简排版）
+// admin.js — 管理后台（2026-10-20 最终完整版：去掉导入 + 尺寸单位）
 
 let ctx = null
 let operatorName = '未知'
@@ -1676,10 +1676,10 @@ async function renderProduct(v) {
         <input id="pm-spec" placeholder="规格 * (1*1*X)" />
       </div>
       <div class="row">
-        <input id="pm-length" type="number" step="0.01" min="0.01" placeholder="长 *" />
-        <input id="pm-width"  type="number" step="0.01" min="0.01" placeholder="宽 *" />
-        <input id="pm-height" type="number" step="0.01" min="0.01" placeholder="高 *" />
-        <input id="pm-weight" type="number" step="0.01" min="0.01" placeholder="重量 *" />
+        <input id="pm-length" type="number" step="0.01" min="0.01" placeholder="长 (cm) *" />
+        <input id="pm-width"  type="number" step="0.01" min="0.01" placeholder="宽 (cm) *" />
+        <input id="pm-height" type="number" step="0.01" min="0.01" placeholder="高 (cm) *" />
+        <input id="pm-weight" type="number" step="0.01" min="0.01" placeholder="重量 (kg) *" />
       </div>
       <button id="btn-pm-add">新增商品</button>
       <div id="pm-msg"></div>
@@ -1691,8 +1691,8 @@ async function renderProduct(v) {
           <tbody>${(data||[]).map(r=>`<tr>
             <td>${r.warehouse_code||''}</td><td>${r.product_code}</td><td>${r.product_name||''}</td>
             <td>${r.spec||''}</td>
-            <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''}</td>
-            <td>${r.weight ?? ''}</td>
+            <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''} cm</td>
+            <td>${r.weight ?? ''} kg</td>
             <td>${r.default_vendor_code||''}</td>
             <td>${r.default_location_code||''}</td><td>${r.default_logistics_mode||''}</td>
             <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.product_code}">删除</button>` : ''}</td>
