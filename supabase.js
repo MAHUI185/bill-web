@@ -1,3 +1,5 @@
+// supabase.js — Supabase 客户端配置（自动识别设备直连/代理）
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 // 自动识别设备：手机/平板走代理，电脑走直连
