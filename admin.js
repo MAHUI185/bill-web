@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-22 正式上线版）
+// admin.js — 管理后台（2026-10-22 正式上线完整版，包含全部增删改查）
 
 let ctx = null
 let operatorName = '未知'
@@ -11,11 +11,14 @@ const SIZE_EMPTY_MSG = '长、宽、高、重量为必填，请到「商品资�
 
 export async function renderAdmin(view, context) {
   ctx = context
+
   if (context.currentRole) {
-    const { data: au } = await context.supabase.from('admin_users').select('name').eq('id', context.currentUser.id).maybeSingle()
+    const { data: au } = await context.supabase.from('admin_users')
+      .select('name').eq('id', context.currentUser.id).maybeSingle()
     operatorName = au?.name || context.currentProfile?.contact_name || '管理员'
   } else {
-    operatorName = context.currentProfile?.contact_name || context.currentProfile?.vendor_name || '未知'
+    operatorName = context.currentProfile?.contact_name
+      || context.currentProfile?.vendor_name || '未知'
   }
   ctx.operatorName = operatorName
 
@@ -46,7 +49,7 @@ export async function renderAdmin(view, context) {
   }
 
   view.innerHTML = `
-    <div class="card" style="flex:1; margin:0; padding:0; overflow:hidden;">
+    <div class="card" style="flex:1; margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column;">
       <div style="padding:16px 24px 0; flex:0 0 auto;">
         <h2>管理后台</h2>
         <div class="tabs" id="admin-tabs">${menuHtml}</div>
@@ -82,19 +85,26 @@ async function renderTab(key) {
   }
 }
 
-function isSuper() { return ctx.currentRole === 'super_admin' }
+function isSuper() {
+  return ctx.currentRole === 'super_admin'
+}
 
 async function logOp(action, target, detail = {}) {
   try {
-    await ctx.supabase.from('operation_log').insert({ operator_id: ctx.currentUser.id, operator_name: ctx.operatorName, action, target, detail })
-  } catch (e) {}
+    await ctx.supabase.from('operation_log').insert({
+      operator_id: ctx.currentUser.id,
+      operator_name: ctx.operatorName,
+      action, target, detail
+    })
+  } catch (e) {
+    console.warn('写操作日志失败', e)
+  }
 }
 
 // ================= 1. 预约进度 =================
 async function renderProgress(v) {
   const { data } = await ctx.supabase.from('vendor_report_status').select('*')
   
-  // 查出当天的质检报告记录
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
   const { data: qcs } = await ctx.supabase.from('qc_upload_log').select('*').eq('upload_date', todayStr)
   
@@ -121,11 +131,7 @@ async function renderProgress(v) {
     </div>
     <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
       <table>
-        <thead>
-          <tr>
-            <th>厂编</th><th>厂商名称</th><th>类型</th><th>登录状态</th><th>今日预约</th><th>最后活跃</th><th>质检报告</th>
-          </tr>
-        </thead>
+        <thead><tr><th>厂编</th><th>厂商名称</th><th>类型</th><th>登录状态</th><th>今日预约</th><th>最后活跃</th><th>质检报告</th></tr></thead>
         <tbody id="p-body"></tbody>
       </table>
     </div>`
@@ -219,8 +225,7 @@ async function renderBills(v) {
     const end_date = document.getElementById('exp-end').value
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/export-bills`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
       body: JSON.stringify({ warehouse_code, start_date, end_date, include_exported: document.getElementById('exp-include')?.checked || false })
     })
     if (!res.ok) {
@@ -561,40 +566,840 @@ async function renderLogistics(v) {
   })
 }
 
-// ================= 5. 管理员 & 基础数据 & 日志 & 系统 =================
-async function renderAdmins(v) { v.innerHTML = '<div class="card">管理员管理面板</div>' }
-async function renderBase(v) { v.innerHTML = '<div class="card">基础数据面板</div>' }
+// ================= 5. 管理员管理 =================
+async function renderAdmins(v) {
+  const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
+  const { data: admins } = await ctx.supabase.from('admin_users').select('*').order('created_at', { ascending: false })
 
-async function renderLogs(v) {
-  const { data: qcs } = await ctx.supabase.from('qc_upload_log').select('*').order('id', { ascending: false }).limit(100)
   v.innerHTML = `
-    <div class="tabs"><button class="active">质检上传记录</button></div>
+    <div class="card" style="box-shadow:none;padding:0 0 16px;">
+      <h2>创建管理员</h2>
+      <div class="row">
+        <input id="ad-login" placeholder="登录名（英文）*" />
+        <input id="ad-name" placeholder="姓名 *" />
+        <input id="ad-phone" placeholder="手机号" />
+        <input id="ad-pwd" placeholder="初始密码 *" />
+      </div>
+      <div class="row">
+        <select id="ad-role">
+          <option value="admin">管理员</option>
+          <option value="assistant">助理</option>
+          <option value="super_admin">超级管理员</option>
+        </select>
+        <select id="ad-wh" multiple style="height:80px;">
+          ${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}
+        </select>
+      </div>
+      <button id="btn-create-admin">创建管理员</button>
+      <div id="admin-create-msg"></div>
+    </div>
+    <div class="card" style="box-shadow:none;padding:0;">
+      <h2>管理员列表（${(admins||[]).length}）</h2>
+      <div class="scroll">
+        <table>
+          <tr><th>姓名</th><th>手机</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+          <tbody>${(admins||[]).map(a => `<tr>
+            <td>${a.name || ''}</td>
+            <td>${a.phone || ''}</td>
+            <td>${a.role === 'super_admin' ? '超管' : a.role === 'admin' ? '管理员' : '助理'}</td>
+            <td>${a.status===1?'<span class="stat ok">启用</span>':'<span class="stat no">禁用</span>'}</td>
+            <td>${a.created_at ? new Date(a.created_at).toLocaleString() : ''}</td>
+            <td>
+              <button class="small secondary" data-act="edit" data-id="${a.id}">修改</button>
+              <button class="small secondary" data-act="toggle" data-id="${a.id}" data-enable="${a.status===1?'0':'1'}" data-name="${a.name||''}">${a.status===1?'禁用':'启用'}</button>
+              <button class="small secondary" data-act="pwd" data-id="${a.id}" data-name="${a.name||''}">重置密码</button>
+              ${isSuper() ? `<button class="small danger" data-act="del" data-id="${a.id}" data-name="${a.name||''}">删除</button>` : ''}
+            </td>
+          </tr>`).join('') || '<tr><td colspan="6">无数据</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <div id="admin-edit-panel"></div>`
+
+  document.getElementById('btn-create-admin').onclick = async () => {
+    const elLogin = document.getElementById('ad-login')
+    const elName = document.getElementById('ad-name')
+    const elPhone = document.getElementById('ad-phone')
+    const elPwd = document.getElementById('ad-pwd')
+    const elRole = document.getElementById('ad-role')
+    const elWh = document.getElementById('ad-wh')
+    const msgEl = document.getElementById('admin-create-msg')
+
+    const login = (elLogin.value || '').trim()
+    const name = (elName.value || '').trim()
+    const phone = (elPhone?.value || '').trim()
+    const pwd = elPwd.value || ''
+    const role = elRole?.value || 'admin'
+    const whSel = elWh ? Array.from(elWh.selectedOptions).map(o => o.value) : []
+
+    if (!login) { msgEl.innerHTML = ctx.msg('请填写登录名', false); return }
+    if (!name) { msgEl.innerHTML = ctx.msg('请填写姓名', false); return }
+    if (!pwd) { msgEl.innerHTML = ctx.msg('请填写初始密码', false); return }
+    if (!/^[a-zA-Z0-9_]+$/.test(login)) {
+      msgEl.innerHTML = ctx.msg('登录名只能用字母、数字、下划线', false); return
+    }
+    if (pwd.length < 6) { msgEl.innerHTML = ctx.msg('密码至少 6 位', false); return }
+
+    msgEl.innerHTML = ctx.msg('创建中...', true)
+
+    const { data: { session } } = await ctx.supabase.auth.getSession()
+    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-admin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+      body: JSON.stringify({ login_name: login, password: pwd, name, phone, role, warehouse_codes: whSel })
+    })
+    const json = await res.json()
+    if (res.ok) {
+      msgEl.innerHTML = ctx.msg(`创建成功，登录邮箱：${json.email}`, true)
+      await logOp('create_admin', '管理员 ' + name, { role })
+      renderTab('admins')
+    } else {
+      msgEl.innerHTML = ctx.msg(ctx.translateError(json.error || '创建失败'), false)
+    }
+  }
+
+  v.querySelectorAll('button[data-act]').forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.id
+      const act = b.dataset.act
+      const nameAttr = b.dataset.name
+
+      if (act === 'edit') {
+        const a = admins.find(x => x.id === id)
+        if (!a) return
+        const panel = document.getElementById('admin-edit-panel')
+        panel.innerHTML = `
+          <div class="card" style="border:2px solid #1677ff;">
+            <h2>修改管理员 · ${a.name||''}</h2>
+            <div id="ae-msg"></div>
+            <div class="row">
+              <div><label>姓名 *</label><input id="ae-name" value="${a.name||''}" /></div>
+              <div><label>手机</label><input id="ae-phone" value="${a.phone||''}" /></div>
+              <div>
+                <label>角色 *</label>
+                <select id="ae-role">
+                  <option value="admin" ${a.role==='admin'?'selected':''}>管理员</option>
+                  <option value="assistant" ${a.role==='assistant'?'selected':''}>助理</option>
+                  <option value="super_admin" ${a.role==='super_admin'?'selected':''}>超级管理员</option>
+                </select>
+              </div>
+            </div>
+            <button id="btn-ae-save">保存</button>
+            <button class="secondary" id="btn-ae-cancel">取消</button>
+          </div>`
+        document.getElementById('btn-ae-cancel').onclick = () => panel.innerHTML = ''
+        document.getElementById('btn-ae-save').onclick = async () => {
+          const msgEl = document.getElementById('ae-msg')
+          const name = document.getElementById('ae-name').value.trim()
+          const phone = document.getElementById('ae-phone').value.trim()
+          const role = document.getElementById('ae-role').value
+          if (!name) { msgEl.innerHTML = ctx.msg('姓名为必填', false); return }
+          if (!['admin','assistant','super_admin'].includes(role)) {
+            msgEl.innerHTML = ctx.msg('角色不合法', false); return
+          }
+          const { error } = await ctx.supabase.from('admin_users')
+            .update({ name, phone: phone || null, role })
+            .eq('id', id)
+          if (error) {
+            msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
+          }
+          await logOp('update_admin', '管理员 ' + name, { fields: ['name','phone','role'] })
+          alert('已保存')
+          renderTab('admins')
+        }
+        return
+      }
+
+      if (act === 'toggle') {
+        const enable = b.dataset.enable === '1'
+        const action = enable ? '启用' : '禁用'
+        if (id === ctx.currentUser.id) return alert('不能禁用自己的账号')
+        if (!confirm(`确定${action}该管理员？`)) return
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({ user_id: id, account_type: 'admin', enable })
+        })
+        const json = await res.json()
+        if (res.ok) {
+          await logOp('toggle_admin', '管理员 ' + nameAttr, { enable })
+          alert(`已${action}`)
+          renderTab('admins')
+        } else {
+          alert(`${action}失败：` + ctx.translateError(json.error || '未知错误'))
+        }
+        return
+      }
+
+      if (act === 'pwd') {
+        const pwd = prompt('输入新密码（至少 6 位）')
+        if (!pwd || pwd.length < 6) return alert('密码太短')
+        const { data: { session } } = await ctx.supabase.auth.getSession()
+        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/reset-password`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+          body: JSON.stringify({ user_id: id, new_password: pwd })
+        })
+        if (res.ok) {
+          await logOp('reset_admin_pwd', '管理员 ' + nameAttr)
+          alert('重置成功')
+        } else {
+          alert('重置失败，请重试')
+        }
+        return
+      }
+
+      if (act === 'del') {
+        if (id === ctx.currentUser.id) return alert('不能删除自己')
+        if (!confirm(`确定删除管理员「${nameAttr}」？`)) return
+        const { error } = await ctx.supabase.from('admin_users').delete().eq('id', id)
+        if (error) return alert(ctx.translateError(error.message))
+        await ctx.supabase.from('vendor_profile').delete().eq('id', id)
+        await logOp('delete_admin', '管理员 ' + nameAttr)
+        alert('已删除')
+        renderTab('admins')
+      }
+    }
+  })
+}
+
+// ================= 6. 基础数据 =================
+async function renderBase(v) {
+  v.innerHTML = `
+    <div class="tabs" id="base-tabs" style="flex:0 0 auto;">
+      <button data-t="wh" class="active">仓库</button>
+      <button data-t="store">门店</button>
+      <button data-t="product">商品主数据</button>
+      <button data-t="deadline">预约时间段</button>
+      <button data-t="holiday">节假日</button>
+      <button data-t="bypass">强制放行</button>
+    </div>
+    <div id="base-view" style="flex:1; overflow:hidden; display:flex; flex-direction:column;"></div>`
+  document.querySelectorAll('#base-tabs button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#base-tabs button').forEach(x => x.classList.remove('active'))
+      b.classList.add('active')
+      renderBaseSub(b.dataset.t)
+    }
+  })
+  renderBaseSub('wh')
+}
+
+async function renderBaseSub(key) {
+  const v = document.getElementById('base-view')
+  v.innerHTML = '加载中...'
+  if (key === 'wh') return renderWh(v)
+  if (key === 'store') return renderStore(v)
+  if (key === 'product') return renderProduct(v)
+  if (key === 'deadline') return renderDeadline(v)
+  if (key === 'holiday') return renderHoliday(v)
+  if (key === 'bypass') return renderBypass(v)
+}
+
+// ===== 5.1 仓库（三块合一） =====
+async function renderWh(v) {
+  const { data: whs } = await ctx.supabase.from('warehouse').select('*').order('warehouse_code')
+  const list = whs || []
+  let selectedCode = list.length ? list[0].warehouse_code : null
+
+  const renderAll = async () => {
+    const sel = list.find(w => w.warehouse_code === selectedCode)
+    let locs = []
+    let maps = []
+    if (selectedCode) {
+      const { data: l } = await ctx.supabase.from('location_config_detail').select('*').eq('warehouse_code', selectedCode).order('location_code')
+      locs = l || []
+      const { data: m } = await ctx.supabase.from('location_warehouse_map').select('*').eq('warehouse_code', selectedCode).order('location_code')
+      maps = m || []
+    }
+
+    v.innerHTML = `
+      <div style="flex:0 0 auto; margin-bottom:12px;">
+        <h3>仓库管理</h3>
+        <div class="row" style="margin-bottom:12px;">
+          <input id="w-code" placeholder="仓库代码 *" style="flex:1;" />
+          <input id="w-name" placeholder="仓库名称 *" style="flex:2;" />
+          <input id="w-region" placeholder="区域" style="flex:1;" />
+          <button id="btn-w-add" style="flex:1;">新增</button>
+        </div>
+        <div id="w-msg"></div>
+      </div>
+      
+      <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px; margin-bottom:16px; max-height:200px;">
+        <table>
+          <tr><th>代码</th><th>名称</th><th>区域</th><th>默认门店</th><th>状态</th><th>操作</th></tr>
+          <tbody>${list.map(r=>`<tr ${r.warehouse_code===selectedCode?'style="background:#e6f4ff;"':''}>
+            <td><a href="javascript:;" data-pick-wh="${r.warehouse_code}" style="color:#1677ff; font-weight:bold;">${r.warehouse_code}</a></td>
+            <td>${r.warehouse_name}</td><td>${r.region||''}</td>
+            <td>${r.default_store_code||'-'}</td>
+            <td>${r.status===1?'启用':'停用'}</td>
+            <td>${isSuper() ? `<button class="small danger" data-del-wh="${r.id}" data-code="${r.warehouse_code}">删除</button>` : ''}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+
+      <div class="row" style="margin-bottom:16px;">
+        <div style="flex:1; background:#fafafa; padding:16px; border-radius:4px; border:1px solid #ebeef5;">
+          <h3>当前仓库仓位：${sel ? sel.warehouse_code : '未选择'}</h3>
+          <div class="row" style="margin-bottom:12px;">
+            <input id="l-code" placeholder="仓位代码 *" style="flex:1;" />
+            <input id="l-name" placeholder="仓位名称" style="flex:1;" />
+            <button id="btn-l-add" style="flex:0 0 auto;">新增仓位</button>
+          </div>
+          <div id="l-msg"></div>
+          <div class="scroll" style="max-height:200px; border:1px solid #ebeef5; background:#fff;">
+            <table>
+              <tr><th>仓位代码</th><th>名称</th><th>操作</th></tr>
+              <tbody>${locs.map(r=>`<tr>
+                <td>${r.location_code}</td><td>${r.location_name||''}</td>
+                <td>${isSuper() ? `<button class="small danger" data-del-loc="${r.id}" data-code="${r.location_code}">删除</button>` : ''}</td>
+              </tr>`).join('') || '<tr><td colspan="3">无数据</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
+        <div style="flex:1; background:#fafafa; padding:16px; border-radius:4px; border:1px solid #ebeef5;">
+          <h3>仓位映射（只读）</h3>
+          <div class="scroll" style="max-height:200px; border:1px solid #ebeef5; background:#fff;">
+            <table>
+              <tr><th>仓位代码</th><th>仓库代码</th><th>仓库名称</th></tr>
+              <tbody>${maps.map(r=>`<tr>
+                <td>${r.location_code}</td><td>${r.warehouse_code}</td><td>${r.warehouse_name||''}</td>
+              </tr>`).join('') || '<tr><td colspan="3">无数据</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>`
+
+    v.querySelectorAll('[data-pick-wh]').forEach(a => { a.onclick = () => { selectedCode = a.dataset.pickWh; renderAll() } })
+
+    document.getElementById('btn-w-add').onclick = async () => {
+      const code = document.getElementById('w-code').value.trim()
+      const name = document.getElementById('w-name').value.trim()
+      const region = document.getElementById('w-region').value.trim() || null
+      if (!code || !name) return
+      const { error } = await ctx.supabase.from('warehouse').insert({ warehouse_code: code, warehouse_name: name, region })
+      if (error) return document.getElementById('w-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      await logOp('create_warehouse', '仓库 ' + code)
+      document.getElementById('w-msg').innerHTML = ctx.msg('已新增', true)
+      renderWh(v)
+    }
+
+    document.getElementById('btn-l-add').onclick = async () => {
+      if (!selectedCode) return
+      const code = document.getElementById('l-code').value.trim()
+      const name = document.getElementById('l-name').value.trim() || null
+      if (!code) return
+      const { error } = await ctx.supabase.from('location_config').insert({ warehouse_code: selectedCode, location_code: code, location_name: name, created_by: ctx.operatorName })
+      if (error) return document.getElementById('l-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      await ctx.supabase.from('location_warehouse_map').insert({ location_code: code, warehouse_code: selectedCode, warehouse_name: sel?.warehouse_name || null })
+      await logOp('create_location', '仓位 ' + selectedCode + '/' + code)
+      document.getElementById('l-msg').innerHTML = ctx.msg('已新增', true)
+      renderAll()
+    }
+
+    v.querySelectorAll('[data-del-wh]').forEach(b => {
+      b.onclick = async () => {
+        const id = b.dataset.delWh; const code = b.dataset.code
+        const { data: cnt } = await ctx.supabase.from('location_config').select('id').eq('warehouse_code', code).limit(1)
+        if (cnt && cnt.length) return alert('该仓库下还有仓位，请先删除仓位')
+        if (!confirm('确定删除该仓库？')) return
+        await ctx.supabase.from('warehouse').delete().eq('id', id)
+        await logOp('delete_warehouse', '仓库 ' + code)
+        renderWh(v)
+      }
+    })
+
+    v.querySelectorAll('[data-del-loc]').forEach(b => {
+      b.onclick = async () => {
+        const code = b.dataset.code
+        if (!confirm('确定删除该仓位？')) return
+        await ctx.supabase.from('location_config').delete().eq('id', b.dataset.delLoc)
+        await logOp('delete_location', '仓位 ' + code)
+        renderAll()
+      }
+    })
+  }
+  renderAll()
+}
+
+// ===== 5.2 门店 =====
+async function renderStore(v) {
+  const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
+  const { data } = await ctx.supabase.from('store_config_detail').select('*')
+  v.innerHTML = `
+    <div style="flex:0 0 auto; margin-bottom:12px;">
+      <div class="row" style="margin-bottom:12px;">
+        <select id="s-wh" style="flex:1;"><option value="">全部仓库</option>${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
+        <input id="s-code" placeholder="门店代码 *" style="flex:1;" />
+        <input id="s-name" placeholder="门店名称" style="flex:2;" />
+        <button id="btn-s-add" style="flex:1;">新增</button>
+      </div>
+      <div id="s-msg"></div>
+    </div>
+    <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+      <table><tr><th>仓库</th><th>门店代码</th><th>名称</th><th>单据数</th><th>操作</th></tr>
+        <tbody>${(data||[]).map(r=>`<tr>
+          <td>${r.warehouse_name||''}</td><td>${r.store_code}</td><td>${r.store_name||''}</td>
+          <td>${r.bill_count||0}</td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.store_code}">删除</button>` : ''}</td>
+        </tr>`).join('')}</tbody></table>
+    </div>`
+  document.getElementById('btn-s-add').onclick = async () => {
+    const code = document.getElementById('s-code').value.trim()
+    if (!code) return
+    const { error } = await ctx.supabase.from('store_config').insert({ warehouse_code: document.getElementById('s-wh').value || null, store_code: code, store_name: document.getElementById('s-name').value.trim() || null, created_by: ctx.operatorName })
+    if (error) return document.getElementById('s-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    await logOp('create_store', '门店 ' + code)
+    document.getElementById('s-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('store')
+  }
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除？')) return
+      await ctx.supabase.from('store_config').delete().eq('id', b.dataset.del)
+      await logOp('delete_store', '门店 ' + b.dataset.code)
+      renderBaseSub('store')
+    }
+  })
+}
+
+// ===== 5.3 商品主数据 =====
+async function renderProduct(v) {
+  const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
+  const { data } = await ctx.supabase.from('product_master').select('*').order('id', { ascending: false }).limit(200)
+  v.innerHTML = `
+    <div style="flex:0 0 auto; margin-bottom:12px;">
+      <div class="row" style="margin-bottom:12px;">
+        <select id="p-wh" style="flex:1;">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
+        <input id="p-file" type="file" accept=".xlsx,.xls" style="flex:2;" />
+        <button id="btn-p-import" style="flex:1;">Excel 导入</button>
+      </div>
+      <div id="p-msg"></div>
+    </div>
+    
+    <div style="flex:0 0 auto; margin-bottom:12px; padding:12px; background:#fafafa; border:1px solid #ebeef5; border-radius:4px;">
+      <h3 style="margin-bottom:8px;">手动新增商品</h3>
+      <div class="row" style="margin-bottom:8px;">
+        <select id="pm-wh" style="flex:1;">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
+        <input id="pm-code" placeholder="商品代码 *" style="flex:1;" />
+        <input id="pm-vendor" placeholder="厂编 *" style="flex:1;" />
+        <input id="pm-name" placeholder="品名 *" style="flex:1;" />
+        <input id="pm-spec" placeholder="规格 * (1*1*X)" style="flex:1;" />
+      </div>
+      <div class="row" style="margin-bottom:8px;">
+        <input id="pm-length" type="number" placeholder="长 (cm) *" style="flex:1;" />
+        <input id="pm-width"  type="number" placeholder="宽 (cm) *" style="flex:1;" />
+        <input id="pm-height" type="number" placeholder="高 (cm) *" style="flex:1;" />
+        <input id="pm-weight" type="number" placeholder="重量 (kg) *" style="flex:1;" />
+        <button id="btn-pm-add" style="flex:0 0 auto;">新增商品</button>
+      </div>
+      <div id="pm-msg"></div>
+    </div>
+
     <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
       <table>
-        <thead><tr><th>上传时间</th><th>厂编</th><th>厂商名称</th><th>文件名</th><th>操作</th></tr></thead>
-        <tbody>${(qcs||[]).map(q => `<tr>
-          <td>${new Date(q.created_at).toLocaleString()}</td>
-          <td>${q.vendor_code}</td><td>${q.vendor_name}</td><td>${q.file_name}</td>
-          <td><a href="${q.file_key}" target="_blank" style="color:#1677ff;text-decoration:none;">下载 PDF</a></td>
-        </tr>`).join('') || '<tr><td colspan="5">暂无数据</td></tr>'}</tbody>
+        <thead><tr><th>仓库</th><th>商品代码</th><th>商品名称</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>默认厂编</th><th>操作</th></tr></thead>
+        <tbody>${(data||[]).map(r=>`<tr>
+          <td>${r.warehouse_code||''}</td><td>${r.product_code}</td><td>${r.product_name||''}</td>
+          <td>${r.spec||''}</td>
+          <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''} cm</td>
+          <td>${r.weight ?? ''} kg</td>
+          <td>${r.default_vendor_code||''}</td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.product_code}">删除</button>` : ''}</td>
+        </tr>`).join('')}</tbody>
       </table>
     </div>`
+
+  document.getElementById('btn-p-import').onclick = async () => {
+    const file = document.getElementById('p-file').files[0]
+    if (!file) return document.getElementById('p-msg').innerHTML = ctx.msg('请选择文件', false)
+    const buf = await file.arrayBuffer()
+    const wb = XLSX.read(buf)
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+    const products = rows.map(r => ({
+      product_code: r['商品代码'] || r['product_code'],
+      product_name: r['商品名称'] || r['商品标识'] || r['product_name'],
+      spec: r['包装规格'] || r['spec'],
+      length: r['长'] || r['length'],
+      width: r['宽'] || r['width'],
+      height: r['高'] || r['height'],
+      weight: r['重量'] || r['weight'],
+      default_vendor_code: r['默认厂编'] || r['default_vendor_code'],
+      default_owner_code: r['默认货主'] || r['default_owner_code']
+    })).filter(p => p.product_code)
+    const { data: { session } } = await ctx.supabase.auth.getSession()
+    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/import-products`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+      body: JSON.stringify({ warehouse_code: document.getElementById('p-wh').value, products })
+    })
+    const json = await res.json()
+    if (res.ok) {
+      let h = ctx.msg(`导入 ${json.count} 条`, true)
+      if (json.fail_count > 0) h += `<div style="color:#cf1322;font-size:12px;margin-top:8px;">${json.errors.join('<br>')}</div>`
+      document.getElementById('p-msg').innerHTML = h
+      setTimeout(() => renderBaseSub('product'), 1000)
+    } else {
+      document.getElementById('p-msg').innerHTML = ctx.msg(ctx.translateError(json.error || '导入失败'), false)
+    }
+  }
+
+  document.getElementById('btn-pm-add').onclick = async () => {
+    const msgEl = document.getElementById('pm-msg')
+    const wh = document.getElementById('pm-wh').value
+    const code = document.getElementById('pm-code').value.trim()
+    const vendor = document.getElementById('pm-vendor').value.trim()
+    const name = document.getElementById('pm-name').value.trim()
+    const spec = document.getElementById('pm-spec').value.trim()
+    const length = document.getElementById('pm-length').value.trim()
+    const width = document.getElementById('pm-width').value.trim()
+    const height = document.getElementById('pm-height').value.trim()
+    const weight = document.getElementById('pm-weight').value.trim()
+
+    if (!code || !vendor || !name || !spec) return msgEl.innerHTML = ctx.msg('商品代码、厂编、品名、规格为必填', false)
+    if (!isValidSpec(spec)) return msgEl.innerHTML = ctx.msg('包装规格格式错误，必须是 1*1*X', false)
+    if (!length || !width || !height || !weight) return msgEl.innerHTML = ctx.msg(SIZE_EMPTY_MSG, false)
+
+    const { error } = await ctx.supabase.from('product_master').insert({
+      warehouse_code: wh, product_code: code, product_name: name, spec,
+      length: Number(length), width: Number(width), height: Number(height), weight: Number(weight),
+      default_vendor_code: vendor, default_owner_code: vendor
+    })
+    if (error) return msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    await logOp('create_product', '商品 ' + code)
+    msgEl.innerHTML = ctx.msg('新增成功', true)
+    setTimeout(() => renderBaseSub('product'), 1000)
+  }
+
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除？')) return
+      await ctx.supabase.from('product_master').delete().eq('id', b.dataset.del)
+      await logOp('delete_product', '商品 ' + b.dataset.code)
+      renderBaseSub('product')
+    }
+  })
+}
+
+// ===== 5.4 预约时间段 =====
+async function renderDeadline(v) {
+  const { data } = await ctx.supabase.from('deadline_config').select('*').order('id')
+  v.innerHTML = `
+    <div style="flex:0 0 auto; margin-bottom:12px;">
+      <div class="row">
+        <input id="d-vendor" placeholder="厂编（空=全部）" style="flex:1;" />
+        <input id="d-wh" placeholder="仓库（空=全部）" style="flex:1;" />
+        <select id="d-type" style="flex:1;"><option value="weekday">工作日</option><option value="weekend">周末</option><option value="all">全部</option></select>
+        <input id="d-value" placeholder="如 07:00-15:00 *" style="flex:2;" />
+        <button id="btn-d-add" style="flex:1;">新增</button>
+      </div>
+      <div id="d-msg"></div>
+    </div>
+    <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+      <table><tr><th>厂编</th><th>仓库</th><th>日类型</th><th>时间段</th><th>操作</th></tr>
+        <tbody>${(data||[]).map(r=>`<tr>
+          <td>${r.vendor_code||'（全部）'}</td><td>${r.warehouse_code||'（全部）'}</td>
+          <td>${r.day_type === 'weekday' ? '工作日' : r.day_type === 'weekend' ? '周末' : '全部'}</td><td>${r.config_value}</td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-value="${r.config_value}">删除</button>` : ''}</td>
+        </tr>`).join('')}</tbody></table>
+    </div>`
+  document.getElementById('btn-d-add').onclick = async () => {
+    const configValue = document.getElementById('d-value').value.trim()
+    if (!configValue) return
+    const { error } = await ctx.supabase.from('deadline_config').insert({
+      vendor_code: document.getElementById('d-vendor').value.trim() || null,
+      warehouse_code: document.getElementById('d-wh').value.trim() || null,
+      day_type: document.getElementById('d-type').value,
+      config_value: configValue, updated_by: ctx.operatorName
+    })
+    if (error) return document.getElementById('d-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    await logOp('create_deadline', '预约时间段 ' + configValue)
+    document.getElementById('d-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('deadline')
+  }
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除？')) return
+      await ctx.supabase.from('deadline_config').delete().eq('id', b.dataset.del)
+      await logOp('delete_deadline', '预约时间段 ' + b.dataset.value)
+      renderBaseSub('deadline')
+    }
+  })
+}
+
+// ===== 5.5 节假日 =====
+async function renderHoliday(v) {
+  const { data } = await ctx.supabase.from('holiday_config').select('*').order('holiday_date')
+  v.innerHTML = `
+    <div style="flex:0 0 auto; margin-bottom:12px;">
+      <div class="row">
+        <input id="h-date" type="date" style="flex:1;" />
+        <input id="h-desc" placeholder="说明" style="flex:2;" />
+        <button id="btn-h-add" style="flex:1;">新增</button>
+      </div>
+      <div id="h-msg"></div>
+    </div>
+    <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+      <table><tr><th>日期</th><th>说明</th><th>操作</th></tr>
+        <tbody>${(data||[]).map(r=>`<tr>
+          <td>${r.holiday_date}</td><td>${r.description||''}</td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-date="${r.holiday_date}">删除</button>` : ''}</td>
+        </tr>`).join('')}</tbody></table>
+    </div>`
+  document.getElementById('btn-h-add').onclick = async () => {
+    const date = document.getElementById('h-date').value
+    if (!date) return
+    const { error } = await ctx.supabase.from('holiday_config').insert({ holiday_date: date, description: document.getElementById('h-desc').value.trim() || null })
+    if (error) return document.getElementById('h-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    await logOp('create_holiday', '节假日 ' + date)
+    document.getElementById('h-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('holiday')
+  }
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除？')) return
+      await ctx.supabase.from('holiday_config').delete().eq('id', b.dataset.del)
+      await logOp('delete_holiday', '节假日 ' + b.dataset.date)
+      renderBaseSub('holiday')
+    }
+  })
+}
+
+// ===== 5.6 强制放行 =====
+async function renderBypass(v) {
+  const { data } = await ctx.supabase.from('bypass_list').select('*').order('bypass_date', { ascending: false })
+  v.innerHTML = `
+    <div style="flex:0 0 auto; margin-bottom:12px;">
+      <div class="row">
+        <input id="b-vendor" placeholder="厂编 *" style="flex:1;" />
+        <input id="b-wh" placeholder="仓库（空=全部）" style="flex:1;" />
+        <input id="b-date" type="date" style="flex:1;" />
+        <input id="b-reason" placeholder="原因" style="flex:2;" />
+        <button id="btn-b-add" style="flex:1;">新增</button>
+      </div>
+      <div id="b-msg"></div>
+    </div>
+    <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+      <table><tr><th>厂编</th><th>仓库</th><th>日期</th><th>原因</th><th>操作</th></tr>
+        <tbody>${(data||[]).map(r=>`<tr>
+          <td>${r.vendor_code}</td><td>${r.warehouse_code||'（全部）'}</td>
+          <td>${r.bypass_date}</td><td>${r.reason||''}</td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-vendor="${r.vendor_code}" data-date="${r.bypass_date}">删除</button>` : ''}</td>
+        </tr>`).join('')}</tbody></table>
+    </div>`
+  document.getElementById('btn-b-add').onclick = async () => {
+    const vendor = document.getElementById('b-vendor').value.trim()
+    const date = document.getElementById('b-date').value
+    if (!vendor || !date) return
+    const { error } = await ctx.supabase.from('bypass_list').insert({
+      vendor_code: vendor, warehouse_code: document.getElementById('b-wh').value.trim() || null, bypass_date: date, reason: document.getElementById('b-reason').value.trim() || null, created_by: ctx.operatorName
+    })
+    if (error) return document.getElementById('b-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    await logOp('create_bypass', '强制放行 ' + vendor, { bypass_date: date })
+    document.getElementById('b-msg').innerHTML = ctx.msg('已新增', true)
+    renderBaseSub('bypass')
+  }
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除？')) return
+      await ctx.supabase.from('bypass_list').delete().eq('id', b.dataset.del)
+      await logOp('delete_bypass', '强制放行 ' + b.dataset.vendor, { bypass_date: b.dataset.date })
+      renderBaseSub('bypass')
+    }
+  })
+}
+
+// ================= 7. 日志 =================
+async function renderLogs(v) {
+  const { data: ops } = await ctx.supabase.from('operation_log').select('*').order('id', { ascending: false }).limit(200)
+  const { data: edits } = await ctx.supabase.from('vendor_edit_log').select('*').order('id', { ascending: false }).limit(200)
+  const { data: batches } = await ctx.supabase.from('export_batch_detail').select('*').order('id', { ascending: false }).limit(200)
+  const { data: qcs } = await ctx.supabase.from('qc_upload_log').select('*').order('id', { ascending: false }).limit(200)
+
+  v.innerHTML = `
+    <div class="tabs" id="log-tabs">
+      <button data-t="op" class="active">操作日志</button>
+      <button data-t="edit">厂商修改记录</button>
+      <button data-t="batch">导出批次</button>
+      <button data-t="qc">质检上传记录</button>
+    </div>
+    <div id="log-view" style="flex:1; overflow:hidden; display:flex; flex-direction:column;"></div>`
+
+  const renderOp = () => {
+    document.getElementById('log-view').innerHTML = `
+      <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+        <table><tr><th>操作时间</th><th>操作用户</th><th>操作动作</th><th>目标对象</th><th>详细内容</th></tr>
+          <tbody>${(ops||[]).map(r=>`<tr>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+            <td>${r.operator_name||''}</td>
+            <td>${r.action||''}</td>
+            <td>${r.target||''}</td>
+            <td><button class="small secondary" data-detail="${r.id}">查看详情</button></td>
+          </tr>`).join('') || '<tr><td colspan="5">暂无数据</td></tr>'}</tbody></table>
+      </div>
+      <div id="log-detail-panel"></div>`
+    document.querySelectorAll('[data-detail]').forEach(btn => {
+      btn.onclick = () => {
+        const id = Number(btn.dataset.detail)
+        const r = (ops||[]).find(x => x.id === id)
+        if (!r) return
+        const d = r.detail || {}
+        let html = `<div class="card" style="margin-top:12px;border:2px solid #1677ff;">
+          <h2>详情 · ${r.action}</h2>
+          <p style="font-size:13px;color:#666;margin-bottom:8px;">操作人：${r.operator_name||''} ｜ 目标：${r.target||''} ｜ 时间：${new Date(r.created_at).toLocaleString()}</p>`
+        if (Array.isArray(d.success_list) || Array.isArray(d.failed_list)) {
+          html += `<div style="margin-bottom:8px;"><strong>成功 ${d.success || 0} 条：</strong>${(d.success_list||[]).join(', ') || '无'}</div>`
+          html += `<div><strong>失败 ${d.failed || 0} 条：</strong>`
+          if ((d.failed_list||[]).length) {
+            html += `<table style="margin-top:6px;"><tr><th>厂编</th><th>失败原因</th></tr>${d.failed_list.map(f => `<tr><td>${f.vendor_code||''}</td><td style="color:#cf1322;">${f.error||''}</td></tr>`).join('')}</table>`
+          } else html += ' 无'
+          html += '</div>'
+        } else {
+          html += `<pre style="font-size:12px;background:#fafafa;padding:8px;border-radius:4px;overflow:auto;">${JSON.stringify(d, null, 2)}</pre>`
+        }
+        html += `<button class="secondary" id="btn-close-detail" style="margin-top:8px;">关闭</button></div>`
+        document.getElementById('log-detail-panel').innerHTML = html
+        document.getElementById('btn-close-detail').onclick = () => { document.getElementById('log-detail-panel').innerHTML = '' }
+      }
+    })
+  }
+
+  const renderEdit = () => {
+    document.getElementById('log-view').innerHTML = `
+      <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+        <table><tr><th>修改时间</th><th>单据ID</th><th>厂编</th><th>修改字段</th><th>操作</th></tr>
+          <tbody>${(edits||[]).map(r=>`<tr>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+            <td>${r.bill_id}</td>
+            <td>${r.vendor_code||''}</td>
+            <td style="font-size:11px;">${(r.changed_fields||[]).join(', ')}</td>
+            <td><button class="small secondary" data-detail="${r.id}">查看详情</button></td>
+          </tr>`).join('') || '<tr><td colspan="5">暂无数据</td></tr>'}</tbody></table>
+      </div>`
+    document.querySelectorAll('[data-detail]').forEach(btn => {
+      btn.onclick = () => {
+        const id = Number(btn.dataset.detail)
+        const r = (edits||[]).find(x => x.id === id)
+        if (!r) return
+        const before = r.before_data || {}; const after = r.after_data || {}; const fields = r.changed_fields || []
+        let html = `<div class="card" style="margin-top:12px;"><h2>修改详情（单据 #${r.bill_id}）</h2><table><tr><th>字段名</th><th>修改前</th><th>修改后</th></tr>`
+        fields.forEach(f => {
+          html += `<tr><td>${f}</td><td style="color:#cf1322;">${JSON.stringify(before[f] ?? '')}</td><td style="color:#389e0d;">${JSON.stringify(after[f] ?? '')}</td></tr>`
+        })
+        html += `</table></div>`
+        document.getElementById('log-view').insertAdjacentHTML('beforeend', html)
+      }
+    })
+  }
+
+  const renderBatch = () => {
+    document.getElementById('log-view').innerHTML = `
+      <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+        <table><tr><th>批次号</th><th>仓库</th><th>开始日期</th><th>结束日期</th><th>类型</th><th>条数</th><th>操作人</th><th>时间</th></tr>
+          <tbody>${(batches||[]).map(r=>`<tr>
+            <td>${r.batch_no}</td><td>${r.warehouse_code||''}</td>
+            <td>${r.start_date||''}</td><td>${r.end_date||''}</td>
+            <td>${r.bill_type||''}</td>
+            <td>${r.bill_count_snapshot ?? r.count ?? 0}（实际 ${r.actual_count||0}）</td>
+            <td>${r.operator||''}</td><td>${new Date(r.created_at).toLocaleString()}</td>
+          </tr>`).join('') || '<tr><td colspan="8">暂无数据</td></tr>'}</tbody></table>
+      </div>`
+  }
+
+  const renderQC = () => {
+    document.getElementById('log-view').innerHTML = `
+      <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+        <table><tr><th>上传时间</th><th>厂编</th><th>厂商名称</th><th>文件名</th><th>操作</th></tr>
+          <tbody>${(qcs||[]).map(q=>`<tr>
+            <td>${new Date(q.created_at).toLocaleString()}</td>
+            <td>${q.vendor_code}</td><td>${q.vendor_name}</td><td>${q.file_name}</td>
+            <td><a href="${q.file_key}" target="_blank" style="color:#1677ff;text-decoration:none;">下载 PDF</a></td>
+          </tr>`).join('') || '<tr><td colspan="5">暂无数据</td></tr>'}</tbody></table>
+      </div>`
+  }
+
+  document.querySelectorAll('#log-tabs button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('#log-tabs button').forEach(x => x.classList.remove('active'))
+      b.classList.add('active')
+      if (b.dataset.t === 'op') renderOp()
+      else if (b.dataset.t === 'edit') renderEdit()
+      else if (b.dataset.t === 'batch') renderBatch()
+      else renderQC()
+    }
+  })
+  renderOp()
+}
+
+// ================= 8. 系统配置 =================
+const CONFIG_CN = { app_version: '系统版本', app_name: '系统名称', release_notes: '更新说明', release_date: '发布日期', maintenance_mode: '维护模式', cleanup_days: '清理保留天数', cleanup_time: '清理执行时间' }
+function formatConfigValue(key, val) {
+  if (key === 'maintenance_mode') return val === 'true' ? '开启' : '关闭'
+  if (key === 'cleanup_days') return (val || '') + ' 天'
+  if (key === 'cleanup_time') return '每天 ' + (val || '')
+  return val || ''
 }
 
 async function renderSys(v) {
   const { data: cfgs } = await ctx.supabase.from('system_config').select('*').order('config_key')
+  const { data: vers } = await ctx.supabase.from('version_history').select('*').order('id', { ascending: false }).limit(50)
   const cfgMap = {}
   ;(cfgs||[]).forEach(x => cfgMap[x.config_key] = x.config_value)
+  const cleanupDays = cfgMap.cleanup_days || '7'
+  const cleanupTime = cfgMap.cleanup_time || '03:00'
   const isMaintenance = cfgMap.maintenance_mode === 'true'
+
   v.innerHTML = `
-    <div class="row" style="margin-bottom:16px;">
-      <div class="card" style="flex:1; margin:0;">
-        <h2>维护模式：${isMaintenance ? '已开启' : '关闭'}</h2>
-        <button id="btn-maint" style="${isMaintenance ? 'background:#389e0d' : 'background:#ff4d4f'}">${isMaintenance ? '关闭维护' : '开启维护'}</button>
+    <div style="flex:0 0 auto; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; background:${isMaintenance ? '#fff2f0' : '#f6ffed'}; border:1px solid ${isMaintenance ? '#ffccc7' : '#b7eb8f'}; padding:16px; border-radius:4px;">
+      <div>
+        <h3 style="margin:0; color:${isMaintenance ? '#cf1322' : '#389e0d'};">维护模式：${isMaintenance ? '已开启' : '关闭'}</h3>
+        <p style="margin:4px 0 0; font-size:13px; color:#666;">开启后，非超管账号将被强制踢出，无法操作。</p>
       </div>
+      <button id="btn-toggle-maintenance" style="${isMaintenance ? 'background:#389e0d' : 'background:#ff4d4f'}">${isMaintenance ? '关闭维护' : '开启维护'}</button>
+    </div>
+
+    <div style="flex:0 0 auto; margin-bottom:16px; border:2px dashed #91caff; padding:16px; border-radius:4px;">
+      <h3>定时清理配置（仅超管）</h3>
+      <p style="font-size:12px;color:#666;margin:8px 0;">清理 <strong>${cleanupDays}</strong> 天前已导出单据和质检记录；每天 <strong>${cleanupTime}</strong> 执行。</p>
+      <div class="row">
+        <div><label>保留天数</label><input id="cleanup-days" type="number" min="1" max="365" value="${cleanupDays}" /></div>
+        <div><label>每天执行时间</label><input id="cleanup-time" type="time" value="${cleanupTime}" /></div>
+        <button id="btn-save-cleanup" ${isSuper() ? '' : 'disabled'} style="align-self:flex-end;">保存（立即生效）</button>
+      </div>
+      <div id="cleanup-msg"></div>
+    </div>
+    
+    <div class="scroll" style="border:1px solid #ebeef5; border-radius:4px;">
+      <table><tr><th>配置项</th><th>值</th><th>更新时间</th><th>操作</th></tr>
+        <tbody>${(cfgs||[]).map(r=>`<tr>
+          <td>${CONFIG_CN[r.config_key] || r.config_key}</td><td>${formatConfigValue(r.config_key, r.config_value)}</td>
+          <td>${new Date(r.updated_at).toLocaleString()}</td>
+          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-key="${r.config_key}">删除</button>` : ''}</td>
+        </tr>`).join('')}</tbody></table>
     </div>`
-  document.getElementById('btn-maint').onclick = async () => {
-    await ctx.supabase.from('system_config').upsert({ config_key: 'maintenance_mode', config_value: isMaintenance ? 'false' : 'true' }, { onConflict: 'config_key' })
+
+  document.getElementById('btn-toggle-maintenance').onclick = async () => {
+    const newStatus = isMaintenance ? 'false' : 'true'
+    if (!confirm(`确定要${isMaintenance ? '关闭' : '开启'}维护模式吗？`)) return
+    await ctx.supabase.from('system_config').upsert({ config_key: 'maintenance_mode', config_value: newStatus }, { onConflict: 'config_key' })
     renderTab('sys')
   }
+
+  document.getElementById('btn-save-cleanup').onclick = async () => {
+    if (!isSuper()) return
+    const d = Number(document.getElementById('cleanup-days').value)
+    const t = document.getElementById('cleanup-time').value
+    if (!d || d < 1 || d > 365 || !t) return document.getElementById('cleanup-msg').innerHTML = ctx.msg('参数不合法', false)
+    const { error } = await ctx.supabase.rpc('save_cleanup_config', { p_days: d, p_time: t })
+    if (error) return document.getElementById('cleanup-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    document.getElementById('cleanup-msg').innerHTML = ctx.msg('已保存，新配置立即生效', true)
+    setTimeout(() => renderTab('sys'), 1000)
+  }
+
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除？')) return
+      await ctx.supabase.from('system_config').delete().eq('id', b.dataset.del)
+      renderTab('sys')
+    }
+  })
 }
