@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-23 终极完整版：代报搜索联想、济转西双向、DSP核验精确化、极速粘贴）
+// app.js — 主逻辑（2026-10-23 终极版：隐藏质检报告入口、管理员代报、出库6类型）
 
 import { supabase } from './supabase.js'
 
@@ -363,10 +363,11 @@ function renderMain() {
     init()
   }
   const nav = document.getElementById('nav')
-  // ★ 管理员导航栏加上“管理填报”
+  
+  // ★ 修改点：彻底去掉了非管理员的 ['qc','质检报告'] 标签
   const tabs = isAdmin 
     ? [['fill','管理填报'], ['admin','管理后台']] 
-    : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告']]
+    : [['fill','填报'],['my','我的单据'],['products','商品资料']]
   
   nav.innerHTML = tabs.map(([k, v]) => `<button data-k="${k}">${v}</button>`).join('')
   nav.querySelectorAll('button').forEach(b => {
@@ -416,7 +417,7 @@ async function renderView(key) {
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
-  if (key === 'qc') return renderQC(view)
+  if (key === 'qc') return renderQC(view)  // 保留函数，但导航栏已无入口
   if (key === 'admin') {
     try {
       const mod = await import('./admin.js')
@@ -540,10 +541,9 @@ function calcCountdown(range) {
 // ================= 填报 =================
 async function renderFill(view) {
   let selectedVendor = null
-  let isAdminDelegate = isAdmin // ★ 管理员代报标记
+  let isAdminDelegate = isAdmin 
 
   if (isAdminDelegate) {
-    // 管理员代报：拉取所有厂商
     const { data: vps } = await supabase.from('vendor_profile').select('vendor_code, vendor_name').eq('account_type', 'vendor').order('vendor_code')
     if (!vps || !vps.length) {
       view.innerHTML = `<div class="card"><h2>代报单据</h2><p style="color:#cf1322;">系统中暂无厂商，请先创建厂商。</p></div>`
@@ -564,13 +564,7 @@ async function renderFill(view) {
   let myVendorCode = selectedVendor.vendor_code
 
   let myWhs = []
-  if (isAdminDelegate) {
-    const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
-    if (vp) {
-      const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
-      myWhs = (vw||[]).map(x => x.warehouse_code)
-    }
-  } else if (isLogistics) {
+  if (isAdminDelegate || isLogistics) {
     const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
     if (vp) {
       const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
@@ -665,7 +659,6 @@ async function renderFill(view) {
           <div class="row" style="margin-bottom:12px;">
             <div style="position:relative;">
               <label>代报厂商 *</label>
-              <!-- 使用 input 替代 select，支持搜索 -->
               <input id="vendor-search-input" placeholder="输入厂编或名称搜索，如 208654" value="${myVendorCode}" autocomplete="off" />
               <div id="vendor-suggest-box" style="position:absolute; top: 65px; left: 0; right: 0; background:#fff; border:1px solid #eee; border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,.1); z-index:100; display:none; max-height:200px; overflow:auto;"></div>
             </div>
@@ -746,12 +739,10 @@ async function renderFill(view) {
       const searchInput = document.getElementById('vendor-search-input')
       const suggestBox = document.getElementById('vendor-suggest-box')
 
-      // 1. 搜索联想逻辑
       searchInput.oninput = () => {
         const kw = searchInput.value.trim().toLowerCase()
         if (!kw) { suggestBox.style.display = 'none'; return }
 
-        // 过滤出包含厂编或名称的结果，最多 10 条
         const matches = myVendors.filter(v => 
           v.vendor_code.toLowerCase().includes(kw) || 
           (v.vendor_name || '').toLowerCase().includes(kw)
@@ -771,34 +762,29 @@ async function renderFill(view) {
         `).join('')
         suggestBox.style.display = 'block'
 
-        // 2. 点击联想项
         suggestBox.querySelectorAll('[data-pick]').forEach(el => {
           el.onmousedown = async (e) => {
             e.preventDefault()
             const vc = el.dataset.pick
             
-            // 如果选的是当前厂商，不处理
             if (vc === myVendorCode) {
               searchInput.value = vc
               suggestBox.style.display = 'none'
               return
             }
 
-            // 检查是否有填了一半的数据，避免误触丢失
             const hasData = inRows.some(isInRowFilled) || outRows.some(isOutRowFilled)
             if (hasData && !confirm('切换厂商会清空当前已填写的内容，确定切换吗？')) {
-              searchInput.value = myVendorCode // 恢复原值
+              searchInput.value = myVendorCode
               suggestBox.style.display = 'none'
               return
             }
 
-            // 执行切换逻辑
             selectedVendor = myVendors.find(v => v.vendor_code === vc)
             myVendorCode = vc
             searchInput.value = vc
             suggestBox.style.display = 'none'
 
-            // 重新加载该厂商的商品和仓库
             productList = await loadProducts(vc)
             
             const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', vc).maybeSingle()
@@ -813,7 +799,6 @@ async function renderFill(view) {
               }
             }
             
-            // 清空表格并重绘
             inRows = [newInRowForVendor(vc)]
             outRows = [newOutRowForVendor(vc)]
             render()
@@ -821,7 +806,6 @@ async function renderFill(view) {
         })
       }
 
-      // 3. 失去焦点时隐藏联想框
       searchInput.onblur = () => {
         setTimeout(() => { suggestBox.style.display = 'none' }, 200)
       }
@@ -833,7 +817,6 @@ async function renderFill(view) {
     const btnAddOut = document.getElementById('btn-add-out')
     if (btnAddOut) btnAddOut.onclick = () => { outRows.push(newOutRowForVendor(myVendorCode)); renderOutTable(); renderPreview() }
 
-    // ★ 入库解析粘贴内容
     document.getElementById('btn-parse-in').onclick = () => {
       const txt = document.getElementById('in-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -886,7 +869,6 @@ async function renderFill(view) {
 
     document.getElementById('btn-clear-in-paste').onclick = () => { document.getElementById('in-paste-area').value = '' }
 
-    // ★ 出库解析粘贴内容（支持 3列 VMI / 4列 DSP）
     document.getElementById('btn-parse-out').onclick = () => {
       const txt = document.getElementById('out-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -913,7 +895,6 @@ async function renderFill(view) {
         if (!p) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 不存在`); continue }
         if (!isValidSpec(p.spec)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 规格不合规`); continue }
 
-        // 判定 VMI 还是 DSP
         let billType = 'VMI出库'
         let storeCode = ''
         
@@ -1098,7 +1079,7 @@ async function renderFill(view) {
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, arrival_date: r.arrival_date || null, effective_date: addOneDay(r.arrival_date),
         whole_process: 'NO', product_remark: r.product_name || null,
-        submitter_type: isAdmin ? 'admin' : 'vendor' // ★ 代报标识
+        submitter_type: isAdmin ? 'admin' : 'vendor'
       }))
 
       const outPayloads = validOut.map(r => ({
@@ -1109,7 +1090,7 @@ async function renderFill(view) {
         pick_date: r.pick_date || null, effective_date: addOneDay(r.pick_date),
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, product_remark: r.product_name || null,
-        submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode // ★ 代报标识
+        submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode
       }))
 
       const all = [...inPayloads, ...outPayloads]
@@ -1528,7 +1509,7 @@ async function renderMy(view) {
     </div>`
 }
 
-// ================= 质检报告 =================
+// ================= 质检报告 (保留函数，但界面已无入口) =================
 async function renderQC(view) {
   let q = supabase.from('qc_report').select('*').order('id', { ascending: false })
   
@@ -1590,10 +1571,8 @@ async function renderQC(view) {
 
     try {
       const myCode = isLogistics ? myVendors[0].vendor_code : currentProfile.vendor_code
-      // 强制后缀为 .pdf，防止伪造
       const fileName = `qc/${myCode}_${Date.now()}.pdf`
 
-      // 1. 获取 R2 预签名 URL
       msgEl.innerHTML = msg('正在获取上传凭证...', true)
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch(`${SUPABASE_URL}/functions/v1/upload-qc`, {
@@ -1608,7 +1587,6 @@ async function renderQC(view) {
       if (!res.ok) throw new Error('获取上传凭证失败')
       const { uploadUrl, fileUrl } = await res.json()
 
-      // 2. 直传文件到 R2
       msgEl.innerHTML = msg('正在上传到云存储...', true)
       const uploadRes = await fetch(uploadUrl, {
         method: 'PUT',
@@ -1618,7 +1596,6 @@ async function renderQC(view) {
 
       if (!uploadRes.ok) throw new Error('文件上传到 R2 失败')
 
-      // 3. 写入数据库
       msgEl.innerHTML = msg('正在保存记录...', true)
       const { error: dbErr } = await supabase.from('qc_report').insert({
         vendor_id: currentUser.id,
@@ -1652,7 +1629,6 @@ async function renderQC(view) {
       btn.innerText = '删除中...'
 
       try {
-        // 1. 调云函数删 R2 文件
         const { data: { session } } = await supabase.auth.getSession()
         const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-qc`, {
           method: 'POST',
@@ -1664,7 +1640,6 @@ async function renderQC(view) {
         })
         if (!res.ok) throw new Error('R2 文件删除失败')
 
-        // 2. 删数据库记录
         const { error } = await supabase.from('qc_report').delete().eq('id', id)
         if (error) throw error
 
