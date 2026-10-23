@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-23 终极版：隐藏质检报告入口、管理员代报、出库6类型）
+// app.js — 主逻辑（2026-10-23 终极版：隐藏质检报告、WMS单号修复、济转西货主修正）
 
 import { supabase } from './supabase.js'
 
@@ -364,7 +364,7 @@ function renderMain() {
   }
   const nav = document.getElementById('nav')
   
-  // ★ 修改点：彻底去掉了非管理员的 ['qc','质检报告'] 标签
+  // ★ 彻底去掉了质检报告入口
   const tabs = isAdmin 
     ? [['fill','管理填报'], ['admin','管理后台']] 
     : [['fill','填报'],['my','我的单据'],['products','商品资料']]
@@ -417,7 +417,8 @@ async function renderView(key) {
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
-  if (key === 'qc') return renderQC(view)  // 保留函数，但导航栏已无入口
+  // 保留 renderQC 的函数实现，只是没入口了
+  if (key === 'qc') return renderQC(view)
   if (key === 'admin') {
     try {
       const mod = await import('./admin.js')
@@ -470,6 +471,7 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
+// ★ 修正：济转西RT 货主=厂编，DSP 货主=8888
 function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
@@ -481,10 +483,10 @@ function calcOutFields(billType, supplierInput, defaultStore) {
     return { owner_code: supplierInput, store_code: '8205RT' }
   }
   if (billType === '济转西RT(越库)') {
-    return { owner_code: '8888', store_code: '8205RT' }
+    return { owner_code: supplierInput, store_code: '8205RT' }
   }
   if (billType === '济转西DSP(留库)') {
-    return { owner_code: supplierInput, store_code: '8205DSP' }
+    return { owner_code: '8888', store_code: '8205DSP' }
   }
   if (billType === '济转西DSP(越库)') {
     return { owner_code: '8888', store_code: '8205DSP' }
@@ -817,6 +819,7 @@ async function renderFill(view) {
     const btnAddOut = document.getElementById('btn-add-out')
     if (btnAddOut) btnAddOut.onclick = () => { outRows.push(newOutRowForVendor(myVendorCode)); renderOutTable(); renderPreview() }
 
+    // ★ 入库解析
     document.getElementById('btn-parse-in').onclick = () => {
       const txt = document.getElementById('in-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -869,6 +872,7 @@ async function renderFill(view) {
 
     document.getElementById('btn-clear-in-paste').onclick = () => { document.getElementById('in-paste-area').value = '' }
 
+    // ★ 出库解析 (修复WMS单号合并问题)
     document.getElementById('btn-parse-out').onclick = () => {
       const txt = document.getElementById('out-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -883,12 +887,13 @@ async function renderFill(view) {
         
         if (cols.length < 3) { errorMsgs.push(`第 ${i+1} 行：列数不足（需包含 单号/货号/箱数）`); continue }
 
-        const source_no = cols[0]
+        // ★ 核心修复：只取第一个单号，截断空格
+        const rawSourceNo = cols[0].split(' ')[0].trim()
         const product_code = cols[1]
         const boxQtyStr = cols[2]
         const boxQty = Number(boxQtyStr)
 
-        if (!/^\d{9}$/.test(source_no)) { errorMsgs.push(`第 ${i+1} 行：单号 [${source_no}] 格式错误，必须9位数字`); continue }
+        if (!/^\d{9}$/.test(rawSourceNo)) { errorMsgs.push(`第 ${i+1} 行：单号 [${rawSourceNo}] 格式错误，必须9位数字`); continue }
         if (isNaN(boxQty) || boxQty <= 0) { errorMsgs.push(`第 ${i+1} 行：箱数 [${boxQtyStr}] 错误`); continue }
 
         const p = findProduct(product_code)
@@ -910,12 +915,19 @@ async function renderFill(view) {
           storeCode = matchedStore.store_code
         }
 
-        const key = `${source_no}_${product_code}_${billType}_${storeCode}`
+        // ★ 严格区分单号
+        const key = `${rawSourceNo}_${product_code}_${billType}_${storeCode}`
         if (parsedMap.has(key)) {
           parsedMap.get(key).quantity += boxQty
         } else {
           parsedMap.set(key, {
-            source_no, product_code, product_name: p.product_name, spec: p.spec, quantity: boxQty, billType, storeCode
+            source_no: rawSourceNo, 
+            product_code, 
+            product_name: p.product_name, 
+            spec: p.spec, 
+            quantity: boxQty, 
+            billType, 
+            storeCode
           })
         }
       }
@@ -942,6 +954,7 @@ async function renderFill(view) {
           newRow.quantity = item.quantity
           
           newRow.bill_type = item.billType
+          // 针对DSP出库特殊设置货主
           if (item.billType === 'DSP出库') {
             newRow.owner_code = '8888'
             newRow.store_code = item.storeCode
