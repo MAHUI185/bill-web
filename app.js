@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-23 最终版：济转西双向支持 + 强制选留库/越库 + 极速粘贴）
+// app.js — 主逻辑（2026-10-23 终极完整版：代报、济转西双向、强制留库/越库、极速粘贴）
 
 import { supabase } from './supabase.js'
 
@@ -363,7 +363,11 @@ function renderMain() {
     init()
   }
   const nav = document.getElementById('nav')
-  const tabs = isAdmin ? [['admin','管理后台']] : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告']]
+  // ★ 管理员导航栏加上“管理填报”
+  const tabs = isAdmin 
+    ? [['fill','管理填报'], ['admin','管理后台']] 
+    : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告']]
+  
   nav.innerHTML = tabs.map(([k, v]) => `<button data-k="${k}">${v}</button>`).join('')
   nav.querySelectorAll('button').forEach(b => {
     b.onclick = () => {
@@ -450,19 +454,16 @@ function todayBj() {
 }
 
 function getModeByType(billType) {
-  if (billType === 'VMI入库' || billType === '济转西RT(入库)') return 'UNIFY'
-  if (billType === 'DSP入库' || billType === '济转西DSP(入库)') return 'LIKECROSS'
-  if (billType === 'VMI出库' || billType === '留库出') return 'LIKECROSS'
-  if (billType === 'DSP出库' || billType === '越库出') return 'LIKECROSS'
-  if (billType.includes('济转西')) return 'LIKECROSS'
+  if (billType === 'VMI入库' || billType.includes('济转西RT(入库)')) return 'UNIFY'
+  if (billType === 'DSP入库' || billType.includes('济转西DSP(入库)')) return 'LIKECROSS'
   return 'LIKECROSS'
 }
 
 function calcInFields(billType, supplierInput) {
-  if (billType === 'VMI入库' || billType === '济转西RT(入库)') {
+  if (billType === 'VMI入库' || billType.includes('济转西RT(入库)')) {
     return { vendor_code: supplierInput, owner_code: supplierInput }
   }
-  if (billType === 'DSP入库' || billType === '济转西DSP(入库)') {
+  if (billType === 'DSP入库' || billType.includes('济转西DSP(入库)')) {
     return { vendor_code: supplierInput, owner_code: '8888' }
   }
   return { vendor_code: supplierInput, owner_code: '' }
@@ -539,8 +540,18 @@ function calcCountdown(range) {
 // ================= 填报 =================
 async function renderFill(view) {
   let selectedVendor = null
+  let isAdminDelegate = isAdmin // ★ 管理员代报标记
 
-  if (isLogistics) {
+  if (isAdminDelegate) {
+    // 管理员代报：拉取所有厂商
+    const { data: vps } = await supabase.from('vendor_profile').select('vendor_code, vendor_name').eq('account_type', 'vendor').order('vendor_code')
+    if (!vps || !vps.length) {
+      view.innerHTML = `<div class="card"><h2>代报单据</h2><p style="color:#cf1322;">系统中暂无厂商，请先创建厂商。</p></div>`
+      return
+    }
+    myVendors = vps
+    selectedVendor = vps[0]
+  } else if (isLogistics) {
     if (!myVendors.length) {
       view.innerHTML = `<div class="card"><h2>填报单据</h2><p style="color:#cf1322;">当前物流商未配置负责厂商，请联系管理员。</p></div>`
       return
@@ -553,7 +564,14 @@ async function renderFill(view) {
   let myVendorCode = selectedVendor.vendor_code
 
   let myWhs = []
-  if (isLogistics) {
+  if (isAdminDelegate) {
+    // 管理员代报：默认授权所有仓库（或者根据被选厂商动态查）
+    const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
+    if (vp) {
+      const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
+      myWhs = (vw||[]).map(x => x.warehouse_code)
+    }
+  } else if (isLogistics) {
     const codes = myVendors.map(v => v.vendor_code)
     const { data: vps } = await supabase.from('vendor_profile').select('id, vendor_code').in('vendor_code', codes)
     const ids = (vps||[]).map(v => v.id)
@@ -642,8 +660,8 @@ async function renderFill(view) {
   function render() {
     view.innerHTML = `
       <div class="card">
-        <h2>填报单据</h2>
-        ${isLogistics ? `
+        <h2>${isAdminDelegate ? '管理员代报' : '填报单据'}</h2>
+        ${isLogistics || isAdminDelegate ? `
           <div class="row" style="margin-bottom:12px;">
             <div>
               <label>代报厂商 *</label>
@@ -722,7 +740,7 @@ async function renderFill(view) {
     renderInTable()
     renderOutTable()
     renderPreview()
-    startCountdown()
+    if (!isAdminDelegate) startCountdown()
 
     const vs = document.getElementById('vendor-select')
     if (vs) {
@@ -731,6 +749,19 @@ async function renderFill(view) {
         selectedVendor = myVendors.find(v => v.vendor_code === vc)
         myVendorCode = vc
         productList = await loadProducts(vc)
+        
+        // 重新加载授权仓库
+        const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', vc).maybeSingle()
+        if (vp) {
+          const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
+          myWhs = (vw||[]).map(x => x.warehouse_code)
+          if (myWhs.length) {
+            const { data: whInfo } = await supabase.from('warehouse').select('default_store_code').eq('warehouse_code', myWhs[0]).maybeSingle()
+            defaultStoreCode = whInfo?.default_store_code || ''
+          } else {
+            defaultStoreCode = ''
+          }
+        }
         inRows = [newInRowForVendor(vc)]
         outRows = [newOutRowForVendor(vc)]
         render()
@@ -923,15 +954,14 @@ async function renderFill(view) {
       outRows.forEach((r, idx) => {
         if (!isOutRowFilled(r)) return
         const missing = []
-        // 只有 VMI出库 才要求填采购单号，留库出/越库出/济转西 为可选
-        if ((r.bill_type === 'VMI出库') && !r.source_no) missing.push('采购单号')
+        if ((r.bill_type === 'VMI出库' || r.bill_type === '留库出' || r.bill_type === '越库出') && !r.source_no) missing.push('采购单号')
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
         if (!r.spec) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] ${SPEC_EMPTY_MSG}`)
         else if (!isValidSpec(r.spec)) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] 规格格式错误`)
         if (!r.quantity) missing.push('箱数')
         if (!r.pick_date) missing.push('配货日期')
-        if (r.bill_type.includes('DSP') || r.bill_type === '越库出' || r.bill_type.includes('济转西DSP')) {
+        if (r.bill_type.includes('DSP') || r.bill_type === '越库出') {
           if (!r.store_code) missing.push('门店代码')
         }
         if (missing.length) errors.push(`出库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
@@ -945,7 +975,6 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
-      // DSP 前置校验
       const dspOutRows = validOut.filter(r => r.bill_type.includes('DSP') || r.bill_type === '越库出')
       if (dspOutRows.length > 0) {
         const validDspInKeys = new Set()
@@ -979,7 +1008,7 @@ async function renderFill(view) {
       }
 
       let vendorAuthId
-      if (isLogistics) {
+      if (isLogistics || isAdminDelegate) {
         const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
         if (!vp) return msgEl.innerHTML = msg('找不到代报厂商', false)
         vendorAuthId = vp.id
@@ -1007,7 +1036,7 @@ async function renderFill(view) {
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, arrival_date: r.arrival_date || null, effective_date: addOneDay(r.arrival_date),
         whole_process: 'NO', product_remark: r.product_name || null,
-        submitter_type: 'vendor'
+        submitter_type: isAdmin ? 'admin' : 'vendor' // ★ 代报标识
       }))
 
       const outPayloads = validOut.map(r => ({
@@ -1018,7 +1047,7 @@ async function renderFill(view) {
         pick_date: r.pick_date || null, effective_date: addOneDay(r.pick_date),
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, product_remark: r.product_name || null,
-        submitter_type: 'vendor', vendor_code: myVendorCode
+        submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode // ★ 代报标识
       }))
 
       const all = [...inPayloads, ...outPayloads]
@@ -1059,7 +1088,7 @@ async function renderFill(view) {
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:110px;margin:0;padding:4px;" placeholder="输入或选择" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:80px;margin:0;padding:4px;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:60px;margin:0;padding:4px;" /></td>
-      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" readonly style="width:110px;margin:0;padding:4px;background:#f5f5f5;" /></td>
+      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" ${isAdminDelegate ? '' : 'readonly'} style="width:110px;margin:0;padding:4px;${isAdminDelegate ? '' : 'background:#f5f5f5;'}" /></td>
       <td><button class="small danger" data-del-in="${i}" style="padding:4px 8px;">删除</button></td>
     </tr>`
     }).join('')
@@ -1137,7 +1166,7 @@ async function renderFill(view) {
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" readonly style="width:110px;margin:0;padding:4px;background:#f5f5f5;" /></td>
+      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" ${isAdminDelegate ? '' : 'readonly'} style="width:110px;margin:0;padding:4px;${isAdminDelegate ? '' : 'background:#f5f5f5;'}" /></td>
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:110px;margin:0;padding:4px;" placeholder="输入或选择" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:80px;margin:0;padding:4px;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:60px;margin:0;padding:4px;" /></td>
@@ -1217,8 +1246,7 @@ async function renderFill(view) {
 async function renderProducts(view) {
   if (isAdmin) {
     view.innerHTML = `<div class="card"><h2>商品资料</h2><p style="color:#999;">管理员请到管理后台的商品主数据里维护。</p></div>`
-    return
-  }
+    return  }
 
   let selectedVendorCode
 

@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-21 最终版：放开单据删除权限 + 强制尺寸）
+// admin.js — 管理后台（2026-10-23 最终版：含代报数据单独导出）
 
 let ctx = null
 let operatorName = '未知'
@@ -50,12 +50,21 @@ export async function renderAdmin(view, context) {
 
   view.innerHTML = `
     <div class="card">
-      <h2>管理后台</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="margin:0;">管理后台</h2>
+        <button class="secondary" id="btn-goto-fill">去代报数据</button>
+      </div>
       <div class="tabs" id="admin-tabs">
         ${menuHtml}
       </div>
       <div id="admin-view"></div>
     </div>`
+
+  // 跳转到代报页面
+  document.getElementById('btn-goto-fill').onclick = () => {
+    const navFillBtn = document.querySelector('#nav button[data-k="fill"]')
+    if (navFillBtn) navFillBtn.click()
+  }
 
   document.querySelectorAll('#admin-tabs button').forEach(b => {
     b.onclick = () => {
@@ -122,6 +131,7 @@ const ACTION_CN = {
   reset_admin_pwd: '重置管理员密码',
   import_bills: '导入单据',
   export_bills: '导出单据',
+  export_bills_admin: '导出代报单据', // ★ 新增
   update_bill: '修改单据',
   delete_bill: '删除单据',
   create_warehouse: '新增仓库',
@@ -222,7 +232,9 @@ async function renderBills(v) {
           <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:13px; color:#666; cursor:pointer; white-space:nowrap;">
             <input type="checkbox" id="exp-include" style="width:auto; margin:0;" /> 包含已导出
           </label>
-          <button id="btn-export" style="flex:0 0 100px;">导出</button>
+          <button id="btn-export" style="flex:0 0 80px;">导出</button>
+          <!-- ★ 新增：代报导出 -->
+          <button id="btn-export-admin" class="secondary" style="flex:0 0 100px; background:#e6f4ff; border-color:#91caff; color:#1677ff;">导出代报</button>
         </div>
         <div id="export-msg"></div>
       </div>
@@ -272,10 +284,18 @@ async function renderBills(v) {
     </div>
     <div id="admin-edit-bill-panel"></div>`
 
-  document.getElementById('btn-export').onclick = async () => {
+  // --- 导出按钮事件 ---
+  const doExport = async (submitterType = null, isDelegate = false) => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
     const end_date = document.getElementById('exp-end').value
+    if (!start_date || !end_date) return alert('请选择完整的开始和结束日期')
+    
+    const btn = isDelegate ? document.getElementById('btn-export-admin') : document.getElementById('btn-export')
+    const originalText = btn.innerText
+    btn.disabled = true
+    btn.innerText = '导出中...'
+
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/export-bills`, {
       method: 'POST',
@@ -285,16 +305,18 @@ async function renderBills(v) {
       },
       body: JSON.stringify({
         warehouse_code, start_date, end_date,
-        include_exported: document.getElementById('exp-include')?.checked || false
+        include_exported: document.getElementById('exp-include')?.checked || false,
+        submitter_type: submitterType // null(所有) / 'vendor'(厂商) / 'admin'(代报)
       })
     })
+    
+    btn.disabled = false
+    btn.innerText = originalText
+
     if (!res.ok) {
       const txt = await res.text()
       let msgText = '导出失败'
-      try {
-        const j = JSON.parse(txt)
-        msgText = ctx.translateError(j.error || '导出失败')
-      } catch (e) {}
+      try { const j = JSON.parse(txt); msgText = ctx.translateError(j.error || '导出失败') } catch (e) {}
       document.getElementById('export-msg').innerHTML = ctx.msg(msgText, false)
       return
     }
@@ -302,12 +324,17 @@ async function renderBills(v) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `export_${Date.now()}.xlsx`
+    a.download = isDelegate ? `代报导出_${Date.now()}.xlsx` : `export_${Date.now()}.xlsx`
     a.click()
-    document.getElementById('export-msg').innerHTML = ctx.msg('导出成功', true)
-    await logOp('export_bills', '导出 ' + warehouse_code, { start_date, end_date })
+    document.getElementById('export-msg').innerHTML = ctx.msg(isDelegate ? '代报数据导出成功' : '导出成功', true)
+    await logOp(isDelegate ? 'export_bills_admin' : 'export_bills', (isDelegate ? '导出代报 ' : '导出 ') + warehouse_code, { start_date, end_date })
   }
 
+  document.getElementById('btn-export').onclick = () => doExport(null, false)
+  // ★ 代报导出：强制传入 admin
+  document.getElementById('btn-export-admin').onclick = () => doExport('admin', true)
+
+  // --- 查询逻辑 ---
   const search = async () => {
     document.getElementById('query-result-box').innerHTML = `
       <table>
@@ -321,10 +348,10 @@ async function renderBills(v) {
     const ex = document.getElementById('b-exported').value
 
     if (kw) q = q.or(`vendor_code.ilike.%${kw}%,source_no.ilike.%${kw}%,product_code.ilike.%${kw}%`)
-
     if (wh) q = q.eq('warehouse_code', wh)
     if (ex === '0') q = q.eq('exported', false)
     if (ex === '1') q = q.eq('exported', true)
+    
     const { data } = await q
     document.getElementById('b-body').innerHTML = (data||[]).map(b => `<tr>
       <td>${b.id}</td><td>${b.source_no||''}</td><td>${b.bill_type||''}</td>
@@ -335,7 +362,6 @@ async function renderBills(v) {
       <td>${new Date(b.created_at).toLocaleString()}</td>
       <td>
         <button class="small secondary" data-act="edit-bill" data-id="${b.id}">修改</button>
-        <!-- 这里去掉了 isSuper() 的限制，助理和管理员也能看到删除按钮 -->
         <button class="small danger" data-act="del-bill" data-id="${b.id}">删除</button>
       </td>
     </tr>`).join('') || '<tr><td colspan="11">无数据</td></tr>'
@@ -409,7 +435,6 @@ async function renderBills(v) {
 
         if (btn.dataset.act === 'del-bill') {
           if (!confirm(`确定删除单据 #${id} 吗？此操作不可撤销！`)) return
-
           btn.disabled = true
           btn.innerText = '删除中...'
 
@@ -424,20 +449,16 @@ async function renderBills(v) {
                 },
                 body: JSON.stringify({ bill_id: id })
               })
-
               const text = await res.text()
-
               if (!res.ok) {
                 alert('删除失败！错误信息：' + text)
                 btn.disabled = false
                 btn.innerText = '删除'
                 return
               }
-
               await logOp('delete_bill', '删除单据 ' + id)
               alert('已成功删除')
               await search()
-
             } catch (err) {
               alert('网络异常：' + err.message)
               btn.disabled = false
