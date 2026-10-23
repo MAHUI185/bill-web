@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-23 终极完整版：代报、济转西双向、强制留库/越库、极速粘贴）
+// app.js — 主逻辑（2026-10-23 终极完整版：代报搜索联想、济转西双向、强制留库/越库、极速粘贴）
 
 import { supabase } from './supabase.js'
 
@@ -565,7 +565,6 @@ async function renderFill(view) {
 
   let myWhs = []
   if (isAdminDelegate) {
-    // 管理员代报：默认授权所有仓库（或者根据被选厂商动态查）
     const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
     if (vp) {
       const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
@@ -663,11 +662,11 @@ async function renderFill(view) {
         <h2>${isAdminDelegate ? '管理员代报' : '填报单据'}</h2>
         ${isLogistics || isAdminDelegate ? `
           <div class="row" style="margin-bottom:12px;">
-            <div>
+            <div style="position:relative;">
               <label>代报厂商 *</label>
-              <select id="vendor-select">
-                ${myVendors.map(v => `<option value="${v.vendor_code}" ${v.vendor_code===myVendorCode?'selected':''}>${v.vendor_code}${v.vendor_name?' - '+v.vendor_name:''}</option>`).join('')}
-              </select>
+              <!-- 使用 input 替代 select，支持搜索 -->
+              <input id="vendor-search-input" placeholder="输入厂编或名称搜索，如 208654" value="${myVendorCode}" autocomplete="off" />
+              <div id="vendor-suggest-box" style="position:absolute; top: 65px; left: 0; right: 0; background:#fff; border:1px solid #eee; border-radius:4px; box-shadow:0 4px 12px rgba(0,0,0,.1); z-index:100; display:none; max-height:200px; overflow:auto;"></div>
             </div>
           </div>` : ''}
         <div id="fill-msg"></div>
@@ -742,29 +741,88 @@ async function renderFill(view) {
     renderPreview()
     if (!isAdminDelegate) startCountdown()
 
-    const vs = document.getElementById('vendor-select')
-    if (vs) {
-      vs.onchange = async () => {
-        const vc = vs.value
-        selectedVendor = myVendors.find(v => v.vendor_code === vc)
-        myVendorCode = vc
-        productList = await loadProducts(vc)
-        
-        // 重新加载授权仓库
-        const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', vc).maybeSingle()
-        if (vp) {
-          const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
-          myWhs = (vw||[]).map(x => x.warehouse_code)
-          if (myWhs.length) {
-            const { data: whInfo } = await supabase.from('warehouse').select('default_store_code').eq('warehouse_code', myWhs[0]).maybeSingle()
-            defaultStoreCode = whInfo?.default_store_code || ''
-          } else {
-            defaultStoreCode = ''
-          }
+    if (isLogistics || isAdminDelegate) {
+      const searchInput = document.getElementById('vendor-search-input')
+      const suggestBox = document.getElementById('vendor-suggest-box')
+
+      // 1. 搜索联想逻辑
+      searchInput.oninput = () => {
+        const kw = searchInput.value.trim().toLowerCase()
+        if (!kw) { suggestBox.style.display = 'none'; return }
+
+        // 过滤出包含厂编或名称的结果，最多 10 条
+        const matches = myVendors.filter(v => 
+          v.vendor_code.toLowerCase().includes(kw) || 
+          (v.vendor_name || '').toLowerCase().includes(kw)
+        ).slice(0, 10)
+
+        if (!matches.length) {
+          suggestBox.innerHTML = '<div style="padding:8px;color:#999;font-size:12px;">未找到匹配厂商</div>'
+          suggestBox.style.display = 'block'
+          return
         }
-        inRows = [newInRowForVendor(vc)]
-        outRows = [newOutRowForVendor(vc)]
-        render()
+
+        suggestBox.innerHTML = matches.map(v => `
+          <div data-pick="${v.vendor_code}" style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f5f5f5;"
+               onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background='#fff'">
+            <strong style="color:#1677ff;">${v.vendor_code}</strong> - ${v.vendor_name}
+          </div>
+        `).join('')
+        suggestBox.style.display = 'block'
+
+        // 2. 点击联想项
+        suggestBox.querySelectorAll('[data-pick]').forEach(el => {
+          el.onmousedown = async (e) => {
+            e.preventDefault()
+            const vc = el.dataset.pick
+            
+            // 如果选的是当前厂商，不处理
+            if (vc === myVendorCode) {
+              searchInput.value = vc
+              suggestBox.style.display = 'none'
+              return
+            }
+
+            // 检查是否有填了一半的数据，避免误触丢失
+            const hasData = inRows.some(isInRowFilled) || outRows.some(isOutRowFilled)
+            if (hasData && !confirm('切换厂商会清空当前已填写的内容，确定切换吗？')) {
+              searchInput.value = myVendorCode // 恢复原值
+              suggestBox.style.display = 'none'
+              return
+            }
+
+            // 执行切换逻辑
+            selectedVendor = myVendors.find(v => v.vendor_code === vc)
+            myVendorCode = vc
+            searchInput.value = vc
+            suggestBox.style.display = 'none'
+
+            // 重新加载该厂商的商品和仓库
+            productList = await loadProducts(vc)
+            
+            const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', vc).maybeSingle()
+            if (vp) {
+              const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
+              myWhs = (vw||[]).map(x => x.warehouse_code)
+              if (myWhs.length) {
+                const { data: whInfo } = await supabase.from('warehouse').select('default_store_code').eq('warehouse_code', myWhs[0]).maybeSingle()
+                defaultStoreCode = whInfo?.default_store_code || ''
+              } else {
+                defaultStoreCode = ''
+              }
+            }
+            
+            // 清空表格并重绘
+            inRows = [newInRowForVendor(vc)]
+            outRows = [newOutRowForVendor(vc)]
+            render()
+          }
+        })
+      }
+
+      // 3. 失去焦点时隐藏联想框
+      searchInput.onblur = () => {
+        setTimeout(() => { suggestBox.style.display = 'none' }, 200)
       }
     }
 
