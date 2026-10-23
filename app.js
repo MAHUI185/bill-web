@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-23 终极版：隐藏质检报告、WMS单号修复、济转西货主修正）
+// app.js — 主逻辑（2026-10-23 终极版：隐藏质检、WMS单号修复、济转西货主修正、单据可删）
 
 import { supabase } from './supabase.js'
 
@@ -1511,15 +1511,43 @@ async function renderMy(view) {
       <div id="my-msg"></div>
       <div class="scroll" style="max-height: 600px;">
         <table>
-          <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th></tr>
+          <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           ${(data||[]).map(b => `<tr>
             <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
             <td>${b.quantity}</td><td>${b.warehouse_code}</td><td>${b.exported ? '是' : '否'}</td>
             <td>${new Date(b.created_at).toLocaleString()}</td>
-          </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无单据</td></tr>'}
+            <td>
+              ${b.exported 
+                ? `<button class="small secondary" disabled style="opacity:0.5; cursor:not-allowed;">已导出</button>` 
+                : `<button class="small danger" data-del="${b.id}">删除</button>`}
+            </td>
+          </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:#999;">暂无单据</td></tr>'}
         </table>
       </div>
     </div>`
+
+  // 绑定删除事件
+  view.querySelectorAll('[data-del]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = Number(btn.dataset.del)
+      if (!confirm(`确定要删除单据 #${id} 吗？删除后无法恢复。`)) return
+      
+      btn.disabled = true
+      btn.innerText = '删除中...'
+      
+      const { error } = await supabase.from('bill_order').delete().eq('id', id)
+      
+      if (error) {
+        alert('删除失败：' + translateError(error.message))
+        btn.disabled = false
+        btn.innerText = '删除'
+        return
+      }
+      
+      alert('已删除')
+      renderMy(view) // 刷新列表
+    }
+  })
 }
 
 // ================= 质检报告 (保留函数，但界面已无入口) =================
