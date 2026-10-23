@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-23 终极完整版：代报搜索联想、济转西双向、强制留库/越库、极速粘贴）
+// app.js — 主逻辑（2026-10-23 终极完整版：代报搜索联想、济转西双向、DSP核验精确化、极速粘贴）
 
 import { supabase } from './supabase.js'
 
@@ -470,10 +470,10 @@ function calcInFields(billType, supplierInput) {
 }
 
 function calcOutFields(billType, supplierInput, defaultStore) {
-  if (billType === 'VMI出库' || billType === '留库出') {
+  if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
   }
-  if (billType === 'DSP出库' || billType === '越库出') {
+  if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
   }
   if (billType === '济转西RT(留库)') {
@@ -571,12 +571,10 @@ async function renderFill(view) {
       myWhs = (vw||[]).map(x => x.warehouse_code)
     }
   } else if (isLogistics) {
-    const codes = myVendors.map(v => v.vendor_code)
-    const { data: vps } = await supabase.from('vendor_profile').select('id, vendor_code').in('vendor_code', codes)
-    const ids = (vps||[]).map(v => v.id)
-    if (ids.length) {
-      const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').in('vendor_id', ids)
-      myWhs = [...new Set((vw||[]).map(x => x.warehouse_code))]
+    const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
+    if (vp) {
+      const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
+      myWhs = (vw||[]).map(x => x.warehouse_code)
     }
   } else {
     const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', currentUser.id)
@@ -591,7 +589,10 @@ async function renderFill(view) {
 
   const { range } = await loadDeadlineRange(myVendorCode, myWhs[0] || null)
 
-  const { data: locs } = await supabase.from('location_config').select('warehouse_code, location_code').eq('status', 1)
+  const { data: locs } = await supabase.from('location_config')
+    .select('warehouse_code, location_code')
+    .eq('status', 1)
+    .in('warehouse_code', myWhs.length ? myWhs : ['__none__'])
 
   const { data: stores } = await supabase.from('store_config').select('warehouse_code, store_code, store_name').eq('status', 1)
   const myStores = (stores||[]).filter(s => !s.warehouse_code || myWhs.includes(s.warehouse_code))
@@ -699,7 +700,7 @@ async function renderFill(view) {
         <button class="secondary small" id="btn-add-in" style="margin-top:8px;">+ 添加入库行</button>
 
         <h3 style="margin:24px 0 8px;">出库单</h3>
-        <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：预约「DSP出库」前，必须已经预约过同货主、同商品的「DSP入库」单据。</p>
+        <p style="font-size:12px;color:#d46b08;margin-bottom:8px;">注意：预约「DSP出库」「济转西DSP(越库)」前，必须已经预约过同货主、同商品的「DSP入库」单据。</p>
         
         <div style="background:#f0f5ff; border:1px dashed #91caff; border-radius:4px; padding:12px; margin-bottom:12px;">
           <div style="font-size:13px; color:#1677ff; margin-bottom:8px; font-weight:bold;">
@@ -1012,14 +1013,14 @@ async function renderFill(view) {
       outRows.forEach((r, idx) => {
         if (!isOutRowFilled(r)) return
         const missing = []
-        if ((r.bill_type === 'VMI出库' || r.bill_type === '留库出' || r.bill_type === '越库出') && !r.source_no) missing.push('采购单号')
+        if (r.bill_type === 'VMI出库' && !r.source_no) missing.push('采购单号')
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
         if (!r.spec) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] ${SPEC_EMPTY_MSG}`)
         else if (!isValidSpec(r.spec)) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] 规格格式错误`)
         if (!r.quantity) missing.push('箱数')
         if (!r.pick_date) missing.push('配货日期')
-        if (r.bill_type.includes('DSP') || r.bill_type === '越库出') {
+        if (r.bill_type.includes('DSP')) {
           if (!r.store_code) missing.push('门店代码')
         }
         if (missing.length) errors.push(`出库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
@@ -1033,7 +1034,9 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
-      const dspOutRows = validOut.filter(r => r.bill_type.includes('DSP') || r.bill_type === '越库出')
+      const dspOutRows = validOut.filter(r =>
+        r.bill_type === 'DSP出库' || r.bill_type === '济转西DSP(越库)'
+      )
       if (dspOutRows.length > 0) {
         const validDspInKeys = new Set()
         validIn.forEach(r => {
@@ -1048,6 +1051,7 @@ async function renderFill(view) {
           .select('owner_code, product_code')
           .eq('vendor_code', myVendorCode)
           .ilike('bill_type', '%DSP%')
+          .ilike('bill_type', '%入库%')
           .gte('created_at', startIso)
 
         if (dspErr) return msgEl.innerHTML = msg('校验 DSP 前置单据失败', false)
@@ -1201,8 +1205,6 @@ async function renderFill(view) {
         <select data-i="${i}" data-f="bill_type" style="width:140px;margin:0;padding:4px;">
           <option value="VMI出库" ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
           <option value="DSP出库" ${r.bill_type==='DSP出库'?'selected':''}>DSP出库</option>
-          <option value="留库出" ${r.bill_type==='留库出'?'selected':''}>留库出</option>
-          <option value="越库出" ${r.bill_type==='越库出'?'selected':''}>越库出</option>
           <option value="济转西RT(留库)" ${r.bill_type==='济转西RT(留库)'?'selected':''}>济转西RT(留库)</option>
           <option value="济转西RT(越库)" ${r.bill_type==='济转西RT(越库)'?'selected':''}>济转西RT(越库)</option>
           <option value="济转西DSP(留库)" ${r.bill_type==='济转西DSP(留库)'?'selected':''}>济转西DSP(留库)</option>
@@ -1212,7 +1214,7 @@ async function renderFill(view) {
       <td><input data-i="${i}" data-f="source_no" value="${r.source_no || ''}" placeholder="采购单号" style="width:100px;margin:0;padding:4px;" /></td>
       <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:80px;margin:0;padding:4px;background:#f5f5f5;" /></td>
       <td>
-        ${(r.bill_type === 'VMI出库' || r.bill_type === '留库出' || r.bill_type.includes('济转西'))
+        ${(r.bill_type === 'VMI出库' || r.bill_type.includes('济转西'))
           ? `<input data-i="${i}" data-f="store_code" value="${r.store_code}" readonly style="width:90px;margin:0;padding:4px;background:#f5f5f5;" />`
           : `<select data-i="${i}" data-f="store_code" style="width:110px;margin:0;padding:4px;">
                <option value="">请选择门店</option>
