@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-21 最终版：来源单号修改 + 未导出可改删 + 极速录入）
+// app.js — 主逻辑（2026-10-23 最终版：济转西双向支持 + 强制选留库/越库 + 极速粘贴）
 
 import { supabase } from './supabase.js'
 
@@ -363,7 +363,7 @@ function renderMain() {
     init()
   }
   const nav = document.getElementById('nav')
-  const tabs = isAdmin ? [['admin','管理后台']] : [['fill','填报'],['my','我的单据'],['products','商品资料']]
+  const tabs = isAdmin ? [['admin','管理后台']] : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告']]
   nav.innerHTML = tabs.map(([k, v]) => `<button data-k="${k}">${v}</button>`).join('')
   nav.querySelectorAll('button').forEach(b => {
     b.onclick = () => {
@@ -412,6 +412,7 @@ async function renderView(key) {
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
+  if (key === 'qc') return renderQC(view)
   if (key === 'admin') {
     try {
       const mod = await import('./admin.js')
@@ -449,28 +450,43 @@ function todayBj() {
 }
 
 function getModeByType(billType) {
-  if (billType === 'VMI入库') return 'UNIFY'
-  if (billType === 'DSP入库') return 'LIKECROSS'
-  if (billType === 'VMI出库') return 'LIKECROSS'
-  if (billType === 'DSP出库') return 'LIKECROSS'
-  if (billType === '济转西RT') return 'LIKECROSS'
-  if (billType === '济转西DSP') return 'LIKECROSS'
-  return 'UNIFY'
+  if (billType === 'VMI入库' || billType === '济转西RT(入库)') return 'UNIFY'
+  if (billType === 'DSP入库' || billType === '济转西DSP(入库)') return 'LIKECROSS'
+  if (billType === 'VMI出库' || billType === '留库出') return 'LIKECROSS'
+  if (billType === 'DSP出库' || billType === '越库出') return 'LIKECROSS'
+  if (billType.includes('济转西')) return 'LIKECROSS'
+  return 'LIKECROSS'
 }
 
 function calcInFields(billType, supplierInput) {
-  if (billType === 'VMI入库') return { vendor_code: supplierInput, owner_code: supplierInput }
-  if (billType === 'DSP入库') return { vendor_code: supplierInput, owner_code: '8888' }
-  if (billType === '济转西RT') return { vendor_code: supplierInput, owner_code: supplierInput }
-  if (billType === '济转西DSP') return { vendor_code: supplierInput, owner_code: '8888' }
+  if (billType === 'VMI入库' || billType === '济转西RT(入库)') {
+    return { vendor_code: supplierInput, owner_code: supplierInput }
+  }
+  if (billType === 'DSP入库' || billType === '济转西DSP(入库)') {
+    return { vendor_code: supplierInput, owner_code: '8888' }
+  }
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
 function calcOutFields(billType, supplierInput, defaultStore) {
-  if (billType === 'VMI出库') return { owner_code: supplierInput, store_code: defaultStore || '' }
-  if (billType === 'DSP出库') return { owner_code: '8888', store_code: '' }
-  if (billType === '济转西RT') return { owner_code: supplierInput, store_code: '8205RT' }
-  if (billType === '济转西DSP') return { owner_code: '8888', store_code: '8205DSP' }
+  if (billType === 'VMI出库' || billType === '留库出') {
+    return { owner_code: supplierInput, store_code: defaultStore || '' }
+  }
+  if (billType === 'DSP出库' || billType === '越库出') {
+    return { owner_code: '8888', store_code: '' }
+  }
+  if (billType === '济转西RT(留库)') {
+    return { owner_code: supplierInput, store_code: '8205RT' }
+  }
+  if (billType === '济转西RT(越库)') {
+    return { owner_code: '8888', store_code: '8205RT' }
+  }
+  if (billType === '济转西DSP(留库)') {
+    return { owner_code: supplierInput, store_code: '8205DSP' }
+  }
+  if (billType === '济转西DSP(越库)') {
+    return { owner_code: '8888', store_code: '8205DSP' }
+  }
   return { owner_code: '', store_code: '' }
 }
 
@@ -698,7 +714,7 @@ async function renderFill(view) {
         <div id="preview-box"></div>
 
         <div style="margin-top:16px;">
-          <button id="btn-submit-all">提交全部</button>
+          <button id="btn-submit-all">提交预约</button>
           <button class="secondary" id="btn-clear-all">清空</button>
         </div>
       </div>`
@@ -907,14 +923,17 @@ async function renderFill(view) {
       outRows.forEach((r, idx) => {
         if (!isOutRowFilled(r)) return
         const missing = []
-        if (r.bill_type === 'VMI出库' && !r.source_no) missing.push('采购单号')
+        // 只有 VMI出库 才要求填采购单号，留库出/越库出/济转西 为可选
+        if ((r.bill_type === 'VMI出库') && !r.source_no) missing.push('采购单号')
         if (!r.location_code) missing.push('仓位')
         if (!r.product_code) missing.push('商品代码')
         if (!r.spec) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] ${SPEC_EMPTY_MSG}`)
         else if (!isValidSpec(r.spec)) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] 规格格式错误`)
         if (!r.quantity) missing.push('箱数')
         if (!r.pick_date) missing.push('配货日期')
-        if (r.bill_type === 'DSP出库' && !r.store_code) missing.push('门店代码')
+        if (r.bill_type.includes('DSP') || r.bill_type === '越库出' || r.bill_type.includes('济转西DSP')) {
+          if (!r.store_code) missing.push('门店代码')
+        }
         if (missing.length) errors.push(`出库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
       })
 
@@ -926,11 +945,12 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
-      const dspOutRows = validOut.filter(r => r.bill_type === 'DSP出库' || r.bill_type === 'DSP出货')
+      // DSP 前置校验
+      const dspOutRows = validOut.filter(r => r.bill_type.includes('DSP') || r.bill_type === '越库出')
       if (dspOutRows.length > 0) {
         const validDspInKeys = new Set()
         validIn.forEach(r => {
-          if (r.bill_type === 'DSP入库') validDspInKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
+          if (r.bill_type.includes('DSP')) validDspInKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
         })
 
         const startOfToday = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
@@ -940,7 +960,7 @@ async function renderFill(view) {
         const { data: dbDspIns, error: dspErr } = await supabase.from('bill_order')
           .select('owner_code, product_code')
           .eq('vendor_code', myVendorCode)
-          .in('bill_type', ['DSP入库'])
+          .ilike('bill_type', '%DSP%')
           .gte('created_at', startIso)
 
         if (dspErr) return msgEl.innerHTML = msg('校验 DSP 前置单据失败', false)
@@ -1018,16 +1038,15 @@ async function renderFill(view) {
     const tbody = document.getElementById('in-body')
     if (!tbody) return
     tbody.innerHTML = inRows.map((r, i) => {
-      // 规则：厂商编码 + 到货日期
       const autoSource = (r.vendor_code && r.arrival_date) ? r.vendor_code + r.arrival_date.replace(/-/g, '') : ''
       if (autoSource) r.source_no = autoSource
       return `<tr>
       <td>
-        <select data-i="${i}" data-f="bill_type" style="width:100px;margin:0;padding:4px;">
-          <option ${r.bill_type==='VMI入库'?'selected':''}>VMI入库</option>
-          <option ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
-          <option ${r.bill_type==='济转西RT'?'selected':''}>济转西RT</option>
-          <option ${r.bill_type==='济转西DSP'?'selected':''}>济转西DSP</option>
+        <select data-i="${i}" data-f="bill_type" style="width:120px;margin:0;padding:4px;">
+          <option value="VMI入库" ${r.bill_type==='VMI入库'?'selected':''}>VMI入库</option>
+          <option value="DSP入库" ${r.bill_type==='DSP入库'?'selected':''}>DSP入库</option>
+          <option value="济转西RT(入库)" ${r.bill_type==='济转西RT(入库)'?'selected':''}>济转西RT(入库)</option>
+          <option value="济转西DSP(入库)" ${r.bill_type==='济转西DSP(入库)'?'selected':''}>济转西DSP(入库)</option>
         </select>
       </td>
       <td><input data-i="${i}" data-f="vendor_code" value="${r.vendor_code}" readonly style="width:80px;margin:0;padding:4px;background:#f5f5f5;" /></td>
@@ -1065,16 +1084,14 @@ async function renderFill(view) {
 
         if (f === 'bill_type') {
           r.bill_type = el.value
-          const f2 = calcInFields(el.value, r.vendor_code)
+          const f2 = calcInFields(r.bill_type, r.vendor_code)
           r.owner_code = f2.owner_code
-          // 规则改为：厂商编码 + 到货日期
           r.source_no = (r.vendor_code && r.arrival_date) ? r.vendor_code + r.arrival_date.replace(/-/g, '') : ''
           renderInTable(); renderPreview(); return
         }
 
         r[f] = el.value
         if (f === 'vendor_code' || f === 'arrival_date') {
-          // 规则改为：厂商编码 + 到货日期
           r.source_no = (r.vendor_code && r.arrival_date) ? r.vendor_code + r.arrival_date.replace(/-/g, '') : ''
         }
         renderPreview()
@@ -1094,17 +1111,21 @@ async function renderFill(view) {
     if (!tbody) return
     tbody.innerHTML = outRows.map((r, i) => `<tr>
       <td>
-        <select data-i="${i}" data-f="bill_type" style="width:100px;margin:0;padding:4px;">
-          <option ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
-          <option ${r.bill_type==='DSP出库'?'selected':''}>DSP出库</option>
-          <option ${r.bill_type==='济转西RT'?'selected':''}>济转西RT</option>
-          <option ${r.bill_type==='济转西DSP'?'selected':''}>济转西DSP</option>
+        <select data-i="${i}" data-f="bill_type" style="width:140px;margin:0;padding:4px;">
+          <option value="VMI出库" ${r.bill_type==='VMI出库'?'selected':''}>VMI出库</option>
+          <option value="DSP出库" ${r.bill_type==='DSP出库'?'selected':''}>DSP出库</option>
+          <option value="留库出" ${r.bill_type==='留库出'?'selected':''}>留库出</option>
+          <option value="越库出" ${r.bill_type==='越库出'?'selected':''}>越库出</option>
+          <option value="济转西RT(留库)" ${r.bill_type==='济转西RT(留库)'?'selected':''}>济转西RT(留库)</option>
+          <option value="济转西RT(越库)" ${r.bill_type==='济转西RT(越库)'?'selected':''}>济转西RT(越库)</option>
+          <option value="济转西DSP(留库)" ${r.bill_type==='济转西DSP(留库)'?'selected':''}>济转西DSP(留库)</option>
+          <option value="济转西DSP(越库)" ${r.bill_type==='济转西DSP(越库)'?'selected':''}>济转西DSP(越库)</option>
         </select>
       </td>
       <td><input data-i="${i}" data-f="source_no" value="${r.source_no || ''}" placeholder="采购单号" style="width:100px;margin:0;padding:4px;" /></td>
       <td><input data-i="${i}" data-f="owner_code" value="${r.owner_code}" readonly style="width:80px;margin:0;padding:4px;background:#f5f5f5;" /></td>
       <td>
-        ${(r.bill_type === 'VMI出库' || r.bill_type === '济转西RT' || r.bill_type === '济转西DSP')
+        ${(r.bill_type === 'VMI出库' || r.bill_type === '留库出' || r.bill_type.includes('济转西'))
           ? `<input data-i="${i}" data-f="store_code" value="${r.store_code}" readonly style="width:90px;margin:0;padding:4px;background:#f5f5f5;" />`
           : `<select data-i="${i}" data-f="store_code" style="width:110px;margin:0;padding:4px;">
                <option value="">请选择门店</option>
@@ -1139,7 +1160,7 @@ async function renderFill(view) {
 
         if (f === 'bill_type') {
           r.bill_type = el.value
-          const f2 = calcOutFields(el.value, myVendorCode, defaultStoreCode)
+          const f2 = calcOutFields(r.bill_type, myVendorCode, defaultStoreCode)
           r.owner_code = f2.owner_code; r.store_code = f2.store_code
           renderOutTable(); renderPreview(); return
         }
@@ -1388,7 +1409,7 @@ async function renderProducts(view) {
   renderAll()
 }
 
-// ================= 我的单据（厂商端未导出可改可删） =================
+// ================= 我的单据 =================
 async function renderMy(view) {
   let q = supabase.from('bill_order').select('*').order('id', { ascending: false }).limit(200)
 
@@ -1400,133 +1421,174 @@ async function renderMy(view) {
     q = q.eq('vendor_id', currentUser.id)
   }
 
-  let { data } = await q
+  const { data } = await q
 
   view.innerHTML = `
     <div class="card">
       <h2>${isLogistics ? '我负责厂商的单据' : '我的单据'}</h2>
       <div id="my-msg"></div>
-      <div class="scroll" style="max-height: 600px;" id="my-table-container"></div>
+      <div class="scroll" style="max-height: 600px;">
+        <table>
+          <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th></tr>
+          ${(data||[]).map(b => `<tr>
+            <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
+            <td>${b.quantity}</td><td>${b.warehouse_code}</td><td>${b.exported ? '是' : '否'}</td>
+            <td>${new Date(b.created_at).toLocaleString()}</td>
+          </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无单据</td></tr>'}
+        </table>
+      </div>
+    </div>`
+}
+
+// ================= 质检报告 =================
+async function renderQC(view) {
+  let q = supabase.from('qc_report').select('*').order('id', { ascending: false })
+  
+  if (isLogistics) {
+    const codes = myVendors.map(v => v.vendor_code)
+    if (!codes.length) { view.innerHTML = `<div class="card"><h2>质检报告</h2><p style="color:#cf1322;">未配置负责厂商。</p></div>`; return }
+    q = q.in('vendor_code', codes)
+  } else {
+    q = q.eq('vendor_id', currentUser.id)
+  }
+
+  const { data: reports } = await q
+
+  view.innerHTML = `
+    <div class="card">
+      <h2>上传质检报告</h2>
+      <div id="qc-msg"></div>
+      <div class="row">
+        <div style="flex:1;">
+          <label>选择文件（仅支持 PDF，最大 10MB）</label>
+          <input type="file" id="qc-file" accept=".pdf,application/pdf" />
+        </div>
+        <button id="btn-qc-upload" style="flex:0 0 100px; margin-top: 24px;">上传</button>
+      </div>
     </div>
-    <div id="vendor-edit-bill-panel"></div>`
+    <div class="card">
+      <h2>已上传的报告（${(reports||[]).length}）</h2>
+      <div class="scroll">
+        <table>
+          <tr><th>上传时间</th><th>厂编</th><th>文件名</th><th>操作</th></tr>
+          ${(reports||[]).map(r => `<tr>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+            <td>${r.vendor_code}</td>
+            <td>${r.report_name}</td>
+            <td>
+              <a href="${r.file_url}" target="_blank" class="small secondary" style="text-decoration:none; padding:4px 10px; border-radius:4px; margin-right:8px;">预览/下载</a>
+              <button class="small danger" data-del-id="${r.id}" data-path="${r.file_path}">删除</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="4" style="text-align:center;color:#999;">暂无数据</td></tr>'}
+        </table>
+      </div>
+    </div>`
 
-  const renderTable = (data) => {
-    return `
-      <table>
-        <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th><th>操作</th></tr>
-        ${(data||[]).map(b => `<tr>
-          <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
-          <td>${b.quantity}</td><td>${b.warehouse_code}</td>
-          <td>${b.exported ? '<span class="stat ok">是</span>' : '<span class="stat no">否</span>'}</td>
-          <td>${new Date(b.created_at).toLocaleString()}</td>
-          <td>
-            ${b.exported 
-              ? `<span style="color:#999;font-size:12px;">已导出不可改删</span>` 
-              : `
-                <button class="small secondary" data-edit-id="${b.id}">修改</button>
-                <button class="small danger" data-del-id="${b.id}">删除</button>
-              `}
-          </td>
-        </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:#999;">暂无单据</td></tr>'}
-      </table>
-    `
+  document.getElementById('btn-qc-upload').onclick = async () => {
+    const msgEl = document.getElementById('qc-msg')
+    const fileInput = document.getElementById('qc-file')
+    const file = fileInput.files[0]
+
+    if (!file) return msgEl.innerHTML = msg('请选择文件', false)
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      return msgEl.innerHTML = msg('只支持上传 PDF 格式的文件', false)
+    }
+    if (file.size > 10 * 1024 * 1024) return msgEl.innerHTML = msg('文件不能超过 10MB', false)
+
+    const btn = document.getElementById('btn-qc-upload')
+    btn.disabled = true
+    btn.innerText = '上传中...'
+    msgEl.innerHTML = msg('正在处理...', true)
+
+    try {
+      const myCode = isLogistics ? myVendors[0].vendor_code : currentProfile.vendor_code
+      // 强制后缀为 .pdf，防止伪造
+      const fileName = `qc/${myCode}_${Date.now()}.pdf`
+
+      // 1. 获取 R2 预签名 URL
+      msgEl.innerHTML = msg('正在获取上传凭证...', true)
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/upload-qc`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ fileName })
+      })
+      
+      if (!res.ok) throw new Error('获取上传凭证失败')
+      const { uploadUrl, fileUrl } = await res.json()
+
+      // 2. 直传文件到 R2
+      msgEl.innerHTML = msg('正在上传到云存储...', true)
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/pdf' },
+        body: file
+      })
+
+      if (!uploadRes.ok) throw new Error('文件上传到 R2 失败')
+
+      // 3. 写入数据库
+      msgEl.innerHTML = msg('正在保存记录...', true)
+      const { error: dbErr } = await supabase.from('qc_report').insert({
+        vendor_id: currentUser.id,
+        vendor_code: myCode,
+        report_name: file.name,
+        file_path: fileName,
+        file_url: fileUrl,
+        file_size: file.size
+      })
+
+      if (dbErr) throw dbErr
+
+      msgEl.innerHTML = msg('上传成功', true)
+      setTimeout(() => renderQC(view), 1000)
+
+    } catch (err) {
+      console.error(err)
+      msgEl.innerHTML = msg(err.message || '上传失败', false)
+      btn.disabled = false
+      btn.innerText = '上传'
+    }
   }
 
-  document.getElementById('my-table-container').innerHTML = renderTable(data)
+  view.querySelectorAll('[data-del-id]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = Number(btn.dataset.delId)
+      const path = btn.dataset.path
+      if (!confirm('确定要删除这份质检报告吗？')) return
 
-  const bindEvents = () => {
-    // 删除逻辑
-    view.querySelectorAll('[data-del-id]').forEach(btn => {
-      btn.onclick = async () => {
-        const id = Number(btn.dataset.delId)
-        if (!confirm(`确定要删除单据 #${id} 吗？此操作不可撤销！`)) return
+      btn.disabled = true
+      btn.innerText = '删除中...'
 
-        const msgEl = document.getElementById('my-msg')
-        btn.disabled = true
-        btn.innerText = '删除中...'
+      try {
+        // 1. 调云函数删 R2 文件
+        const { data: { session } } = await supabase.auth.getSession()
+        const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-qc`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+          },
+          body: JSON.stringify({ filePath: path })
+        })
+        if (!res.ok) throw new Error('R2 文件删除失败')
 
-        try {
-          const { error } = await supabase.from('bill_order').delete().eq('id', id)
-          if (error) throw error
-          
-          msgEl.innerHTML = msg('删除成功', true)
-          data = data.filter(x => x.id !== id)
-          document.getElementById('my-table-container').innerHTML = renderTable(data)
-          bindEvents()
-        } catch (err) {
-          msgEl.innerHTML = msg(translateError(err.message), false)
-          btn.disabled = false
-          btn.innerText = '删除'
-        }
+        // 2. 删数据库记录
+        const { error } = await supabase.from('qc_report').delete().eq('id', id)
+        if (error) throw error
+
+        alert('删除成功')
+        renderQC(view)
+      } catch (err) {
+        alert('删除失败：' + err.message)
+        btn.disabled = false
+        btn.innerText = '删除'
       }
-    })
-
-    // 修改逻辑
-    view.querySelectorAll('[data-edit-id]').forEach(btn => {
-      btn.onclick = () => {
-        const id = Number(btn.dataset.editId)
-        const b = data.find(x => x.id === id)
-        if (!b) return
-
-        const panel = document.getElementById('vendor-edit-bill-panel')
-        panel.innerHTML = `
-          <div class="card" style="border:2px solid #1677ff; margin-top:12px;">
-            <h2>修改单据 #${id}</h2>
-            <div id="edit-msg"></div>
-            <div class="row">
-              <div><label>商品代码 *</label><input id="ve-product" value="${b.product_code||''}" readonly style="background:#f5f5f5;" /></div>
-              <div><label>包装规格 *</label><input id="ve-spec" value="${b.spec||''}" readonly style="background:#f5f5f5;" /></div>
-              <div><label>数量 *</label><input id="ve-qty" type="number" value="${b.quantity||''}" /></div>
-            </div>
-            <div class="row">
-              <div><label>货主代码</label><input id="ve-owner" value="${b.owner_code||''}" readonly style="background:#f5f5f5;" /></div>
-              <div><label>到货/配货日期</label><input id="ve-date" type="date" value="${b.arrival_date || b.pick_date || ''}" /></div>
-              <div><label>备注</label><input id="ve-remark" value="${b.remark||''}" /></div>
-            </div>
-            <button id="btn-ve-save">保存修改</button>
-            <button class="secondary" id="btn-ve-cancel">取消</button>
-          </div>`
-
-        document.getElementById('btn-ve-cancel').onclick = () => panel.innerHTML = ''
-
-        document.getElementById('btn-ve-save').onclick = async () => {
-          const msgEl = document.getElementById('edit-msg')
-          const qty = Number(document.getElementById('ve-qty').value)
-          const dateVal = document.getElementById('ve-date').value || null
-          const remark = document.getElementById('ve-remark').value.trim()
-
-          if (!qty || qty <= 0) return msgEl.innerHTML = msg('数量必须大于 0', false)
-
-          msgEl.innerHTML = msg('保存中...', true)
-
-          const isIn = b.bill_type.includes('入库')
-          const patch = {
-            quantity: qty,
-            remark: remark || null,
-            ...(isIn ? { arrival_date: dateVal } : { pick_date: dateVal })
-          }
-
-          const { error } = await supabase.from('bill_order').update(patch).eq('id', id)
-
-          if (error) {
-            msgEl.innerHTML = msg(translateError(error.message), false)
-            return
-          }
-
-          msgEl.innerHTML = msg('修改成功', true)
-          
-          // 刷新数据
-          const { data: newData } = await supabase.from('bill_order').select('*').order('id', { ascending: false }).limit(200)
-          data = newData
-          document.getElementById('my-table-container').innerHTML = renderTable(data)
-          bindEvents()
-          panel.innerHTML = ''
-        }
-      }
-    })
-  }
-
-  bindEvents()
+    }
+  })
 }
 
 init()
