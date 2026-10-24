@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-23 终极版：隐藏质检、WMS单号修复、济转西货主修正、单据可删）
+// app.js — 主逻辑（2026-10-24 终极完整版：全量上线、质检恢复、WMS单号防错、济转西修正）
 
 import { supabase } from './supabase.js'
 
@@ -364,10 +364,10 @@ function renderMain() {
   }
   const nav = document.getElementById('nav')
   
-  // ★ 彻底去掉了质检报告入口
+  // ★ 恢复质检报告入口
   const tabs = isAdmin 
     ? [['fill','管理填报'], ['admin','管理后台']] 
-    : [['fill','填报'],['my','我的单据'],['products','商品资料']]
+    : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告']]
   
   nav.innerHTML = tabs.map(([k, v]) => `<button data-k="${k}">${v}</button>`).join('')
   nav.querySelectorAll('button').forEach(b => {
@@ -417,8 +417,7 @@ async function renderView(key) {
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
-  // 保留 renderQC 的函数实现，只是没入口了
-  if (key === 'qc') return renderQC(view)
+  if (key === 'qc') return renderQC(view) // 已恢复
   if (key === 'admin') {
     try {
       const mod = await import('./admin.js')
@@ -1550,7 +1549,7 @@ async function renderMy(view) {
   })
 }
 
-// ================= 质检报告 (保留函数，但界面已无入口) =================
+// ================= 质检报告 =================
 async function renderQC(view) {
   let q = supabase.from('qc_report').select('*').order('id', { ascending: false })
   

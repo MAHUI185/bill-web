@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-23 最终版：含代报数据单独导出）
+// admin.js — 管理后台（2026-10-24 终极版：含代报导出、钉钉推送配置）
 
 let ctx = null
 let operatorName = '未知'
@@ -131,7 +131,7 @@ const ACTION_CN = {
   reset_admin_pwd: '重置管理员密码',
   import_bills: '导入单据',
   export_bills: '导出单据',
-  export_bills_admin: '导出代报单据', // ★ 新增
+  export_bills_admin: '导出代报单据',
   update_bill: '修改单据',
   delete_bill: '删除单据',
   create_warehouse: '新增仓库',
@@ -233,7 +233,6 @@ async function renderBills(v) {
             <input type="checkbox" id="exp-include" style="width:auto; margin:0;" /> 包含已导出
           </label>
           <button id="btn-export" style="flex:0 0 80px;">导出</button>
-          <!-- ★ 新增：代报导出 -->
           <button id="btn-export-admin" class="secondary" style="flex:0 0 100px; background:#e6f4ff; border-color:#91caff; color:#1677ff;">导出代报</button>
         </div>
         <div id="export-msg"></div>
@@ -244,7 +243,6 @@ async function renderBills(v) {
     <div class="card" style="box-shadow:none; padding:16px; margin:0;" id="bill-query-card">
       <h2 style="margin-bottom:12px; font-size:16px;">单据查询</h2>
       
-      <!-- 第一行：搜索筛选 -->
       <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center;">
         <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" style="flex:2; margin:0;" />
         <select id="b-wh" style="flex:1; margin:0;">
@@ -259,14 +257,12 @@ async function renderBills(v) {
         <button id="btn-b-search" class="secondary" style="flex:0 0 auto;">查询明细</button>
       </div>
 
-      <!-- 第二行：统计栏 -->
       <div style="display:flex; align-items:center; background:#f8f9fa; padding:8px 12px; border-radius:6px; border:1px solid #eee; margin-bottom:12px;">
         <span style="font-size:13px; color:#666; margin-right:8px;">统计区间：</span>
         <input id="stat-start" type="date" style="width:130px; margin:0; padding:4px 8px;" />
         <span style="font-size:13px; color:#666; margin:0 8px;">至</span>
         <input id="stat-end" type="date" style="width:130px; margin:0; padding:4px 8px;" />
         
-        <!-- 结果展示区 -->
         <div id="stat-result-display" style="flex:1; display:flex; align-items:center; padding-left:16px; margin-left:16px; border-left:1px solid #ddd; min-height:24px;">
           <span style="color:#999; font-size:13px;">未统计</span>
         </div>
@@ -274,7 +270,6 @@ async function renderBills(v) {
         <button id="btn-stat" class="secondary" style="flex:0 0 auto; background:#e6f4ff; border-color:#91caff; color:#1677ff;">统计箱数</button>
       </div>
 
-      <!-- 第三行：表格 -->
       <div class="scroll" id="query-result-box" style="max-height: calc(100vh - 360px); overflow: auto;">
         <table>
           <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
@@ -284,7 +279,6 @@ async function renderBills(v) {
     </div>
     <div id="admin-edit-bill-panel"></div>`
 
-  // --- 导出按钮事件 ---
   const doExport = async (submitterType = null, isDelegate = false) => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
@@ -306,7 +300,7 @@ async function renderBills(v) {
       body: JSON.stringify({
         warehouse_code, start_date, end_date,
         include_exported: document.getElementById('exp-include')?.checked || false,
-        submitter_type: submitterType // null(所有) / 'vendor'(厂商) / 'admin'(代报)
+        submitter_type: submitterType 
       })
     })
     
@@ -331,10 +325,8 @@ async function renderBills(v) {
   }
 
   document.getElementById('btn-export').onclick = () => doExport(null, false)
-  // ★ 代报导出：强制传入 admin
   document.getElementById('btn-export-admin').onclick = () => doExport('admin', true)
 
-  // --- 查询逻辑 ---
   const search = async () => {
     document.getElementById('query-result-box').innerHTML = `
       <table>
@@ -2129,7 +2121,9 @@ const CONFIG_CN = {
   release_date: '发布日期',
   maintenance_mode: '维护模式',
   cleanup_days: '清理保留天数',
-  cleanup_time: '清理执行时间'
+  cleanup_time: '清理执行时间',
+  dingtalk_qc_webhook: '钉钉推送Webhook',
+  dingtalk_qc_secret: '钉钉推送加签'
 }
 
 function formatConfigValue(key, val) {
@@ -2204,6 +2198,29 @@ async function renderSys(v) {
       <div id="cleanup-msg"></div>
     </div>
     
+    <!-- 钉钉质检报告推送配置 -->
+    <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #1677ff;">
+      <h2>钉钉质检报告推送（仅超管）</h2>
+      <p style="font-size:12px;color:#666;margin:8px 0;">
+        每天早晨 08:00 自动将前一天或当天的质检报告汇总推送到钉钉群。
+      </p>
+      <div class="row">
+        <div style="flex:2;">
+          <label>Webhook 地址</label>
+          <input id="dingtalk-webhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." value="${cfgMap['dingtalk_qc_webhook'] || ''}" />
+        </div>
+        <div style="flex:1;">
+          <label>加签密钥 (SEC...)</label>
+          <input id="dingtalk-secret" placeholder="SEC..." value="${cfgMap['dingtalk_qc_secret'] || ''}" />
+        </div>
+      </div>
+      <div style="display:flex; gap:12px; margin-top:8px;">
+        <button id="btn-save-dingtalk" ${isSuper() ? '' : 'disabled'}>保存配置</button>
+        <button class="secondary" id="btn-test-dingtalk" ${isSuper() ? '' : 'disabled'}>发送测试消息</button>
+      </div>
+      <div id="dingtalk-msg" style="margin-top:12px;"></div>
+    </div>
+
     <div class="card" style="box-shadow:none;padding:0;">
       <details>
         <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">版本历史（点击展开）</summary>
@@ -2277,6 +2294,58 @@ async function renderSys(v) {
     await logOp('save_cleanup_config', '清理配置', { days: d, time: t })
     document.getElementById('cleanup-msg').innerHTML = ctx.msg('已保存，新配置立即生效', true)
     setTimeout(() => renderTab('sys'), 800)
+  }
+
+  document.getElementById('btn-save-dingtalk').onclick = async () => {
+    if (!isSuper()) return
+    const webhook = document.getElementById('dingtalk-webhook').value.trim()
+    const secret = document.getElementById('dingtalk-secret').value.trim()
+    const msgEl = document.getElementById('dingtalk-msg')
+    
+    msgEl.innerHTML = ctx.msg('保存中...', true)
+
+    const upsert = async (key, val) => {
+      await ctx.supabase.from('system_config').upsert({ config_key: key, config_value: val, updated_by: ctx.operatorName }, { onConflict: 'config_key' })
+    }
+    await upsert('dingtalk_qc_webhook', webhook)
+    await upsert('dingtalk_qc_secret', secret)
+
+    await logOp('save_system_config', '保存钉钉配置')
+    msgEl.innerHTML = ctx.msg('配置已保存', true)
+  }
+
+  document.getElementById('btn-test-dingtalk').onclick = async () => {
+    if (!isSuper()) return
+    const btn = document.getElementById('btn-test-dingtalk')
+    const msgEl = document.getElementById('dingtalk-msg')
+    
+    btn.disabled = true
+    btn.innerText = '发送中...'
+    msgEl.innerHTML = ctx.msg('正在请求云函数发送测试消息...', true)
+
+    try {
+      const { data: { session } } = await ctx.supabase.auth.getSession()
+      const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/daily-qc-push?test=1`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session.access_token}` }
+      })
+      
+      const json = await res.json()
+      if (res.ok) {
+        if (json.msg === '今日无质检报告，静默不发送') {
+          msgEl.innerHTML = ctx.msg('云函数已连通，但今天没有质检报告，因此未发送消息。你可以去传一份再测。', true)
+        } else {
+          msgEl.innerHTML = ctx.msg('测试消息已发送！请去群里查看', true)
+        }
+      } else {
+        msgEl.innerHTML = ctx.msg('发送失败：' + (json.error || '未知错误'), false)
+      }
+    } catch (e) {
+      msgEl.innerHTML = ctx.msg('网络错误：' + e.message, false)
+    }
+    
+    btn.disabled = false
+    btn.innerText = '发送测试消息'
   }
 
   document.getElementById('btn-v-add').onclick = async () => {
