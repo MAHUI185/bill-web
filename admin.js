@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-24 终极版：含代报导出、多群钉钉推送配置、质检报告管理）
+// admin.js — 管理后台（2026-10-25 终极版：含代报导出、多群钉钉推送配置、动态推送时间）
 
 let ctx = null
 let operatorName = '未知'
@@ -658,7 +658,6 @@ async function renderQCAdmin(v) {
             throw new Error(errText)
           }
 
-          // ★ 核心修复：强制抛出数据库层面的报错
           const { error } = await ctx.supabase.from('qc_report').delete().eq('id', id)
           if (error) {
             throw new Error('数据库删除失败: ' + error.message)
@@ -2300,13 +2299,15 @@ const CONFIG_CN = {
   cleanup_days: '清理保留天数',
   cleanup_time: '清理执行时间',
   dingtalk_qc_webhook: '钉钉推送Webhook',
-  dingtalk_qc_secret: '钉钉推送加签'
+  dingtalk_qc_secret: '钉钉推送加签',
+  dingtalk_qc_push_time: '钉钉推送执行时间'
 }
 
 function formatConfigValue(key, val) {
   if (key === 'maintenance_mode') return val === 'true' ? '开启' : '关闭'
   if (key === 'cleanup_days') return (val || '') + ' 天'
   if (key === 'cleanup_time') return '每天 ' + (val || '')
+  if (key === 'dingtalk_qc_push_time') return '每天 ' + (val || '')
   return val || ''
 }
 
@@ -2379,7 +2380,7 @@ async function renderSys(v) {
     <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #1677ff;">
       <h2>钉钉质检报告推送（仅超管）</h2>
       <p style="font-size:12px;color:#666;margin:8px 0;">
-        每天早晨 08:00 自动将前一天或当天的质检报告汇总推送到钉钉群（支持多个群，换行输入）。
+        每天定时将当天的质检报告汇总推送到钉钉群（支持多个群，换行输入）。
       </p>
       <div class="row">
         <div style="flex:2;">
@@ -2389,6 +2390,10 @@ async function renderSys(v) {
         <div style="flex:1;">
           <label>加签密钥（与上方一一对应换行）</label>
           <textarea id="dingtalk-secret" rows="3" placeholder="SECxxx&#10;SECyyy" style="width:100%; font-family:monospace;">${cfgMap['dingtalk_qc_secret'] || ''}</textarea>
+        </div>
+        <div style="flex:0 0 150px;">
+          <label>每日执行时间</label>
+          <input type="time" id="dingtalk-push-time" value="${cfgMap['dingtalk_qc_push_time'] || '08:00'}" style="width:100%;" />
         </div>
       </div>
       <div style="display:flex; gap:12px; margin-top:8px;">
@@ -2486,9 +2491,22 @@ async function renderSys(v) {
     }
     await upsert('dingtalk_qc_webhook', webhook)
     await upsert('dingtalk_qc_secret', secret)
+    
+    // ★ 保存时间并自动修改定时任务
+    const pushTime = document.getElementById('dingtalk-push-time').value || '08:00'
+    await upsert('dingtalk_qc_push_time', pushTime)
+    
+    // 把时间转换成 Cron 表达式 (UTC)
+    const hh = parseInt(pushTime.split(':')[0], 10)
+    const mm = parseInt(pushTime.split(':')[1], 10)
+    const utcH = (hh - 8 + 24) % 24 // 北京时间转 UTC
+    const cronExp = `${mm} ${utcH} * * *`
 
-    await logOp('save_system_config', '保存钉钉配置')
-    msgEl.innerHTML = ctx.msg('配置已保存', true)
+    // 动态更新数据库的定时任务
+    await ctx.supabase.rpc('reschedule_dingtalk_qc_push', { cron_expr: cronExp })
+
+    await logOp('save_system_config', '保存钉钉配置', { time: pushTime })
+    msgEl.innerHTML = ctx.msg(`配置已保存，定时推送时间已更新为每天 ${pushTime}`, true)
   }
 
   document.getElementById('btn-test-dingtalk').onclick = async () => {

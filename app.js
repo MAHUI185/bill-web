@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-24 终极完整版：增强管理员识别、质检多选与命名规范、WMS单号防错）
+// app.js — 主逻辑（2026-10-25 终极完整版：质检覆盖与10MB限制、管理员容错）
 
 import { supabase } from './supabase.js'
 
@@ -138,7 +138,7 @@ async function loadProfile() {
   }
 
   currentProfile = profile
-  // ★ 增强判断：如果在 admin_users 表里，或者 account_type 是 admin，或者厂编以 ADMIN_ 开头，统统算管理员
+  // 增强判断：如果在 admin_users 表里，或者 account_type 是 admin，或者厂编以 ADMIN_ 开头，统统算管理员
   isAdmin = !!admin || profile?.account_type === 'admin' || (profile?.vendor_code || '').startsWith('ADMIN_')
   currentRole = admin?.role || (isAdmin ? 'admin' : null)
   isLogistics = profile?.account_type === 'logistics'
@@ -1562,34 +1562,21 @@ async function renderQC(view) {
 
   const { data: reports } = await q
 
-  const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
-  const todayStr = nowBj.toISOString().slice(0, 10)
-  
-  const uploadedToday = (reports || []).some(r => {
-    const d = new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000)
-    return d.toISOString().slice(0, 10) === todayStr
-  })
-
   view.innerHTML = `
     <div class="card">
       <h2>上传质检报告</h2>
       <div id="qc-msg"></div>
       
-      ${uploadedToday ? `
-        <div style="background:#f6ffed; border:1px solid #b7eb8f; color:#389e0d; padding:12px; border-radius:4px;">
-          ✅ 您今天已经上传过质检报告。根据规则，每天只能上传一次，请明天再试。
+      <p style="font-size:13px;color:#666;margin-bottom:12px;">
+        规则：1. 仅限 PDF 格式；2. 支持多选；3. 单次上传总大小不能超过 <strong>10MB</strong>。<br>
+        <span style="color:#cf1322;">* 如果您今天已经传过，再次上传将自动覆盖并删除今天之前上传的所有报告。</span>
+      </p>
+      <div class="row">
+        <div style="flex:1;">
+          <input type="file" id="qc-file" accept=".pdf,application/pdf" multiple />
         </div>
-      ` : `
-        <p style="font-size:13px;color:#666;margin-bottom:12px;">
-          规则：1. 仅限 PDF 格式；2. 每天只能上传一次（支持多选）；3. 单次上传总大小不能超过 <strong>7MB</strong>。
-        </p>
-        <div class="row">
-          <div style="flex:1;">
-            <input type="file" id="qc-file" accept=".pdf,application/pdf" multiple />
-          </div>
-          <button id="btn-qc-upload" style="flex:0 0 100px; margin-top: 24px;">上传</button>
-        </div>
-      `}
+        <button id="btn-qc-upload" style="flex:0 0 100px; margin-top: 24px;">上传</button>
+      </div>
     </div>
     <div class="card">
       <h2>已上传的报告（${(reports||[]).length}）</h2>
@@ -1609,108 +1596,122 @@ async function renderQC(view) {
       </div>
     </div>`
 
-  if (!uploadedToday) {
-    document.getElementById('btn-qc-upload').onclick = async () => {
-      const msgEl = document.getElementById('qc-msg')
-      const fileInput = document.getElementById('qc-file')
-      const files = Array.from(fileInput.files)
+  document.getElementById('btn-qc-upload').onclick = async () => {
+    const msgEl = document.getElementById('qc-msg')
+    const fileInput = document.getElementById('qc-file')
+    const files = Array.from(fileInput.files)
 
-      if (files.length === 0) return msgEl.innerHTML = msg('请选择文件', false)
+    if (files.length === 0) return msgEl.innerHTML = msg('请选择文件', false)
 
-      // 前端校验：格式与总大小
-      let totalSize = 0
-      for (const file of files) {
-        if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-          return msgEl.innerHTML = msg(`文件 [${file.name}] 不是 PDF 格式`, false)
-        }
-        totalSize += file.size
+    // 前端校验：格式与总大小
+    let totalSize = 0
+    for (const file of files) {
+      if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+        return msgEl.innerHTML = msg(`文件 [${file.name}] 不是 PDF 格式`, false)
       }
+      totalSize += file.size
+    }
+    
+    if (totalSize > 10 * 1024 * 1024) {
+      return msgEl.innerHTML = msg(`本次上传总大小为 ${(totalSize/1024/1024).toFixed(2)}MB，超过了 10MB 限制`, false)
+    }
+
+    const btn = document.getElementById('btn-qc-upload')
+    btn.disabled = true
+    btn.innerText = '上传中...'
+    msgEl.innerHTML = msg('正在处理...', true)
+
+    try {
+      const myCode = isLogistics ? myVendors[0].vendor_code : currentProfile.vendor_code
       
-      if (totalSize > 7 * 1024 * 1024) {
-        return msgEl.innerHTML = msg(`本次上传总大小为 ${(totalSize/1024/1024).toFixed(2)}MB，超过了 7MB 限制`, false)
+      let vendorName = currentProfile?.vendor_name || '未知厂商'
+      vendorName = vendorName.replace(/[\/\\:*?"<>|]/g, '') 
+
+      const fileInfos = files.map((file, index) => {
+        const ext = file.name.split('.').pop()
+        let customName = file.name.replace(/\.[^/.]+$/, "").replace(/[\/\\:*?"<>|]/g, '')
+        const timestamp = Date.now()
+        const finalFileName = `qc/${myCode}_${vendorName}_${customName}_${timestamp}_${index}.${ext}`
+        return { file, fileName: finalFileName, originalName: file.name }
+      })
+
+      // 1. 批量获取预签名 URL
+      msgEl.innerHTML = msg('正在获取上传凭证...', true)
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/upload-qc`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ fileNames: fileInfos.map(f => f.fileName) })
+      })
+      
+      if (!res.ok) {
+        let errMsg = '获取上传凭证失败'
+        try {
+          const errJson = await res.json()
+          errMsg = errJson.error || errMsg
+        } catch (e) {}
+        throw new Error(errMsg)
       }
+      const { urls } = await res.json()
 
-      const btn = document.getElementById('btn-qc-upload')
-      btn.disabled = true
-      btn.innerText = '上传中...'
-      msgEl.innerHTML = msg('正在处理...', true)
-
-      try {
-        const myCode = isLogistics ? myVendors[0].vendor_code : currentProfile.vendor_code
-        
-        // 获取当前厂商名称（去除特殊字符）
-        let vendorName = currentProfile?.vendor_name || '未知厂商'
-        vendorName = vendorName.replace(/[\/\\:*?"<>|]/g, '') 
-
-        // 生成标准文件名数组
-        const fileInfos = files.map((file, index) => {
-          const ext = file.name.split('.').pop()
-          // 获取厂商自定义名称（去掉 .pdf 后缀，并过滤非法字符）
-          let customName = file.name.replace(/\.[^/.]+$/, "").replace(/[\/\\:*?"<>|]/g, '')
-          const timestamp = Date.now()
-          
-          // 组合规则：厂编_厂名_自定义名_时间戳_序号.pdf
-          const finalFileName = `qc/${myCode}_${vendorName}_${customName}_${timestamp}_${index}.${ext}`
-          
-          return { file, fileName: finalFileName, originalName: file.name }
+      // 2. 并行直传 R2
+      msgEl.innerHTML = msg(`正在上传 ${files.length} 个文件到云存储...`, true)
+      await Promise.all(fileInfos.map(async (info, i) => {
+        const uploadRes = await fetch(urls[i].uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/pdf' },
+          body: info.file
         })
+        if (!uploadRes.ok) throw new Error(`文件 [${info.originalName}] 上传失败`)
+      }))
 
-        // 1. 批量获取预签名 URL
-        msgEl.innerHTML = msg('正在获取上传凭证...', true)
-        const { data: { session } } = await supabase.auth.getSession()
-        const res = await fetch(`${SUPABASE_URL}/functions/v1/upload-qc`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
-          body: JSON.stringify({ fileNames: fileInfos.map(f => f.fileName) })
-        })
-        
-        if (!res.ok) {
-          let errMsg = '获取上传凭证失败'
+      // 3. ★ 覆盖逻辑：先查今天是否已传过
+      msgEl.innerHTML = msg('正在清理今日旧报告并保存新记录...', true)
+      const todayStart = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
+      todayStart.setHours(0, 0, 0, 0)
+      
+      const { data: oldReports } = await supabase.from('qc_report')
+        .select('id, file_path')
+        .eq('vendor_id', currentUser.id)
+        .gte('created_at', todayStart.toISOString())
+
+      if (oldReports && oldReports.length > 0) {
+        await Promise.all(oldReports.map(async (old) => {
           try {
-            const errJson = await res.json()
-            errMsg = errJson.error || errMsg
-          } catch (e) {}
-          throw new Error(errMsg)
-        }
-        const { urls } = await res.json()
-
-        // 2. 并行直传 R2
-        msgEl.innerHTML = msg(`正在上传 ${files.length} 个文件到云存储...`, true)
-        await Promise.all(fileInfos.map(async (info, i) => {
-          const uploadRes = await fetch(urls[i].uploadUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/pdf' },
-            body: info.file
-          })
-          if (!uploadRes.ok) throw new Error(`文件 [${info.originalName}] 上传失败`)
+            await fetch(`${SUPABASE_URL}/functions/v1/delete-qc`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+              body: JSON.stringify({ filePath: old.file_path })
+            })
+          } catch (e) { console.error('删除旧文件失败', e) }
         }))
-
-        // 3. 批量写入数据库
-        msgEl.innerHTML = msg('正在保存记录...', true)
-        const dbRows = fileInfos.map((info, i) => ({
-          vendor_id: currentUser.id,
-          vendor_code: myCode,
-          report_name: info.originalName,
-          file_path: info.fileName,
-          file_url: urls[i].fileUrl,
-          file_size: info.file.size
-        }))
-
-        const { error: dbErr } = await supabase.from('qc_report').insert(dbRows)
-        if (dbErr) throw dbErr
-
-        msgEl.innerHTML = msg('上传成功', true)
-        setTimeout(() => renderQC(view), 1000)
-
-      } catch (err) {
-        console.error(err)
-        msgEl.innerHTML = msg(err.message || '上传失败', false)
-        btn.disabled = false
-        btn.innerText = '上传'
+        await supabase.from('qc_report').delete().in('id', oldReports.map(r => r.id))
       }
+
+      // 4. 批量写入新记录
+      const dbRows = fileInfos.map((info, i) => ({
+        vendor_id: currentUser.id,
+        vendor_code: myCode,
+        report_name: info.originalName,
+        file_path: info.fileName,
+        file_url: urls[i].fileUrl,
+        file_size: info.file.size
+      }))
+
+      const { error: dbErr } = await supabase.from('qc_report').insert(dbRows)
+      if (dbErr) throw dbErr
+
+      msgEl.innerHTML = msg('上传并覆盖成功', true)
+      setTimeout(() => renderQC(view), 1000)
+
+    } catch (err) {
+      console.error(err)
+      msgEl.innerHTML = msg(err.message || '上传失败', false)
+      btn.disabled = false
+      btn.innerText = '上传'
     }
   }
 
