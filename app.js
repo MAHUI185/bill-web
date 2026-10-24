@@ -417,7 +417,7 @@ async function renderView(key) {
   if (key === 'fill') return renderFill(view)
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
-  if (key === 'qc') return renderQC(view) // 已恢复
+  if (key === 'qc') return renderQC(view)
   if (key === 'admin') {
     try {
       const mod = await import('./admin.js')
@@ -1624,7 +1624,14 @@ async function renderQC(view) {
         body: JSON.stringify({ fileName })
       })
       
-      if (!res.ok) throw new Error('获取上传凭证失败')
+      if (!res.ok) {
+        let errMsg = '获取上传凭证失败'
+        try {
+          const errJson = await res.json()
+          errMsg = errJson.error || errMsg
+        } catch (e) {}
+        throw new Error(errMsg)
+      }
       const { uploadUrl, fileUrl } = await res.json()
 
       msgEl.innerHTML = msg('正在上传到云存储...', true)
@@ -1678,7 +1685,18 @@ async function renderQC(view) {
           },
           body: JSON.stringify({ filePath: path })
         })
-        if (!res.ok) throw new Error('R2 文件删除失败')
+        
+        // ★ 核心修改：提取真实报错
+        if (!res.ok) {
+          let errText = 'R2 文件删除失败'
+          try {
+            const errJson = await res.json()
+            errText = errJson.error || JSON.stringify(errJson)
+          } catch (e) {
+            errText = await res.text() || `HTTP ${res.status}`
+          }
+          throw new Error(errText)
+        }
 
         const { error } = await supabase.from('qc_report').delete().eq('id', id)
         if (error) throw error
