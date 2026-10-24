@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-24 终极完整版：质检多选与命名规范、WMS单号防错、济转西修正）
+// app.js — 主逻辑（2026-10-24 终极完整版：增强管理员识别、质检多选与命名规范、WMS单号防错）
 
 import { supabase } from './supabase.js'
 
@@ -138,8 +138,9 @@ async function loadProfile() {
   }
 
   currentProfile = profile
-  isAdmin = !!admin
-  currentRole = admin?.role || null
+  // ★ 增强判断：如果在 admin_users 表里，或者 account_type 是 admin，或者厂编以 ADMIN_ 开头，统统算管理员
+  isAdmin = !!admin || profile?.account_type === 'admin' || (profile?.vendor_code || '').startsWith('ADMIN_')
+  currentRole = admin?.role || (isAdmin ? 'admin' : null)
   isLogistics = profile?.account_type === 'logistics'
 
   if (isLogistics) {

@@ -160,10 +160,8 @@ const ACTION_CN = {
 
 // ================= 1. 提报进度 =================
 async function renderProgress(v) {
-  // 1. 查询厂商状态视图
   const { data } = await ctx.supabase.from('vendor_report_status').select('*')
   
-  // 2. 查询当天的质检报告（仅查厂编，用于匹配）
   const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
   const todayStr = nowBj.toISOString().slice(0, 10)
   const startOfToday = new Date(todayStr + 'T00:00:00+08:00').toISOString()
@@ -660,8 +658,11 @@ async function renderQCAdmin(v) {
             throw new Error(errText)
           }
 
+          // ★ 核心修复：强制抛出数据库层面的报错
           const { error } = await ctx.supabase.from('qc_report').delete().eq('id', id)
-          if (error) throw error
+          if (error) {
+            throw new Error('数据库删除失败: ' + error.message)
+          }
 
           await logOp('delete_qc', '删除质检报告 ' + path)
           alert('删除成功')
@@ -2508,11 +2509,7 @@ async function renderSys(v) {
       
       const json = await res.json()
       if (res.ok) {
-        if (json.msg === '今日无质检报告，静默不发送') {
-          msgEl.innerHTML = ctx.msg('云函数已连通，但今天没有质检报告，因此未发送消息。你可以去传一份再测。', true)
-        } else {
-          msgEl.innerHTML = ctx.msg('测试消息已发送！请去群里查看', true)
-        }
+        msgEl.innerHTML = ctx.msg('测试消息已发送！请去群里查看', true)
       } else {
         msgEl.innerHTML = ctx.msg('发送失败：' + (json.error || '未知错误'), false)
       }
