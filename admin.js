@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-24 终极版：含代报导出、钉钉推送配置）
+// admin.js — 管理后台（2026-10-24 终极版：含代报导出、钉钉推送配置、质检报告管理）
 
 let ctx = null
 let operatorName = '未知'
@@ -27,6 +27,7 @@ export async function renderAdmin(view, context) {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
       <button data-t="bills">单据管理</button>
+      <button data-t="qc">质检报告</button>
       <button data-t="vendors">厂商管理</button>
       <button data-t="logistics">物流商管理</button>
       <button data-t="admins">管理员管理</button>
@@ -38,6 +39,7 @@ export async function renderAdmin(view, context) {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
       <button data-t="bills">单据管理</button>
+      <button data-t="qc">质检报告</button>
       <button data-t="vendors">厂商管理</button>
       <button data-t="logistics">物流商管理</button>
     `
@@ -82,6 +84,7 @@ async function renderTab(key) {
   try {
     if (key === 'progress') return renderProgress(v)
     if (key === 'bills') return renderBills(v)
+    if (key === 'qc') return renderQCAdmin(v)
     if (key === 'vendors') return renderVendors(v)
     if (key === 'logistics') return renderLogistics(v)
     if (key === 'admins') return renderAdmins(v)
@@ -134,6 +137,8 @@ const ACTION_CN = {
   export_bills_admin: '导出代报单据',
   update_bill: '修改单据',
   delete_bill: '删除单据',
+  delete_qc: '删除质检报告',
+  export_qc: '导出质检报告',
   create_warehouse: '新增仓库',
   delete_warehouse: '删除仓库',
   create_location: '新增仓位',
@@ -156,7 +161,20 @@ const ACTION_CN = {
 
 // ================= 1. 提报进度 =================
 async function renderProgress(v) {
+  // 1. 查询厂商状态视图
   const { data } = await ctx.supabase.from('vendor_report_status').select('*')
+  
+  // 2. 查询当天的质检报告（仅查厂编，用于匹配）
+  const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
+  const todayStr = nowBj.toISOString().slice(0, 10)
+  const startOfToday = new Date(todayStr + 'T00:00:00+08:00').toISOString()
+  
+  const { data: qcs } = await ctx.supabase.from('qc_report')
+    .select('vendor_code')
+    .gte('created_at', startOfToday)
+  
+  const qcSet = new Set((qcs || []).map(q => q.vendor_code))
+
   v.innerHTML = `
     <div class="row" style="margin-bottom:12px;">
       <input id="p-search" placeholder="搜索厂编/名称" />
@@ -165,46 +183,62 @@ async function renderProgress(v) {
         <option value="reported">今日已提报</option>
         <option value="not">今日未提报</option>
         <option value="nologin">今日未登录</option>
+        <option value="qc_uploaded">今日已传质检</option>
+        <option value="qc_missing">今日未传质检</option>
       </select>
     </div>
     <div class="scroll">
       <table>
         <tr>
           <th>厂编</th><th>厂商名称</th><th>仓库</th><th>联系人</th><th>手机</th>
-          <th>登录状态</th><th>今日提报</th><th>今日条数</th><th>最后提报</th><th>最后活跃</th>
+          <th>登录状态</th><th>今日提报</th><th>今日条数</th><th>今日质检</th><th>最后提报</th><th>最后活跃</th>
         </tr>
         <tbody id="p-body"></tbody>
       </table>
     </div>`
+    
   const render = () => {
     const kw = (document.getElementById('p-search').value || '').toLowerCase()
     const st = document.getElementById('p-status').value
     let list = data || []
+    
     if (kw) list = list.filter(r =>
       (r.vendor_code || '').toLowerCase().includes(kw) ||
       (r.vendor_name || '').toLowerCase().includes(kw))
+      
     if (st === 'reported') list = list.filter(r => r.reported_today)
     if (st === 'not') list = list.filter(r => !r.reported_today)
     if (st === 'nologin') list = list.filter(r => !r.logged_in_today)
-    document.getElementById('p-body').innerHTML = list.map(r => `<tr>
-      <td>${r.vendor_code || ''}</td>
-      <td>${r.vendor_name || ''}</td>
-      <td>${r.warehouse_name || r.warehouse_code || ''}</td>
-      <td>${r.contact_name || ''}</td>
-      <td>${r.contact_phone || ''}</td>
-      <td>${
-        r.login_status === '在线'
-          ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;">● 在线</span>'
-          : r.login_status === '今日已登录'
-            ? '<span class="stat ok">已登录</span>'
-            : '<span class="stat no">未登录</span>'
-      }</td>
-      <td>${r.reported_today ? '<span class="stat ok">已提报</span>' : '<span class="stat no">未提报</span>'}</td>
-      <td>${r.today_count || 0}</td>
-      <td>${r.last_report_at ? new Date(r.last_report_at).toLocaleString() : '-'}</td>
-      <td>${r.last_active_at ? new Date(r.last_active_at).toLocaleString() : '-'}</td>
-    </tr>`).join('') || '<tr><td colspan="10">无数据</td></tr>'
+    if (st === 'qc_uploaded') list = list.filter(r => qcSet.has(r.vendor_code))
+    if (st === 'qc_missing') list = list.filter(r => !qcSet.has(r.vendor_code))
+    
+    document.getElementById('p-body').innerHTML = list.map(r => {
+      const hasQc = qcSet.has(r.vendor_code)
+      return `<tr>
+        <td>${r.vendor_code || ''}</td>
+        <td>${r.vendor_name || ''}</td>
+        <td>${r.warehouse_name || r.warehouse_code || ''}</td>
+        <td>${r.contact_name || ''}</td>
+        <td>${r.contact_phone || ''}</td>
+        <td>${
+          r.login_status === '在线'
+            ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;">● 在线</span>'
+            : r.login_status === '今日已登录'
+              ? '<span class="stat ok">已登录</span>'
+              : '<span class="stat no">未登录</span>'
+        }</td>
+        <td>${r.reported_today ? '<span class="stat ok">已提报</span>' : '<span class="stat no">未提报</span>'}</td>
+        <td>${r.today_count || 0}</td>
+        <td>${hasQc 
+          ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;border:1px solid #91caff;">✅ 已传</span>' 
+          : '<span class="stat no" style="background:#f5f5f5;color:#999;border:1px solid #ddd;">❌ 未传</span>'
+        }</td>
+        <td>${r.last_report_at ? new Date(r.last_report_at).toLocaleString() : '-'}</td>
+        <td>${r.last_active_at ? new Date(r.last_active_at).toLocaleString() : '-'}</td>
+      </tr>`
+    }).join('') || '<tr><td colspan="11" style="text-align:center;color:#999;">无数据</td></tr>'
   }
+  
   document.getElementById('p-search').oninput = render
   document.getElementById('p-status').onchange = render
   render()
@@ -519,6 +553,149 @@ async function renderBills(v) {
   }
 
   search()
+}
+
+// ================= 2.5 质检报告管理 =================
+async function renderQCAdmin(v) {
+  const { data: reports } = await ctx.supabase.from('qc_report')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1000)
+
+  const { data: vendors } = await ctx.supabase.from('vendor_profile').select('vendor_code, vendor_name')
+  const vMap = {}
+  ;(vendors || []).forEach(x => { vMap[x.vendor_code] = x.vendor_name })
+
+  v.innerHTML = `
+    <div class="card" style="box-shadow:none; padding:16px; margin:0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h2 style="margin:0; font-size:16px;">质检报告列表（共 ${(reports||[]).length} 条）</h2>
+        <div style="display:flex; gap:8px;">
+          <input id="qc-search" placeholder="搜索厂编/厂商名/文件名" style="width:240px; margin:0;" />
+          <button class="secondary" id="btn-qc-export" style="background:#f6ffed; border-color:#b7eb8f; color:#389e0d;">导出 Excel</button>
+        </div>
+      </div>
+
+      <div class="scroll" style="max-height: calc(100vh - 240px);">
+        <table>
+          <tr>
+            <th>上传时间</th><th>厂编</th><th>厂商名称</th><th>文件名</th>
+            <th>大小</th><th>操作</th>
+          </tr>
+          <tbody id="qc-body"></tbody>
+        </table>
+      </div>
+    </div>`
+
+  const renderTable = (keyword = '') => {
+    const kw = keyword.toLowerCase().trim()
+    const filtered = reports.filter(r => {
+      if (!kw) return true
+      const vName = (vMap[r.vendor_code] || '').toLowerCase()
+      return (r.vendor_code || '').toLowerCase().includes(kw) ||
+             vName.includes(kw) ||
+             (r.report_name || '').toLowerCase().includes(kw)
+    })
+
+    document.getElementById('qc-body').innerHTML = filtered.map(r => {
+      const sizeMB = ((r.file_size || 0) / 1024 / 1024).toFixed(2)
+      const timeStr = new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19)
+      return `<tr>
+        <td>${timeStr}</td>
+        <td>${r.vendor_code}</td>
+        <td>${vMap[r.vendor_code] || '-'}</td>
+        <td><a href="${r.file_url}" target="_blank" style="color:#1677ff; text-decoration:none;">${r.report_name}</a></td>
+        <td>${sizeMB} MB</td>
+        <td>
+          <button class="small secondary" data-download="${r.file_url}" data-name="${r.report_name}">下载</button>
+          ${isSuper() ? `<button class="small danger" data-del-id="${r.id}" data-path="${r.file_path}" style="margin-left:8px;">删除</button>` : ''}
+        </td>
+      </tr>`
+    }).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">无匹配数据</td></tr>'
+
+    bindActions(filtered)
+  }
+
+  const bindActions = (currentData) => {
+    v.querySelectorAll('[data-download]').forEach(btn => {
+      btn.onclick = () => {
+        const url = btn.dataset.download
+        const name = btn.dataset.name
+        const a = document.createElement('a')
+        a.href = url
+        a.download = name
+        a.target = '_blank'
+        a.click()
+      }
+    })
+
+    v.querySelectorAll('[data-del-id]').forEach(btn => {
+      btn.onclick = async () => {
+        if (!isSuper()) return alert('只有超级管理员可以删除')
+        const id = Number(btn.dataset.delId)
+        const path = btn.dataset.path
+        if (!confirm(`确定要删除这份质检报告吗？\n\n物理文件也会从 R2 存储中彻底删除！`)) return
+
+        btn.disabled = true
+        btn.innerText = '删除中...'
+
+        try {
+          const { data: { session } } = await ctx.supabase.auth.getSession()
+          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-qc`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ filePath: path })
+          })
+          
+          if (!res.ok) {
+            let errText = 'R2 文件删除失败'
+            try {
+              const errJson = await res.json()
+              errText = errJson.error || JSON.stringify(errJson)
+            } catch (e) {
+              errText = await res.text() || `HTTP ${res.status}`
+            }
+            throw new Error(errText)
+          }
+
+          const { error } = await ctx.supabase.from('qc_report').delete().eq('id', id)
+          if (error) throw error
+
+          await logOp('delete_qc', '删除质检报告 ' + path)
+          alert('删除成功')
+          renderTab('qc') // 刷新列表
+        } catch (err) {
+          alert('删除失败：' + err.message)
+          btn.disabled = false
+          btn.innerText = '删除'
+        }
+      }
+    })
+  }
+
+  document.getElementById('qc-search').oninput = (e) => renderTable(e.target.value)
+
+  document.getElementById('btn-qc-export').onclick = () => {
+    const listToExport = reports.map(r => ({
+      '上传时间': new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19),
+      '厂编': r.vendor_code,
+      '厂商名称': vMap[r.vendor_code] || '',
+      '文件名': r.report_name,
+      '文件大小(MB)': ((r.file_size || 0) / 1024 / 1024).toFixed(2),
+      '下载链接': r.file_url
+    }))
+
+    const ws = XLSX.utils.json_to_sheet(listToExport)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, '质检报告汇总')
+    XLSX.writeFile(wb, `质检报告汇总_${new Date().getTime()}.xlsx`)
+    logOp('export_qc', '导出质检报告数据')
+  }
+
+  renderTable()
 }
 
 // ================= 3. 厂商管理 =================
