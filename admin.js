@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-24 终极版：含代报导出、钉钉推送配置、质检报告管理）
+// admin.js — 管理后台（2026-10-24 终极版：含代报导出、多群钉钉推送配置、质检报告管理）
 
 let ctx = null
 let operatorName = '未知'
@@ -62,7 +62,6 @@ export async function renderAdmin(view, context) {
       <div id="admin-view"></div>
     </div>`
 
-  // 跳转到代报页面
   document.getElementById('btn-goto-fill').onclick = () => {
     const navFillBtn = document.querySelector('#nav button[data-k="fill"]')
     if (navFillBtn) navFillBtn.click()
@@ -2379,16 +2378,16 @@ async function renderSys(v) {
     <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #1677ff;">
       <h2>钉钉质检报告推送（仅超管）</h2>
       <p style="font-size:12px;color:#666;margin:8px 0;">
-        每天早晨 08:00 自动将前一天或当天的质检报告汇总推送到钉钉群。
+        每天早晨 08:00 自动将前一天或当天的质检报告汇总推送到钉钉群（支持多个群，换行输入）。
       </p>
       <div class="row">
         <div style="flex:2;">
-          <label>Webhook 地址</label>
-          <input id="dingtalk-webhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." value="${cfgMap['dingtalk_qc_webhook'] || ''}" />
+          <label>Webhook 地址（多个群请换行输入）</label>
+          <textarea id="dingtalk-webhook" rows="3" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx&#10;https://oapi.dingtalk.com/robot/send?access_token=yyy" style="width:100%; font-family:monospace;">${cfgMap['dingtalk_qc_webhook'] || ''}</textarea>
         </div>
         <div style="flex:1;">
-          <label>加签密钥 (SEC...)</label>
-          <input id="dingtalk-secret" placeholder="SEC..." value="${cfgMap['dingtalk_qc_secret'] || ''}" />
+          <label>加签密钥（与上方一一对应换行）</label>
+          <textarea id="dingtalk-secret" rows="3" placeholder="SECxxx&#10;SECyyy" style="width:100%; font-family:monospace;">${cfgMap['dingtalk_qc_secret'] || ''}</textarea>
         </div>
       </div>
       <div style="display:flex; gap:12px; margin-top:8px;">

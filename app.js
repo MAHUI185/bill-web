@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-24 终极完整版：多文件上传、7MB限制、单日一次）
+// app.js — 主逻辑（2026-10-24 终极完整版：质检多选与命名规范、WMS单号防错、济转西修正）
 
 import { supabase } from './supabase.js'
 
@@ -364,7 +364,6 @@ function renderMain() {
   }
   const nav = document.getElementById('nav')
   
-  // ★ 恢复质检报告入口
   const tabs = isAdmin 
     ? [['fill','管理填报'], ['admin','管理后台']] 
     : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告']]
@@ -1525,7 +1524,6 @@ async function renderMy(view) {
       </div>
     </div>`
 
-  // 绑定删除事件
   view.querySelectorAll('[data-del]').forEach(btn => {
     btn.onclick = async () => {
       const id = Number(btn.dataset.del)
@@ -1544,7 +1542,7 @@ async function renderMy(view) {
       }
       
       alert('已删除')
-      renderMy(view) // 刷新列表
+      renderMy(view)
     }
   })
 }
@@ -1563,7 +1561,6 @@ async function renderQC(view) {
 
   const { data: reports } = await q
 
-  // 判断今天是否已经上传过 (北京时间)
   const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
   const todayStr = nowBj.toISOString().slice(0, 10)
   
@@ -1640,11 +1637,21 @@ async function renderQC(view) {
       try {
         const myCode = isLogistics ? myVendors[0].vendor_code : currentProfile.vendor_code
         
-        // 生成文件名数组
+        // 获取当前厂商名称（去除特殊字符）
+        let vendorName = currentProfile?.vendor_name || '未知厂商'
+        vendorName = vendorName.replace(/[\/\\:*?"<>|]/g, '') 
+
+        // 生成标准文件名数组
         const fileInfos = files.map((file, index) => {
           const ext = file.name.split('.').pop()
-          const fileName = `qc/${myCode}_${Date.now()}_${index}.${ext}`
-          return { file, fileName, originalName: file.name }
+          // 获取厂商自定义名称（去掉 .pdf 后缀，并过滤非法字符）
+          let customName = file.name.replace(/\.[^/.]+$/, "").replace(/[\/\\:*?"<>|]/g, '')
+          const timestamp = Date.now()
+          
+          // 组合规则：厂编_厂名_自定义名_时间戳_序号.pdf
+          const finalFileName = `qc/${myCode}_${vendorName}_${customName}_${timestamp}_${index}.${ext}`
+          
+          return { file, fileName: finalFileName, originalName: file.name }
         })
 
         // 1. 批量获取预签名 URL
@@ -1659,7 +1666,14 @@ async function renderQC(view) {
           body: JSON.stringify({ fileNames: fileInfos.map(f => f.fileName) })
         })
         
-        if (!res.ok) throw new Error('获取上传凭证失败')
+        if (!res.ok) {
+          let errMsg = '获取上传凭证失败'
+          try {
+            const errJson = await res.json()
+            errMsg = errJson.error || errMsg
+          } catch (e) {}
+          throw new Error(errMsg)
+        }
         const { urls } = await res.json()
 
         // 2. 并行直传 R2
@@ -1699,7 +1713,6 @@ async function renderQC(view) {
     }
   }
 
-  // 绑定删除事件
   view.querySelectorAll('[data-del-id]').forEach(btn => {
     btn.onclick = async () => {
       const id = Number(btn.dataset.delId)
