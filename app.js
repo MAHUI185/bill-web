@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-25 终极完整版：质检覆盖与10MB限制、管理员容错）
+// app.js — 主逻辑（2026-10-26 终极完整版：质检规范命名直接入库、覆盖与10MB限制、动态时间）
 
 import { supabase } from './supabase.js'
 
@@ -138,7 +138,6 @@ async function loadProfile() {
   }
 
   currentProfile = profile
-  // 增强判断：如果在 admin_users 表里，或者 account_type 是 admin，或者厂编以 ADMIN_ 开头，统统算管理员
   isAdmin = !!admin || profile?.account_type === 'admin' || (profile?.vendor_code || '').startsWith('ADMIN_')
   currentRole = admin?.role || (isAdmin ? 'admin' : null)
   isLogistics = profile?.account_type === 'logistics'
@@ -1691,15 +1690,21 @@ async function renderQC(view) {
         await supabase.from('qc_report').delete().in('id', oldReports.map(r => r.id))
       }
 
-      // 4. 批量写入新记录
-      const dbRows = fileInfos.map((info, i) => ({
-        vendor_id: currentUser.id,
-        vendor_code: myCode,
-        report_name: info.originalName,
-        file_path: info.fileName,
-        file_url: urls[i].fileUrl,
-        file_size: info.file.size
-      }))
+      // 4. 批量写入新记录 (★ 核心修复：直接存规范名字)
+      const dbRows = fileInfos.map((info, i) => {
+        // 在这里直接拼接最终展示的文件名（厂编_厂名_自定义名）
+        const safeOriginalName = info.originalName.replace(/[\/\\:*?"<>|]/g, '')
+        const finalDisplayName = `${myCode}_${vendorName}_${safeOriginalName}`
+        
+        return {
+          vendor_id: currentUser.id,
+          vendor_code: myCode,
+          report_name: finalDisplayName, // 存为规范的展示名
+          file_path: info.fileName,
+          file_url: urls[i].fileUrl,
+          file_size: info.file.size
+        }
+      })
 
       const { error: dbErr } = await supabase.from('qc_report').insert(dbRows)
       if (dbErr) throw dbErr
