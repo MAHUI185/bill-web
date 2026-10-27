@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-26 终极完整版：质检规范命名直接入库、覆盖与10MB限制、动态时间）
+// app.js — 主逻辑（2026-10-27 终极完整版：物流商代传隔离、质检覆盖与10MB限制、动态时间）
 
 import { supabase } from './supabase.js'
 
@@ -84,6 +84,9 @@ function withTimeout(promise, ms = 5000) {
 }
 
 async function init() {
+  // ★ 核心优化：无论网络多慢，先直接把登录界面渲染出来，消除白屏感
+  renderLogin()
+
   try {
     const { data: cfg } = await withTimeout(
       supabase.from('system_config').select('config_value').eq('config_key', 'maintenance_mode').maybeSingle()
@@ -102,7 +105,7 @@ async function init() {
     }
 
     const { data: { session } } = await supabase.auth.getSession()
-    if (!session) return renderLogin()
+    if (!session) return 
     currentUser = session.user
     const ok = await loadProfile()
     if (!ok) return
@@ -138,6 +141,7 @@ async function loadProfile() {
   }
 
   currentProfile = profile
+  // 增强判断：如果在 admin_users 表里，或者 account_type 是 admin，或者厂编以 ADMIN_ 开头，统统算管理员
   isAdmin = !!admin || profile?.account_type === 'admin' || (profile?.vendor_code || '').startsWith('ADMIN_')
   currentRole = admin?.role || (isAdmin ? 'admin' : null)
   isLogistics = profile?.account_type === 'logistics'
@@ -1549,26 +1553,72 @@ async function renderMy(view) {
 
 // ================= 质检报告 =================
 async function renderQC(view) {
-  let q = supabase.from('qc_report').select('*').order('id', { ascending: false })
-  
+  let mySelectedVendorId = null
+  let mySelectedVendorCode = null
+  let mySelectedVendorName = null
+
+  // 1. 获取物流商负责的厂商详细数据（带 ID）
   if (isLogistics) {
+    if (!myVendors.length) {
+      view.innerHTML = `<div class="card"><h2>质检报告</h2><p style="color:#cf1322;">当前物流商未配置负责厂商，请联系管理员。</p></div>`
+      return
+    }
     const codes = myVendors.map(v => v.vendor_code)
-    if (!codes.length) { view.innerHTML = `<div class="card"><h2>质检报告</h2><p style="color:#cf1322;">未配置负责厂商。</p></div>`; return }
-    q = q.in('vendor_code', codes)
+    const { data: vps } = await supabase.from('vendor_profile').select('id, vendor_code, vendor_name').in('vendor_code', codes)
+    
+    // 重新绑定 myVendors 的 ID
+    myVendors = myVendors.map(mv => {
+      const match = (vps||[]).find(v => v.vendor_code === mv.vendor_code)
+      return { ...mv, id: match?.id }
+    }).filter(v => v.id)
+
+    if (!myVendors.length) {
+      view.innerHTML = `<div class="card"><h2>质检报告</h2><p style="color:#cf1322;">厂商档案异常，请联系管理员。</p></div>`
+      return
+    }
+    mySelectedVendorId = myVendors[0].id
+    mySelectedVendorCode = myVendors[0].vendor_code
+    mySelectedVendorName = myVendors[0].vendor_name
   } else {
-    q = q.eq('vendor_id', currentUser.id)
+    mySelectedVendorId = currentUser.id
+    mySelectedVendorCode = currentProfile?.vendor_code || ''
+    mySelectedVendorName = currentProfile?.vendor_name || ''
   }
 
-  const { data: reports } = await q
+  const loadReports = async () => {
+    let q = supabase.from('qc_report').select('*').order('id', { ascending: false })
+    if (isLogistics) {
+      const codes = myVendors.map(v => v.vendor_code)
+      q = q.in('vendor_code', codes)
+    } else {
+      q = q.eq('vendor_id', currentUser.id)
+    }
+    const { data } = await q
+    return data || []
+  }
+
+  const reports = await loadReports()
 
   view.innerHTML = `
     <div class="card">
       <h2>上传质检报告</h2>
+      
+      ${isLogistics ? `
+        <div class="row" style="margin-bottom:12px;">
+          <div style="flex:1;">
+            <label>选择代传厂商 *</label>
+            <select id="qc-vendor-select">
+              ${myVendors.map(v => `<option value="${v.vendor_code}" data-id="${v.id}" data-name="${v.vendor_name}">${v.vendor_code} - ${v.vendor_name}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      ` : ''}
+
       <div id="qc-msg"></div>
       
       <p style="font-size:13px;color:#666;margin-bottom:12px;">
         规则：1. 仅限 PDF 格式；2. 支持多选；3. 单次上传总大小不能超过 <strong>10MB</strong>。<br>
-        <span style="color:#cf1322;">* 如果您今天已经传过，再次上传将自动覆盖并删除今天之前上传的所有报告。</span>
+        <span style="color:#cf1322;">* 如果所选厂商今天已经传过，再次上传将自动覆盖该厂商今天之前上传的所有报告。</span>
       </p>
       <div class="row">
         <div style="flex:1;">
@@ -1578,22 +1628,34 @@ async function renderQC(view) {
       </div>
     </div>
     <div class="card">
-      <h2>已上传的报告（${(reports||[]).length}）</h2>
+      <h2>已上传的报告（${reports.length}）</h2>
       <div class="scroll">
         <table>
-          <tr><th>上传时间</th><th>厂编</th><th>文件名</th><th>操作</th></tr>
-          ${(reports||[]).map(r => `<tr>
+          <tr><th>上传时间</th><th>厂编</th><th>归属厂商</th><th>文件名</th><th>操作</th></tr>
+          ${reports.map(r => `<tr>
             <td>${new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19)}</td>
             <td>${r.vendor_code}</td>
+            <td>${r.report_name.split('_')[1] || '-'}</td>
             <td>${r.report_name}</td>
             <td>
               <a href="${r.file_url}" target="_blank" class="small secondary" style="text-decoration:none; padding:4px 10px; border-radius:4px; margin-right:8px;">预览/下载</a>
               <button class="small danger" data-del-id="${r.id}" data-path="${r.file_path}">删除</button>
             </td>
-          </tr>`).join('') || '<tr><td colspan="4" style="text-align:center;color:#999;">暂无数据</td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">暂无数据</td></tr>'}
         </table>
       </div>
     </div>`
+
+  // 监听厂商下拉切换
+  if (isLogistics) {
+    const sel = document.getElementById('qc-vendor-select')
+    sel.onchange = () => {
+      const opt = sel.options[sel.selectedIndex]
+      mySelectedVendorCode = opt.value
+      mySelectedVendorId = opt.dataset.id
+      mySelectedVendorName = opt.dataset.name
+    }
+  }
 
   document.getElementById('btn-qc-upload').onclick = async () => {
     const msgEl = document.getElementById('qc-msg')
@@ -1602,7 +1664,6 @@ async function renderQC(view) {
 
     if (files.length === 0) return msgEl.innerHTML = msg('请选择文件', false)
 
-    // 前端校验：格式与总大小
     let totalSize = 0
     for (const file of files) {
       if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
@@ -1621,42 +1682,32 @@ async function renderQC(view) {
     msgEl.innerHTML = msg('正在处理...', true)
 
     try {
-      const myCode = isLogistics ? myVendors[0].vendor_code : currentProfile.vendor_code
-      
-      let vendorName = currentProfile?.vendor_name || '未知厂商'
-      vendorName = vendorName.replace(/[\/\\:*?"<>|]/g, '') 
+      // 获取最终确定的厂编和厂名
+      const targetCode = mySelectedVendorCode
+      const targetName = mySelectedVendorName.replace(/[\/\\:*?"<>|]/g, '')
+      const targetId = mySelectedVendorId
 
       const fileInfos = files.map((file, index) => {
         const ext = file.name.split('.').pop()
         let customName = file.name.replace(/\.[^/.]+$/, "").replace(/[\/\\:*?"<>|]/g, '')
         const timestamp = Date.now()
-        const finalFileName = `qc/${myCode}_${vendorName}_${customName}_${timestamp}_${index}.${ext}`
+        const finalFileName = `qc/${targetCode}_${targetName}_${customName}_${timestamp}_${index}.${ext}`
         return { file, fileName: finalFileName, originalName: file.name }
       })
 
-      // 1. 批量获取预签名 URL
+      // 1. 获取上传链接
       msgEl.innerHTML = msg('正在获取上传凭证...', true)
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch(`${SUPABASE_URL}/functions/v1/upload-qc`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`
-        },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({ fileNames: fileInfos.map(f => f.fileName) })
       })
       
-      if (!res.ok) {
-        let errMsg = '获取上传凭证失败'
-        try {
-          const errJson = await res.json()
-          errMsg = errJson.error || errMsg
-        } catch (e) {}
-        throw new Error(errMsg)
-      }
+      if (!res.ok) throw new Error('获取上传凭证失败')
       const { urls } = await res.json()
 
-      // 2. 并行直传 R2
+      // 2. 并行上传 R2
       msgEl.innerHTML = msg(`正在上传 ${files.length} 个文件到云存储...`, true)
       await Promise.all(fileInfos.map(async (info, i) => {
         const uploadRes = await fetch(urls[i].uploadUrl, {
@@ -1667,14 +1718,14 @@ async function renderQC(view) {
         if (!uploadRes.ok) throw new Error(`文件 [${info.originalName}] 上传失败`)
       }))
 
-      // 3. ★ 覆盖逻辑：先查今天是否已传过
-      msgEl.innerHTML = msg('正在清理今日旧报告并保存新记录...', true)
+      // 3. 覆盖逻辑（精确到目标厂商的 ID，而不是当前登录用户的 ID）
+      msgEl.innerHTML = msg('正在清理该厂商今日的旧报告...', true)
       const todayStart = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
       todayStart.setHours(0, 0, 0, 0)
       
       const { data: oldReports } = await supabase.from('qc_report')
         .select('id, file_path')
-        .eq('vendor_id', currentUser.id)
+        .eq('vendor_id', targetId)  // ★ 核心修复：只覆盖所选厂商的旧数据
         .gte('created_at', todayStart.toISOString())
 
       if (oldReports && oldReports.length > 0) {
@@ -1690,16 +1741,14 @@ async function renderQC(view) {
         await supabase.from('qc_report').delete().in('id', oldReports.map(r => r.id))
       }
 
-      // 4. 批量写入新记录 (★ 核心修复：直接存规范名字)
+      // 4. 写入新记录
       const dbRows = fileInfos.map((info, i) => {
-        // 在这里直接拼接最终展示的文件名（厂编_厂名_自定义名）
         const safeOriginalName = info.originalName.replace(/[\/\\:*?"<>|]/g, '')
-        const finalDisplayName = `${myCode}_${vendorName}_${safeOriginalName}`
-        
+        const finalDisplayName = `${targetCode}_${targetName}_${safeOriginalName}`
         return {
-          vendor_id: currentUser.id,
-          vendor_code: myCode,
-          report_name: finalDisplayName, // 存为规范的展示名
+          vendor_id: targetId, // ★ 核心修复：归属到所选厂商 ID
+          vendor_code: targetCode,
+          report_name: finalDisplayName,
           file_path: info.fileName,
           file_url: urls[i].fileUrl,
           file_size: info.file.size
@@ -1733,23 +1782,11 @@ async function renderQC(view) {
         const { data: { session } } = await supabase.auth.getSession()
         const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-qc`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`
-          },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ filePath: path })
         })
         
-        if (!res.ok) {
-          let errText = 'R2 文件删除失败'
-          try {
-            const errJson = await res.json()
-            errText = errJson.error || JSON.stringify(errJson)
-          } catch (e) {
-            errText = await res.text() || `HTTP ${res.status}`
-          }
-          throw new Error(errText)
-        }
+        if (!res.ok) throw new Error('R2 文件删除失败')
 
         const { error } = await supabase.from('qc_report').delete().eq('id', id)
         if (error) throw error
