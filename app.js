@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-27 终极完整版：物流商代传隔离、质检覆盖与10MB限制、动态时间）
+// app.js — 主逻辑（2026-10-29 终极完整版：修复iOS日期可改、物流商代传隔离、质检命名规范）
 
 import { supabase } from './supabase.js'
 
@@ -1146,7 +1146,7 @@ async function renderFill(view) {
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:110px;margin:0;padding:4px;" placeholder="输入或选择" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:80px;margin:0;padding:4px;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:60px;margin:0;padding:4px;" /></td>
-      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" ${isAdminDelegate ? '' : 'readonly'} style="width:110px;margin:0;padding:4px;${isAdminDelegate ? '' : 'background:#f5f5f5;'}" /></td>
+      <td><input type="date" data-i="${i}" data-f="arrival_date" value="${r.arrival_date}" ${isAdminDelegate ? '' : 'readonly'} style="width:110px;margin:0;padding:4px;${isAdminDelegate ? '' : 'background:#f5f5f5; pointer-events: none;'}" /></td>
       <td><button class="small danger" data-del-in="${i}" style="padding:4px 8px;">删除</button></td>
     </tr>`
     }).join('')
@@ -1222,7 +1222,7 @@ async function renderFill(view) {
           ${(locs||[]).map(l => `<option value="${l.location_code}" ${r.location_code===l.location_code?'selected':''}>${l.location_code}</option>`).join('')}
         </select>
       </td>
-      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" ${isAdminDelegate ? '' : 'readonly'} style="width:110px;margin:0;padding:4px;${isAdminDelegate ? '' : 'background:#f5f5f5;'}" /></td>
+      <td><input type="date" data-i="${i}" data-f="pick_date" value="${r.pick_date}" ${isAdminDelegate ? '' : 'readonly'} style="width:110px;margin:0;padding:4px;${isAdminDelegate ? '' : 'background:#f5f5f5; pointer-events: none;'}" /></td>
       <td><input list="product-list" data-i="${i}" data-f="product_code" value="${r.product_code}" style="width:110px;margin:0;padding:4px;" placeholder="输入或选择" /></td>
       <td><input data-i="${i}" data-f="spec" value="${r.spec}" style="width:80px;margin:0;padding:4px;" /></td>
       <td><input type="number" data-i="${i}" data-f="quantity" value="${r.quantity}" style="width:60px;margin:0;padding:4px;" /></td>
