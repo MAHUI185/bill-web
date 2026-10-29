@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-10-29 终极完整版：修复iOS日期可改、物流商代传隔离、质检命名规范）
+// app.js — 主逻辑（2026-10-29 终极完整版：济转西货主修正、iOS防篡改、质检隔离命名）
 
 import { supabase } from './supabase.js'
 
@@ -473,26 +473,32 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
-// ★ 修正：济转西RT 货主=厂编，DSP 货主=8888
+// ★ 出库单：货主及门店代码的自动计算规则
 function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
   }
+  
   if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
   }
+  
+  // ★ 济转西 RT 系列（无论留库还是越库）：货主一律为厂编，门店固定 8205RT
   if (billType === '济转西RT(留库)') {
     return { owner_code: supplierInput, store_code: '8205RT' }
   }
   if (billType === '济转西RT(越库)') {
     return { owner_code: supplierInput, store_code: '8205RT' }
   }
+  
+  // ★ 济转西 DSP 系列（无论留库还是越库）：货主一律为 8888，门店固定 8205DSP
   if (billType === '济转西DSP(留库)') {
     return { owner_code: '8888', store_code: '8205DSP' }
   }
   if (billType === '济转西DSP(越库)') {
     return { owner_code: '8888', store_code: '8205DSP' }
   }
+  
   return { owner_code: '', store_code: '' }
 }
 
