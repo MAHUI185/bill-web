@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-10-25 终极版：含代报导出、多群钉钉推送配置、动态推送时间）
+// admin.js — 管理后台（含单据分页查询、真实操作人记录）
 
 let ctx = null
 let operatorName = '未知'
@@ -301,11 +301,16 @@ async function renderBills(v) {
         <button id="btn-stat" class="secondary" style="flex:0 0 auto; background:#e6f4ff; border-color:#91caff; color:#1677ff;">统计箱数</button>
       </div>
 
-      <div class="scroll" id="query-result-box" style="max-height: calc(100vh - 360px); overflow: auto;">
+      <div class="scroll" id="query-result-box" style="max-height: calc(100vh - 400px); overflow: auto;">
         <table>
           <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           <tbody id="b-body"></tbody>
         </table>
+      </div>
+      
+      <!-- ★ 新增：分页栏 -->
+      <div id="bill-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;">
+        <!-- 动态生成 -->
       </div>
     </div>
     <div id="admin-edit-bill-panel"></div>`
@@ -332,7 +337,7 @@ async function renderBills(v) {
         warehouse_code, start_date, end_date,
         include_exported: document.getElementById('exp-include')?.checked || false,
         submitter_type: submitterType,
-        operator_name: ctx.operatorName || 'admin' // ★ 修改位置：新增 operator_name，把当前登录人的名字传给云函数
+        operator_name: ctx.operatorName || 'admin' // ★ 传入操作人
       })
     })
     
@@ -359,24 +364,54 @@ async function renderBills(v) {
   document.getElementById('btn-export').onclick = () => doExport(null, false)
   document.getElementById('btn-export-admin').onclick = () => doExport('admin', true)
 
-  const search = async () => {
+  // ★ 分页状态变量
+  let currentPage = 0;
+  const pageSize = 50; // 每页显示 50 条
+
+  const search = async (page = 0) => {
+    currentPage = page;
     document.getElementById('query-result-box').innerHTML = `
       <table>
         <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
-        <tbody id="b-body"></tbody>
+        <tbody id="b-body"><tr><td colspan="11" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
       </table>`
     
-    let q = ctx.supabase.from('bill_order').select('*').order('id', { ascending: false }).limit(200)
+    // 获取筛选条件
     const kw = document.getElementById('b-search').value.trim()
     const wh = document.getElementById('b-wh').value
     const ex = document.getElementById('b-exported').value
 
+    // 1. 先查询总数 (使用 count: 'exact')
+    let countQuery = ctx.supabase.from('bill_order').select('*', { count: 'exact', head: true })
+    if (kw) countQuery = countQuery.or(`vendor_code.ilike.%${kw}%,source_no.ilike.%${kw}%,product_code.ilike.%${kw}%`)
+    if (wh) countQuery = countQuery.eq('warehouse_code', wh)
+    if (ex === '0') countQuery = countQuery.eq('exported', false)
+    if (ex === '1') countQuery = countQuery.eq('exported', true)
+    
+    const { count, error: countErr } = await countQuery
+    if (countErr) {
+      alert('查询总数失败：' + countErr.message)
+      return
+    }
+
+    // 2. 查询当前页数据 (使用 range 实现分页)
+    let q = ctx.supabase.from('bill_order').select('*')
     if (kw) q = q.or(`vendor_code.ilike.%${kw}%,source_no.ilike.%${kw}%,product_code.ilike.%${kw}%`)
     if (wh) q = q.eq('warehouse_code', wh)
     if (ex === '0') q = q.eq('exported', false)
     if (ex === '1') q = q.eq('exported', true)
     
-    const { data } = await q
+    const from = currentPage * pageSize
+    const to = from + pageSize - 1
+    q = q.order('id', { ascending: false }).range(from, to)
+    
+    const { data, error } = await q
+    if (error) {
+       alert('查询失败：' + error.message)
+       return
+    }
+
+    // 3. 渲染表格
     document.getElementById('b-body').innerHTML = (data||[]).map(b => `<tr>
       <td>${b.id}</td><td>${b.source_no||''}</td><td>${b.bill_type||''}</td>
       <td>${b.vendor_code||''}</td><td>${vMap[b.vendor_code] || ''}</td>
@@ -388,8 +423,22 @@ async function renderBills(v) {
         <button class="small secondary" data-act="edit-bill" data-id="${b.id}">修改</button>
         <button class="small danger" data-act="del-bill" data-id="${b.id}">删除</button>
       </td>
-    </tr>`).join('') || '<tr><td colspan="11">无数据</td></tr>'
+    </tr>`).join('') || '<tr><td colspan="11" style="text-align:center;color:#999;">无匹配数据</td></tr>'
 
+    // 4. 渲染分页控件
+    const totalPages = Math.ceil((count || 0) / pageSize)
+    const paginationEl = document.getElementById('bill-pagination')
+    if (paginationEl) {
+      paginationEl.innerHTML = `
+        <span style="font-size:13px;color:#666;">共 ${count || 0} 条记录，第 ${totalPages === 0 ? 0 : currentPage + 1} / ${totalPages} 页</span>
+        <button class="secondary small" id="btn-prev" ${currentPage === 0 ? 'disabled' : ''} style="${currentPage === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+        <button class="secondary small" id="btn-next" ${currentPage >= totalPages - 1 ? 'disabled' : ''} style="${currentPage >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+      `
+      document.getElementById('btn-prev').onclick = () => { if (currentPage > 0) search(currentPage - 1) }
+      document.getElementById('btn-next').onclick = () => { if (currentPage < totalPages - 1) search(currentPage + 1) }
+    }
+
+    // 重新绑定修改和删除的事件
     document.querySelectorAll('#b-body button[data-act]').forEach(btn => {
       btn.onclick = () => {
         const id = Number(btn.dataset.id)
@@ -451,9 +500,8 @@ async function renderBills(v) {
             }
 
             await logOp('update_bill', '修改单据 ' + id)
-
             panel.innerHTML = ''
-            await search()
+            await search(currentPage) // 修改后留在当前页刷新
           }
         }
 
@@ -482,7 +530,7 @@ async function renderBills(v) {
               }
               await logOp('delete_bill', '删除单据 ' + id)
               alert('已成功删除')
-              await search()
+              await search(currentPage) // 删除后留在当前页刷新
             } catch (err) {
               alert('网络异常：' + err.message)
               btn.disabled = false
@@ -493,7 +541,9 @@ async function renderBills(v) {
       }
     })
   }
-  document.getElementById('btn-b-search').onclick = search
+  
+  // 点击查询明细时，重置回第一页
+  document.getElementById('btn-b-search').onclick = () => search(0)
   
   document.getElementById('btn-stat').onclick = async () => {
     const start = document.getElementById('stat-start').value
@@ -550,7 +600,7 @@ async function renderBills(v) {
     `
   }
 
-  search()
+  search(0)
 }
 
 // ================= 2.5 质检报告管理 =================
