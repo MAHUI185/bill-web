@@ -331,7 +331,8 @@ async function renderBills(v) {
       body: JSON.stringify({
         warehouse_code, start_date, end_date,
         include_exported: document.getElementById('exp-include')?.checked || false,
-        submitter_type: submitterType 
+        submitter_type: submitterType,
+        operator_name: ctx.operatorName || 'admin' // ★ 修改位置：新增 operator_name，把当前登录人的名字传给云函数
       })
     })
     
