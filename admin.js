@@ -2811,7 +2811,7 @@ async function renderBilling(v) {
     }
   }
 
-  // ===== 生成对账单 =====
+    // ===== 生成对账单 =====
   document.getElementById('btn-gen-billing').onclick = async () => {
     const month = document.getElementById('bl-month').value.trim()
     const wh = document.getElementById('bl-wh').value
@@ -2830,11 +2830,37 @@ async function renderBilling(v) {
     try {
       const srcName = `source/${crypto.randomUUID()}.xlsx`
       const tmplName = `template/${crypto.randomUUID()}.xlsx`
-      const { error: e1 } = await ctx.supabase.storage.from('billing_files').upload(srcName, srcFile)
-      if (e1) throw e1
-      const { error: e2 } = await ctx.supabase.storage.from('billing_files').upload(tmplName, tmplFile)
-      if (e2) throw e2
+      
+      const { data: { session } } = await ctx.supabase.auth.getSession()
+      
+      // 1. 获取 R2 预签名上传链接
+      msgEl.innerHTML = ctx.msg('获取 R2 上传凭证...', true)
+      const uploadRes = await fetch(`${ctx.SUPABASE_URL}/functions/v1/upload-billing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({ fileNames: [srcName, tmplName] })
+      })
+      if (!uploadRes.ok) throw new Error('获取 R2 上传凭证失败')
+      const { urls } = await uploadRes.json()
 
+      // 2. 前端直接 PUT 上传到 Cloudflare R2
+      msgEl.innerHTML = ctx.msg('正在上传文件到 R2...', true)
+      const [r1, r2] = await Promise.all([
+        fetch(urls[0].uploadUrl, { 
+          method: 'PUT', 
+          body: srcFile,
+          headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+        }),
+        fetch(urls[1].uploadUrl, { 
+          method: 'PUT', 
+          body: tmplFile,
+          headers: { 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+        })
+      ])
+      if (!r1.ok || !r2.ok) throw new Error('上传到 R2 失败，请检查 R2 的 CORS 跨域策略是否配置正确')
+
+      // 3. 写入数据库
+      msgEl.innerHTML = ctx.msg('创建处理批次...', true)
       const { data: batch, error: e3 } = await ctx.supabase.from('billing_batch').insert({
         month, warehouse_code: wh, source_file_url: srcName, template_file_url: tmplName,
         operator_name: ctx.operatorName, status: 'PENDING'
@@ -2847,9 +2873,9 @@ async function renderBilling(v) {
       let offset = 0
       let totalSuccess = 0, totalFailed = 0, total = 0
 
+      // 4. 循环调用云函数生成
       while (true) {
         msgEl.innerHTML = ctx.msg(`生成中... 已处理 ${offset} 个`, true)
-        const { data: { session } } = await ctx.supabase.auth.getSession()
         const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/generate-billing`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
