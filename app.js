@@ -340,7 +340,6 @@ function renderForceChangePwd() {
     }, 800)
   }
 }
-
 function renderMain() {
   const roleTag = isAdmin ? '（管理员）' : isLogistics ? '（物流商）' : ''
   app.innerHTML = `
@@ -552,6 +551,7 @@ function calcCountdown(range) {
   if (nowSec < endSec) return { text: `距截止还有 ${fmt(endSec - nowSec)}`, bg: 'linear-gradient(135deg,#f6ffed 0%,#e6f4ff 100%)', border: '#b7eb8f', color: '#389e0d' }
   return { text: '今日预约已截止', bg: 'linear-gradient(135deg,#fff2f0 0%,#ffccc7 100%)', border: '#ffa39e', color: '#cf1322' }
 }
+
 // ================= 填报 =================
 async function renderFill(view) {
   let selectedVendor = null
@@ -830,7 +830,6 @@ async function renderFill(view) {
 
     const btnAddOut = document.getElementById('btn-add-out')
     if (btnAddOut) btnAddOut.onclick = () => { outRows.push(newOutRowForVendor(myVendorCode)); renderOutTable(); renderPreview() }
-
     // ★ 入库解析（含纯数字校验）
     document.getElementById('btn-parse-in').onclick = () => {
       const txt = document.getElementById('in-paste-area').value.trim()
@@ -1412,7 +1411,7 @@ async function renderProducts(view) {
         <h2>新增商品</h2>
         <div id="prod-msg"></div>
         <div class="row">
-          <div><label>商品编码 * (纯数字)</label><input id="pd-code" /></div>
+          <div><label>货号 *</label><input id="pd-code" /></div>
           <div><label>品名 *</label><input id="pd-name" /></div>
           <div><label>规格 * (1*1*X)</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
         </div>
@@ -1429,7 +1428,7 @@ async function renderProducts(view) {
         <h2>商品列表（${mergedList.length}）</h2>
         <div class="scroll">
           <table>
-            <tr><th>商品编码</th><th>品名</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
+            <tr><th>货号</th><th>品名</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
             <tbody>
               ${mergedList.map(r => {
                 const invalid = isProductInvalid(r)
@@ -1470,8 +1469,8 @@ async function renderProducts(view) {
       const height = document.getElementById('pd-height').value.trim()
       const weight = document.getElementById('pd-weight').value.trim()
 
-      if (!code || !name) return msgEl.innerHTML = msg('商品编码、品名为必填', false)
-      if (!/^\d+$/.test(code)) return msgEl.innerHTML = msg('商品编码（货号）必须是纯数字，不能包含字母或空格', false)
+      if (!code || !name) return msgEl.innerHTML = msg('货号、品名为必填', false)
+      if (!/^\d+$/.test(code)) return msgEl.innerHTML = msg('货号必须是纯数字，不能包含字母或空格', false)
       if (!spec) return msgEl.innerHTML = msg('包装规格为必填', false)
       if (!isValidSpec(spec)) return msgEl.innerHTML = msg('包装规格格式错误，必须是 1*1*X', false)
       if (!length || !width || !height || !weight) return msgEl.innerHTML = msg(SIZE_EMPTY_MSG, false)
@@ -1480,7 +1479,7 @@ async function renderProducts(view) {
 
       for (const wh of myWhs) {
         const { data: exist } = await supabase.from('product_master').select('id').eq('warehouse_code', wh).eq('default_vendor_code', selectedVendorCode).eq('product_code', code).maybeSingle()
-        if (exist) return msgEl.innerHTML = msg(`商品编码 ${code} 在仓库 ${wh} 下已存在`, false)
+        if (exist) return msgEl.innerHTML = msg(`货号 ${code} 在仓库 ${wh} 下已存在`, false)
       }
 
       const rows = myWhs.map(wh => ({
@@ -1611,6 +1610,7 @@ async function renderMy(view) {
     }
   })
 }
+
 // ================= 质检报告 =================
 async function renderQC(view) {
   let mySelectedVendorId = null

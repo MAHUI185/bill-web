@@ -285,7 +285,7 @@ async function renderBills(v) {
     <!-- 底部：单据查询 -->
     <div class="card" style="box-shadow:none; padding:16px; margin:0;" id="bill-query-card">
       <h2 style="margin-bottom:12px; font-size:16px;">单据查询</h2>
-
+      
       <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center;">
         <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" style="flex:2; margin:0;" />
         <select id="b-wh" style="flex:1; margin:0;">
@@ -305,11 +305,11 @@ async function renderBills(v) {
         <input id="stat-start" type="date" style="width:130px; margin:0; padding:4px 8px;" />
         <span style="font-size:13px; color:#666; margin:0 8px;">至</span>
         <input id="stat-end" type="date" style="width:130px; margin:0; padding:4px 8px;" />
-
+        
         <div id="stat-result-display" style="flex:1; display:flex; align-items:center; padding-left:16px; margin-left:16px; border-left:1px solid #ddd; min-height:24px;">
           <span style="color:#999; font-size:13px;">未统计</span>
         </div>
-
+        
         <button id="btn-stat" class="secondary" style="flex:0 0 auto; background:#e6f4ff; border-color:#91caff; color:#1677ff;">统计箱数</button>
       </div>
 
@@ -319,7 +319,7 @@ async function renderBills(v) {
           <tbody id="b-body"></tbody>
         </table>
       </div>
-
+      
       <!-- 分页栏 -->
       <div id="bill-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;">
         <!-- 动态生成 -->
@@ -332,7 +332,7 @@ async function renderBills(v) {
     const start_date = document.getElementById('exp-start').value
     const end_date = document.getElementById('exp-end').value
     if (!start_date || !end_date) return alert('请选择完整的开始和结束日期')
-
+    
     const btn = isDelegate ? document.getElementById('btn-export-admin') : document.getElementById('btn-export')
     const originalText = btn.innerText
     btn.disabled = true
@@ -352,7 +352,7 @@ async function renderBills(v) {
         operator_name: ctx.operatorName || 'admin'
       })
     })
-
+    
     btn.disabled = false
     btn.innerText = originalText
 
@@ -387,7 +387,7 @@ async function renderBills(v) {
         <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
         <tbody id="b-body"><tr><td colspan="11" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
       </table>`
-
+    
     const kw = document.getElementById('b-search').value.trim()
     const wh = document.getElementById('b-wh').value
     const ex = document.getElementById('b-exported').value
@@ -397,7 +397,7 @@ async function renderBills(v) {
     if (wh) countQuery = countQuery.eq('warehouse_code', wh)
     if (ex === '0') countQuery = countQuery.eq('exported', false)
     if (ex === '1') countQuery = countQuery.eq('exported', true)
-
+    
     const { count, error: countErr } = await countQuery
     if (countErr) {
       alert('查询总数失败：' + countErr.message)
@@ -409,11 +409,11 @@ async function renderBills(v) {
     if (wh) q = q.eq('warehouse_code', wh)
     if (ex === '0') q = q.eq('exported', false)
     if (ex === '1') q = q.eq('exported', true)
-
+    
     const from = currentPage * pageSize
     const to = from + pageSize - 1
     q = q.order('id', { ascending: false }).range(from, to)
-
+    
     const { data, error } = await q
     if (error) {
        alert('查询失败：' + error.message)
@@ -547,9 +547,9 @@ async function renderBills(v) {
       }
     })
   }
-
+  
   document.getElementById('btn-b-search').onclick = () => search(0)
-
+  
   document.getElementById('btn-stat').onclick = async () => {
     const start = document.getElementById('stat-start').value
     const end = document.getElementById('stat-end').value
@@ -1910,7 +1910,7 @@ async function renderProduct(v) {
       <h2>手动新增商品</h2>
       <div class="row">
         <select id="pm-wh">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-        <input id="pm-code" placeholder="商品代码(纯数字) *" />
+        <input id="pm-code" placeholder="货号 *" />
         <input id="pm-vendor" placeholder="厂编 *" />
       </div>
       <div class="row">
@@ -1926,7 +1926,7 @@ async function renderProduct(v) {
       <button id="btn-pm-add">新增商品</button>
       <div id="pm-msg"></div>
     </div>
-
+    
     <div class="card" style="box-shadow:none;padding:0;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <div style="display:flex; align-items:center; gap:16px;">
@@ -1936,13 +1936,13 @@ async function renderProduct(v) {
           </label>
         </div>
         <div style="display:flex; gap:8px;">
-          <input id="prod-search" placeholder="搜索商品代码/品名/厂编" style="width:240px; margin:0;" />
+          <input id="prod-search" placeholder="搜索货号/品名/厂编" style="width:240px; margin:0;" />
           <button class="secondary" id="btn-prod-search">查询</button>
         </div>
       </div>
       <div class="scroll" style="max-height: calc(100vh - 500px);">
         <table>
-          <tr><th>仓库</th><th>商品代码</th><th>商品名称</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>默认厂编</th><th>操作</th></tr>
+          <tr><th>仓库</th><th>货号</th><th>商品名称</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>默认厂编</th><th>操作</th></tr>
           <tbody id="prod-body">
             <tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>
           </tbody>
@@ -1959,7 +1959,7 @@ async function renderProduct(v) {
   const loadProducts = async (page = 0) => {
     currentPage = page
     document.getElementById('prod-body').innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>'
-
+    
     let q = ctx.supabase.from('product_master').select('*', { count: 'exact' })
     if (keyword) {
       q = q.or(`product_code.ilike.%${keyword}%,product_name.ilike.%${keyword}%,default_vendor_code.ilike.%${keyword}%`)
@@ -2007,7 +2007,7 @@ async function renderProduct(v) {
     `
     document.getElementById('btn-page-prev').onclick = () => { if (page > 0) loadProducts(page - 1) }
     document.getElementById('btn-page-next').onclick = () => { if (page < totalPages - 1) loadProducts(page + 1) }
-
+    
     v.querySelectorAll('[data-del]').forEach(b => {
       b.onclick = async () => {
         if (!confirm('确定删除？')) return
@@ -2023,7 +2023,7 @@ async function renderProduct(v) {
     onlyInvalid = e.target.checked
     loadProducts(0)
   }
-
+  
   document.getElementById('btn-prod-search').onclick = () => {
     keyword = document.getElementById('prod-search').value.trim()
     loadProducts(0)
@@ -2042,10 +2042,10 @@ async function renderProduct(v) {
     const weight = document.getElementById('pm-weight').value.trim()
 
     if (!code || !vendor || !name) {
-      msgEl.innerHTML = ctx.msg('商品代码、厂编、品名为必填', false); return
+      msgEl.innerHTML = ctx.msg('货号、厂编、品名为必填', false); return
     }
     if (!/^\d+$/.test(code)) {
-      msgEl.innerHTML = ctx.msg('商品编码（货号）必须是纯数字，不能包含字母或空格', false); return
+      msgEl.innerHTML = ctx.msg('货号必须是纯数字，不能包含字母或空格', false); return
     }
     if (!spec) {
       msgEl.innerHTML = ctx.msg('包装规格为必填', false); return
@@ -2065,7 +2065,7 @@ async function renderProduct(v) {
       .select('id').eq('warehouse_code', wh).eq('product_code', code).eq('default_vendor_code', vendor).maybeSingle()
 
     if (exist) {
-      msgEl.innerHTML = ctx.msg(`同仓库「${wh}」同厂编「${vendor}」下商品代码「${code}」已存在`, false)
+      msgEl.innerHTML = ctx.msg(`同仓库「${wh}」同厂编「${vendor}」下货号「${code}」已存在`, false)
       return
     }
 
@@ -2080,7 +2080,7 @@ async function renderProduct(v) {
     }
     await logOp('create_product', '商品 ' + code, { warehouse_code: wh, vendor })
     msgEl.innerHTML = ctx.msg('新增成功', true)
-
+    
     document.getElementById('pm-code').value = ''
     document.getElementById('pm-name').value = ''
     document.getElementById('pm-spec').value = ''
@@ -2088,7 +2088,7 @@ async function renderProduct(v) {
     document.getElementById('pm-width').value = ''
     document.getElementById('pm-height').value = ''
     document.getElementById('pm-weight').value = ''
-
+    
     loadProducts(0)
   }
 
@@ -2099,12 +2099,12 @@ async function renderProduct(v) {
     const wb = XLSX.read(buf)
     const ws = wb.Sheets[wb.SheetNames[0]]
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
-
+    
     let hasInvalidCode = false
     let invalidCodeMsg = ''
 
     const products = rows.map((r, i) => {
-      const codeStr = String(r['商品代码'] || r['product_code'] || '').trim()
+      const codeStr = String(r['货号'] || r['商品代码'] || r['product_code'] || '').trim()
       if (codeStr && !/^\d+$/.test(codeStr)) {
         hasInvalidCode = true
         invalidCodeMsg = `第 ${i+2} 行的货号 [${codeStr}] 不是纯数字`
@@ -2297,7 +2297,7 @@ async function renderLogs(v) {
     .select('*').order('id', { ascending: false }).limit(200)
   const { data: edits } = await ctx.supabase.from('vendor_edit_log')
     .select('*').order('id', { ascending: false }).limit(200)
-
+  
   const { data: batches } = await ctx.supabase.from('export_batch_detail')
     .select('*').order('id', { ascending: false }).limit(200)
 
@@ -2460,7 +2460,7 @@ async function renderSys(v) {
   ;(cfgs||[]).forEach(x => cfgMap[x.config_key] = x.config_value)
   const cleanupDays = cfgMap.cleanup_days || '7'
   const cleanupTime = cfgMap.cleanup_time || '03:00'
-
+  
   const isMaintenance = cfgMap.maintenance_mode === 'true'
 
   v.innerHTML = `
@@ -2516,7 +2516,7 @@ async function renderSys(v) {
       <button id="btn-save-cleanup" ${isSuper() ? '' : 'disabled'}>保存（立即生效）</button>
       <div id="cleanup-msg"></div>
     </div>
-
+    
     <!-- 钉钉质检报告推送配置 -->
     <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #1677ff;">
       <h2>钉钉质检报告推送（仅超管）</h2>
@@ -2573,12 +2573,12 @@ async function renderSys(v) {
 
     const { error } = await ctx.supabase.from('system_config')
       .upsert({ config_key: 'maintenance_mode', config_value: newStatus, updated_by: ctx.operatorName }, { onConflict: 'config_key' })
-
+    
     if (error) {
       msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
       return
     }
-
+    
     await logOp('save_system_config', `维护模式-${action}`, { value: newStatus })
     renderTab('sys')
   }
@@ -2624,7 +2624,7 @@ async function renderSys(v) {
     const webhook = document.getElementById('dingtalk-webhook').value.trim()
     const secret = document.getElementById('dingtalk-secret').value.trim()
     const msgEl = document.getElementById('dingtalk-msg')
-
+    
     msgEl.innerHTML = ctx.msg('保存中...', true)
 
     const upsert = async (key, val) => {
@@ -2632,10 +2632,10 @@ async function renderSys(v) {
     }
     await upsert('dingtalk_qc_webhook', webhook)
     await upsert('dingtalk_qc_secret', secret)
-
+    
     const pushTime = document.getElementById('dingtalk-push-time').value || '08:00'
     await upsert('dingtalk_qc_push_time', pushTime)
-
+    
     const hh = parseInt(pushTime.split(':')[0], 10)
     const mm = parseInt(pushTime.split(':')[1], 10)
     const utcH = (hh - 8 + 24) % 24
@@ -2651,7 +2651,7 @@ async function renderSys(v) {
     if (!isSuper()) return
     const btn = document.getElementById('btn-test-dingtalk')
     const msgEl = document.getElementById('dingtalk-msg')
-
+    
     btn.disabled = true
     btn.innerText = '发送中...'
     msgEl.innerHTML = ctx.msg('正在请求云函数发送测试消息...', true)
@@ -2662,7 +2662,7 @@ async function renderSys(v) {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session.access_token}` }
       })
-
+      
       const json = await res.json()
       if (res.ok) {
         msgEl.innerHTML = ctx.msg('测试消息已发送！请去群里查看', true)
@@ -2672,7 +2672,7 @@ async function renderSys(v) {
     } catch (e) {
       msgEl.innerHTML = ctx.msg('网络错误：' + e.message, false)
     }
-
+    
     btn.disabled = false
     btn.innerText = '发送测试消息'
   }
