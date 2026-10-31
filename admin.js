@@ -174,15 +174,15 @@ const ACTION_CN = {
 // ================= 1. 提报进度 =================
 async function renderProgress(v) {
   const { data } = await ctx.supabase.from('vendor_report_status').select('*')
-  
+
   const nowBj = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
   const todayStr = nowBj.toISOString().slice(0, 10)
   const startOfToday = new Date(todayStr + 'T00:00:00+08:00').toISOString()
-  
+
   const { data: qcs } = await ctx.supabase.from('qc_report')
     .select('vendor_code')
     .gte('created_at', startOfToday)
-  
+
   const qcSet = new Set((qcs || []).map(q => q.vendor_code))
 
   v.innerHTML = `
@@ -206,22 +206,22 @@ async function renderProgress(v) {
         <tbody id="p-body"></tbody>
       </table>
     </div>`
-    
+
   const render = () => {
     const kw = (document.getElementById('p-search').value || '').toLowerCase()
     const st = document.getElementById('p-status').value
     let list = data || []
-    
+
     if (kw) list = list.filter(r =>
       (r.vendor_code || '').toLowerCase().includes(kw) ||
       (r.vendor_name || '').toLowerCase().includes(kw))
-      
+
     if (st === 'reported') list = list.filter(r => r.reported_today)
     if (st === 'not') list = list.filter(r => !r.reported_today)
     if (st === 'nologin') list = list.filter(r => !r.logged_in_today)
     if (st === 'qc_uploaded') list = list.filter(r => qcSet.has(r.vendor_code))
     if (st === 'qc_missing') list = list.filter(r => !qcSet.has(r.vendor_code))
-    
+
     document.getElementById('p-body').innerHTML = list.map(r => {
       const hasQc = qcSet.has(r.vendor_code)
       return `<tr>
@@ -239,8 +239,8 @@ async function renderProgress(v) {
         }</td>
         <td>${r.reported_today ? '<span class="stat ok">已提报</span>' : '<span class="stat no">未提报</span>'}</td>
         <td>${r.today_count || 0}</td>
-        <td>${hasQc 
-          ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;border:1px solid #91caff;">✅ 已传</span>' 
+        <td>${hasQc
+          ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;border:1px solid #91caff;">✅ 已传</span>'
           : '<span class="stat no" style="background:#f5f5f5;color:#999;border:1px solid #ddd;">❌ 未传</span>'
         }</td>
         <td>${r.last_report_at ? new Date(r.last_report_at).toLocaleString() : '-'}</td>
@@ -248,12 +248,11 @@ async function renderProgress(v) {
       </tr>`
     }).join('') || '<tr><td colspan="11" style="text-align:center;color:#999;">无数据</td></tr>'
   }
-  
+
   document.getElementById('p-search').oninput = render
   document.getElementById('p-status').onchange = render
   render()
 }
-
 // ================= 2. 单据管理 =================
 async function renderBills(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
@@ -286,7 +285,7 @@ async function renderBills(v) {
     <!-- 底部：单据查询 -->
     <div class="card" style="box-shadow:none; padding:16px; margin:0;" id="bill-query-card">
       <h2 style="margin-bottom:12px; font-size:16px;">单据查询</h2>
-      
+
       <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center;">
         <input id="b-search" placeholder="输入厂商名称/厂编/单号查询" style="flex:2; margin:0;" />
         <select id="b-wh" style="flex:1; margin:0;">
@@ -306,11 +305,11 @@ async function renderBills(v) {
         <input id="stat-start" type="date" style="width:130px; margin:0; padding:4px 8px;" />
         <span style="font-size:13px; color:#666; margin:0 8px;">至</span>
         <input id="stat-end" type="date" style="width:130px; margin:0; padding:4px 8px;" />
-        
+
         <div id="stat-result-display" style="flex:1; display:flex; align-items:center; padding-left:16px; margin-left:16px; border-left:1px solid #ddd; min-height:24px;">
           <span style="color:#999; font-size:13px;">未统计</span>
         </div>
-        
+
         <button id="btn-stat" class="secondary" style="flex:0 0 auto; background:#e6f4ff; border-color:#91caff; color:#1677ff;">统计箱数</button>
       </div>
 
@@ -320,7 +319,7 @@ async function renderBills(v) {
           <tbody id="b-body"></tbody>
         </table>
       </div>
-      
+
       <!-- 分页栏 -->
       <div id="bill-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;">
         <!-- 动态生成 -->
@@ -333,7 +332,7 @@ async function renderBills(v) {
     const start_date = document.getElementById('exp-start').value
     const end_date = document.getElementById('exp-end').value
     if (!start_date || !end_date) return alert('请选择完整的开始和结束日期')
-    
+
     const btn = isDelegate ? document.getElementById('btn-export-admin') : document.getElementById('btn-export')
     const originalText = btn.innerText
     btn.disabled = true
@@ -353,7 +352,7 @@ async function renderBills(v) {
         operator_name: ctx.operatorName || 'admin'
       })
     })
-    
+
     btn.disabled = false
     btn.innerText = originalText
 
@@ -388,7 +387,7 @@ async function renderBills(v) {
         <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
         <tbody id="b-body"><tr><td colspan="11" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
       </table>`
-    
+
     const kw = document.getElementById('b-search').value.trim()
     const wh = document.getElementById('b-wh').value
     const ex = document.getElementById('b-exported').value
@@ -398,7 +397,7 @@ async function renderBills(v) {
     if (wh) countQuery = countQuery.eq('warehouse_code', wh)
     if (ex === '0') countQuery = countQuery.eq('exported', false)
     if (ex === '1') countQuery = countQuery.eq('exported', true)
-    
+
     const { count, error: countErr } = await countQuery
     if (countErr) {
       alert('查询总数失败：' + countErr.message)
@@ -410,11 +409,11 @@ async function renderBills(v) {
     if (wh) q = q.eq('warehouse_code', wh)
     if (ex === '0') q = q.eq('exported', false)
     if (ex === '1') q = q.eq('exported', true)
-    
+
     const from = currentPage * pageSize
     const to = from + pageSize - 1
     q = q.order('id', { ascending: false }).range(from, to)
-    
+
     const { data, error } = await q
     if (error) {
        alert('查询失败：' + error.message)
@@ -548,9 +547,9 @@ async function renderBills(v) {
       }
     })
   }
-  
+
   document.getElementById('btn-b-search').onclick = () => search(0)
-  
+
   document.getElementById('btn-stat').onclick = async () => {
     const start = document.getElementById('stat-start').value
     const end = document.getElementById('stat-end').value
@@ -608,7 +607,6 @@ async function renderBills(v) {
 
   search(0)
 }
-
 // ================= 2.5 质检报告管理 =================
 async function renderQCAdmin(v) {
   const { data: reports } = await ctx.supabase.from('qc_report')
@@ -703,7 +701,7 @@ async function renderQCAdmin(v) {
             },
             body: JSON.stringify({ filePath: path })
           })
-          
+
           if (!res.ok) {
             let errText = 'R2 文件删除失败'
             try {
@@ -1179,7 +1177,6 @@ async function renderVendors(v) {
     }
   }
 }
-
 // ================= 3.5 物流商管理 =================
 function buildVendorPicker(rootId, allVendors, initialSelected = []) {
   const root = document.getElementById(rootId)
@@ -1670,7 +1667,6 @@ async function renderAdmins(v) {
     }
   })
 }
-
 // ================= 5. 基础数据 =================
 async function renderBase(v) {
   v.innerHTML = `
@@ -1896,11 +1892,10 @@ async function renderStore(v) {
     }
   })
 }
-
 // ===== 5.3 商品主数据 =====
 async function renderProduct(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
-  const { data } = await ctx.supabase.from('product_master').select('*').order('id', { ascending: false }).limit(200)
+
   v.innerHTML = `
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
       <h2>Excel 导入商品主数据</h2>
@@ -1915,7 +1910,7 @@ async function renderProduct(v) {
       <h2>手动新增商品</h2>
       <div class="row">
         <select id="pm-wh">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-        <input id="pm-code" placeholder="商品代码 *" />
+        <input id="pm-code" placeholder="商品代码(纯数字) *" />
         <input id="pm-vendor" placeholder="厂编 *" />
       </div>
       <div class="row">
@@ -1931,70 +1926,107 @@ async function renderProduct(v) {
       <button id="btn-pm-add">新增商品</button>
       <div id="pm-msg"></div>
     </div>
+
     <div class="card" style="box-shadow:none;padding:0;">
-      <h2>商品列表</h2>
-      <div class="scroll">
-        <table><tr><th>仓库</th><th>商品代码</th><th>商品名称</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>默认厂编</th><th>默认仓位</th><th>默认物流</th><th>操作</th></tr>
-          <tbody>${(data||[]).map(r=>`<tr>
-            <td>${r.warehouse_code||''}</td><td>${r.product_code}</td><td>${r.product_name||''}</td>
-            <td>${r.spec||''}</td>
-            <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''} cm</td>
-            <td>${r.weight ?? ''} kg</td>
-            <td>${r.default_vendor_code||''}</td>
-            <td>${r.default_location_code||''}</td><td>${r.default_logistics_mode||''}</td>
-            <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.product_code}">删除</button>` : ''}</td>
-          </tr>`).join('')}</tbody></table>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div style="display:flex; align-items:center; gap:16px;">
+          <h2 style="margin:0;">商品列表</h2>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#cf1322; cursor:pointer; font-weight:bold;">
+            <input type="checkbox" id="chk-invalid" style="width:auto; margin:0;" /> 仅显示资料不完善的商品
+          </label>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <input id="prod-search" placeholder="搜索商品代码/品名/厂编" style="width:240px; margin:0;" />
+          <button class="secondary" id="btn-prod-search">查询</button>
+        </div>
       </div>
+      <div class="scroll" style="max-height: calc(100vh - 500px);">
+        <table>
+          <tr><th>仓库</th><th>商品代码</th><th>商品名称</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>默认厂编</th><th>操作</th></tr>
+          <tbody id="prod-body">
+            <tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="prod-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;"></div>
     </div>`
 
-  document.getElementById('btn-p-import').onclick = async () => {
-    const file = document.getElementById('p-file').files[0]
-    if (!file) return document.getElementById('p-msg').innerHTML = ctx.msg('请选择文件', false)
-    const buf = await file.arrayBuffer()
-    const wb = XLSX.read(buf)
-    const ws = wb.Sheets[wb.SheetNames[0]]
-    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
-    const products = rows.map(r => ({
-      product_code: r['商品代码'] || r['product_code'],
-      product_name: r['商品名称'] || r['商品标识'] || r['product_name'],
-      spec: r['包装规格'] || r['spec'],
-      length: r['长'] || r['length'],
-      width: r['宽'] || r['width'],
-      height: r['高'] || r['height'],
-      weight: r['重量'] || r['weight'],
-      default_vendor_code: r['默认厂编'] || r['default_vendor_code'],
-      default_owner_code: r['默认货主'] || r['default_owner_code'],
-      default_location_code: r['默认仓位'] || r['default_location_code'],
-      default_logistics_mode: r['默认物流'] || r['default_logistics_mode'],
-      store_code: r['门店代码'] || r['store_code'],
-      store_name: r['门店名称'] || r['store_name']
-    })).filter(p => p.product_code)
-    const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/import-products`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`
-      },
-      body: JSON.stringify({
-        warehouse_code: document.getElementById('p-wh').value,
-        products
-      })
-    })
-    const json = await res.json()
-    if (res.ok) {
-      let h = ctx.msg(`导入 ${json.count} 条`, true)
-      if (json.fail_count > 0 && json.errors?.length) {
-        h += `<div class="scroll" style="max-height:200px;font-size:12px;color:#cf1322;margin-top:8px;">
-          <div style="margin-bottom:4px;">失败 ${json.fail_count} 条：</div>
-          ${json.errors.map(e => `<div>${e}</div>`).join('')}
-        </div>`
-      }
-      document.getElementById('p-msg').innerHTML = h
-      renderBaseSub('product')
-    } else {
-      document.getElementById('p-msg').innerHTML = ctx.msg(ctx.translateError(json.error || '导入失败'), false)
+  let currentPage = 0
+  const pageSize = 50
+  let keyword = ''
+  let onlyInvalid = false
+
+  const loadProducts = async (page = 0) => {
+    currentPage = page
+    document.getElementById('prod-body').innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>'
+
+    let q = ctx.supabase.from('product_master').select('*', { count: 'exact' })
+    if (keyword) {
+      q = q.or(`product_code.ilike.%${keyword}%,product_name.ilike.%${keyword}%,default_vendor_code.ilike.%${keyword}%`)
     }
+    if (onlyInvalid) {
+      q = q.or('length.is.null,length.lte.0,width.is.null,width.lte.0,height.is.null,height.lte.0,weight.is.null,weight.lte.0')
+    }
+
+    const from = page * pageSize
+    const to = from + pageSize - 1
+    q = q.order('id', { ascending: false }).range(from, to)
+
+    const { data, error, count } = await q
+    if (error) {
+      document.getElementById('prod-body').innerHTML = `<tr><td colspan="8" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
+      return
+    }
+
+    document.getElementById('prod-body').innerHTML = (data || []).map(r => {
+      const isSpecValid = r.spec && /^1\*1\*[1-9]\d*$/.test(String(r.spec).trim())
+      const isSizeValid = r.length > 0 && r.width > 0 && r.height > 0 && r.weight > 0
+      const isNameValid = r.product_name && r.product_name.trim() !== ''
+      const invalid = !(isSpecValid && isSizeValid && isNameValid)
+
+      return `<tr style="${invalid ? 'background:#fff1f0;' : ''}">
+        <td>${r.warehouse_code||''}</td>
+        <td>${r.product_code}</td>
+        <td>${r.product_name||'<span style="color:#cf1322;">缺失</span>'}</td>
+        <td>${r.spec||'<span style="color:#cf1322;">缺失</span>'}</td>
+        <td>${r.length ?? '0'}×${r.width ?? '0'}×${r.height ?? '0'} cm</td>
+        <td>${r.weight ?? '0'} kg</td>
+        <td>${r.default_vendor_code||''}</td>
+        <td>
+          ${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.product_code}">删除</button>` : ''}
+        </td>
+      </tr>`
+    }).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无数据</td></tr>'
+
+    const totalPages = Math.ceil((count || 0) / pageSize)
+    const pageEl = document.getElementById('prod-pagination')
+    pageEl.innerHTML = `
+      <span style="font-size:13px;color:#666;">共 ${count || 0} 条记录，第 ${totalPages === 0 ? 0 : page + 1} / ${totalPages} 页</span>
+      <button class="secondary small" id="btn-page-prev" ${page === 0 ? 'disabled' : ''} style="${page === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+      <button class="secondary small" id="btn-page-next" ${page >= totalPages - 1 ? 'disabled' : ''} style="${page >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+    `
+    document.getElementById('btn-page-prev').onclick = () => { if (page > 0) loadProducts(page - 1) }
+    document.getElementById('btn-page-next').onclick = () => { if (page < totalPages - 1) loadProducts(page + 1) }
+
+    v.querySelectorAll('[data-del]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('确定删除？')) return
+        const { error } = await ctx.supabase.from('product_master').delete().eq('id', b.dataset.del)
+        if (error) return alert(ctx.translateError(error.message))
+        await logOp('delete_product', '商品 ' + b.dataset.code)
+        loadProducts(currentPage)
+      }
+    })
+  }
+
+  document.getElementById('chk-invalid').onchange = (e) => {
+    onlyInvalid = e.target.checked
+    loadProducts(0)
+  }
+
+  document.getElementById('btn-prod-search').onclick = () => {
+    keyword = document.getElementById('prod-search').value.trim()
+    loadProducts(0)
   }
 
   document.getElementById('btn-pm-add').onclick = async () => {
@@ -2012,6 +2044,9 @@ async function renderProduct(v) {
     if (!code || !vendor || !name) {
       msgEl.innerHTML = ctx.msg('商品代码、厂编、品名为必填', false); return
     }
+    if (!/^\d+$/.test(code)) {
+      msgEl.innerHTML = ctx.msg('商品编码（货号）必须是纯数字，不能包含字母或空格', false); return
+    }
     if (!spec) {
       msgEl.innerHTML = ctx.msg('包装规格为必填', false); return
     }
@@ -2027,11 +2062,7 @@ async function renderProduct(v) {
     }
 
     const { data: exist } = await ctx.supabase.from('product_master')
-      .select('id')
-      .eq('warehouse_code', wh)
-      .eq('product_code', code)
-      .eq('default_vendor_code', vendor)
-      .maybeSingle()
+      .select('id').eq('warehouse_code', wh).eq('product_code', code).eq('default_vendor_code', vendor).maybeSingle()
 
     if (exist) {
       msgEl.innerHTML = ctx.msg(`同仓库「${wh}」同厂编「${vendor}」下商品代码「${code}」已存在`, false)
@@ -2039,38 +2070,91 @@ async function renderProduct(v) {
     }
 
     const { error } = await ctx.supabase.from('product_master').insert({
-      warehouse_code: wh,
-      product_code: code,
-      product_name: name,
-      spec,
-      length: Number(length),
-      width:  Number(width),
-      height: Number(height),
-      weight: Number(weight),
-      default_vendor_code: vendor,
-      default_owner_code: vendor
+      warehouse_code: wh, product_code: code, product_name: name, spec,
+      length: Number(length), width: Number(width), height: Number(height), weight: Number(weight),
+      default_vendor_code: vendor, default_owner_code: vendor
     })
 
     if (error) {
-      msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
-      return
+      msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
     }
     await logOp('create_product', '商品 ' + code, { warehouse_code: wh, vendor })
     msgEl.innerHTML = ctx.msg('新增成功', true)
-    setTimeout(() => renderBaseSub('product'), 600)
+
+    document.getElementById('pm-code').value = ''
+    document.getElementById('pm-name').value = ''
+    document.getElementById('pm-spec').value = ''
+    document.getElementById('pm-length').value = ''
+    document.getElementById('pm-width').value = ''
+    document.getElementById('pm-height').value = ''
+    document.getElementById('pm-weight').value = ''
+
+    loadProducts(0)
   }
 
-  v.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('确定删除？')) return
-      const { error } = await ctx.supabase.from('product_master').delete().eq('id', b.dataset.del)
-      if (error) return alert(ctx.translateError(error.message))
-      await logOp('delete_product', '商品 ' + b.dataset.code)
-      renderBaseSub('product')
-    }
-  })
-}
+  document.getElementById('btn-p-import').onclick = async () => {
+    const file = document.getElementById('p-file').files[0]
+    if (!file) return document.getElementById('p-msg').innerHTML = ctx.msg('请选择文件', false)
+    const buf = await file.arrayBuffer()
+    const wb = XLSX.read(buf)
+    const ws = wb.Sheets[wb.SheetNames[0]]
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
 
+    let hasInvalidCode = false
+    let invalidCodeMsg = ''
+
+    const products = rows.map((r, i) => {
+      const codeStr = String(r['商品代码'] || r['product_code'] || '').trim()
+      if (codeStr && !/^\d+$/.test(codeStr)) {
+        hasInvalidCode = true
+        invalidCodeMsg = `第 ${i+2} 行的货号 [${codeStr}] 不是纯数字`
+      }
+      return {
+        product_code: codeStr,
+        product_name: r['商品名称'] || r['product_name'],
+        spec: r['包装规格'] || r['spec'],
+        length: r['长'] || r['length'],
+        width: r['宽'] || r['width'],
+        height: r['高'] || r['height'],
+        weight: r['重量'] || r['weight'],
+        default_vendor_code: r['默认厂编'] || r['default_vendor_code'],
+        default_owner_code: r['默认货主'] || r['default_owner_code'],
+        default_location_code: r['默认仓位'] || r['default_location_code'],
+        default_logistics_mode: r['默认物流'] || r['default_logistics_mode'],
+        store_code: r['门店代码'] || r['store_code'],
+        store_name: r['门店名称'] || r['store_name']
+      }
+    }).filter(p => p.product_code)
+
+    if (hasInvalidCode) {
+      document.getElementById('p-msg').innerHTML = ctx.msg('导入失败：' + invalidCodeMsg, false)
+      return
+    }
+
+    const { data: { session } } = await ctx.supabase.auth.getSession()
+    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/import-products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+      body: JSON.stringify({ warehouse_code: document.getElementById('p-wh').value, products })
+    })
+    const json = await res.json()
+    if (res.ok) {
+      let h = ctx.msg(`导入 ${json.count} 条`, true)
+      if (json.fail_count > 0 && json.errors?.length) {
+        h += `<div class="scroll" style="max-height:200px;font-size:12px;color:#cf1322;margin-top:8px;">
+          <div style="margin-bottom:4px;">失败 ${json.fail_count} 条：</div>
+          ${json.errors.map(e => `<div>${e}</div>`).join('')}
+        </div>`
+      }
+      document.getElementById('p-msg').innerHTML = h
+      loadProducts(0)
+    } else {
+      document.getElementById('p-msg').innerHTML = ctx.msg(ctx.translateError(json.error || '导入失败'), false)
+    }
+  }
+
+  loadProducts(0)
+}
 // ===== 5.4 提报时间段 =====
 async function renderDeadline(v) {
   const { data } = await ctx.supabase.from('deadline_config').select('*').order('id')
@@ -2213,7 +2297,7 @@ async function renderLogs(v) {
     .select('*').order('id', { ascending: false }).limit(200)
   const { data: edits } = await ctx.supabase.from('vendor_edit_log')
     .select('*').order('id', { ascending: false }).limit(200)
-  
+
   const { data: batches } = await ctx.supabase.from('export_batch_detail')
     .select('*').order('id', { ascending: false }).limit(200)
 
@@ -2376,7 +2460,7 @@ async function renderSys(v) {
   ;(cfgs||[]).forEach(x => cfgMap[x.config_key] = x.config_value)
   const cleanupDays = cfgMap.cleanup_days || '7'
   const cleanupTime = cfgMap.cleanup_time || '03:00'
-  
+
   const isMaintenance = cfgMap.maintenance_mode === 'true'
 
   v.innerHTML = `
@@ -2432,7 +2516,7 @@ async function renderSys(v) {
       <button id="btn-save-cleanup" ${isSuper() ? '' : 'disabled'}>保存（立即生效）</button>
       <div id="cleanup-msg"></div>
     </div>
-    
+
     <!-- 钉钉质检报告推送配置 -->
     <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #1677ff;">
       <h2>钉钉质检报告推送（仅超管）</h2>
@@ -2489,12 +2573,12 @@ async function renderSys(v) {
 
     const { error } = await ctx.supabase.from('system_config')
       .upsert({ config_key: 'maintenance_mode', config_value: newStatus, updated_by: ctx.operatorName }, { onConflict: 'config_key' })
-    
+
     if (error) {
       msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
       return
     }
-    
+
     await logOp('save_system_config', `维护模式-${action}`, { value: newStatus })
     renderTab('sys')
   }
@@ -2540,7 +2624,7 @@ async function renderSys(v) {
     const webhook = document.getElementById('dingtalk-webhook').value.trim()
     const secret = document.getElementById('dingtalk-secret').value.trim()
     const msgEl = document.getElementById('dingtalk-msg')
-    
+
     msgEl.innerHTML = ctx.msg('保存中...', true)
 
     const upsert = async (key, val) => {
@@ -2548,10 +2632,10 @@ async function renderSys(v) {
     }
     await upsert('dingtalk_qc_webhook', webhook)
     await upsert('dingtalk_qc_secret', secret)
-    
+
     const pushTime = document.getElementById('dingtalk-push-time').value || '08:00'
     await upsert('dingtalk_qc_push_time', pushTime)
-    
+
     const hh = parseInt(pushTime.split(':')[0], 10)
     const mm = parseInt(pushTime.split(':')[1], 10)
     const utcH = (hh - 8 + 24) % 24
@@ -2567,7 +2651,7 @@ async function renderSys(v) {
     if (!isSuper()) return
     const btn = document.getElementById('btn-test-dingtalk')
     const msgEl = document.getElementById('dingtalk-msg')
-    
+
     btn.disabled = true
     btn.innerText = '发送中...'
     msgEl.innerHTML = ctx.msg('正在请求云函数发送测试消息...', true)
@@ -2578,7 +2662,7 @@ async function renderSys(v) {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${session.access_token}` }
       })
-      
+
       const json = await res.json()
       if (res.ok) {
         msgEl.innerHTML = ctx.msg('测试消息已发送！请去群里查看', true)
@@ -2588,7 +2672,7 @@ async function renderSys(v) {
     } catch (e) {
       msgEl.innerHTML = ctx.msg('网络错误：' + e.message, false)
     }
-    
+
     btn.disabled = false
     btn.innerText = '发送测试消息'
   }

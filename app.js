@@ -1,10 +1,10 @@
-// app.js — 主逻辑（2026-10-29 终极完整版：济转西货主修正、iOS防篡改、质检隔离命名）
+// app.js — 主逻辑（2026-10-31 终极完整版：长宽高强校验、纯数字校验、分页搜索兼容）
 
 import { supabase } from './supabase.js'
 
 const SUPABASE_URL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent)
   ? 'https://api.mahui.pw'
-  : 'https://gpjdzgakvqhnpykuqbfr.supabase.co'
+  : 'https://gpjdzakvqhnpykuqbfr.supabase.co'
 
 const app = document.getElementById('app')
 let currentUser = null
@@ -34,6 +34,16 @@ const SIZE_EMPTY_MSG = '长、宽、高、重量为必填，请到「商品资�
 function isValidSize(length, width, height, weight) {
   const vals = [length, width, height, weight].map(v => Number(v))
   return vals.every(v => !isNaN(v) && v > 0)
+}
+
+// ★ 新增：判断商品资料是否不完善（含纯数字、规格、长宽高）
+function isProductInvalid(p) {
+  if (!p) return true
+  const isSpecValid = p.spec && /^1\*1\*[1-9]\d*$/.test(String(p.spec).trim())
+  const isSizeValid = p.length > 0 && p.width > 0 && p.height > 0 && p.weight > 0
+  const isCodeValid = p.product_code && /^\d+$/.test(String(p.product_code).trim())
+  const isNameValid = p.product_name && p.product_name.trim() !== ''
+  return !(isSpecValid && isSizeValid && isCodeValid && isNameValid)
 }
 
 function translateError(errMsg) {
@@ -84,7 +94,6 @@ function withTimeout(promise, ms = 5000) {
 }
 
 async function init() {
-  // ★ 核心优化：无论网络多慢，先直接把登录界面渲染出来，消除白屏感
   renderLogin()
 
   try {
@@ -141,7 +150,6 @@ async function loadProfile() {
   }
 
   currentProfile = profile
-  // 增强判断：如果在 admin_users 表里，或者 account_type 是 admin，或者厂编以 ADMIN_ 开头，统统算管理员
   isAdmin = !!admin || profile?.account_type === 'admin' || (profile?.vendor_code || '').startsWith('ADMIN_')
   currentRole = admin?.role || (isAdmin ? 'admin' : null)
   isLogistics = profile?.account_type === 'logistics'
@@ -473,7 +481,6 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
-// ★ 出库单：货主及门店代码的自动计算规则
 function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
@@ -483,7 +490,6 @@ function calcOutFields(billType, supplierInput, defaultStore) {
     return { owner_code: '8888', store_code: '' }
   }
   
-  // ★ 济转西 RT 系列（无论留库还是越库）：货主一律为厂编，门店固定 8205RT
   if (billType === '济转西RT(留库)') {
     return { owner_code: supplierInput, store_code: '8205RT' }
   }
@@ -491,7 +497,6 @@ function calcOutFields(billType, supplierInput, defaultStore) {
     return { owner_code: supplierInput, store_code: '8205RT' }
   }
   
-  // ★ 济转西 DSP 系列（无论留库还是越库）：货主一律为 8888，门店固定 8205DSP
   if (billType === '济转西DSP(留库)') {
     return { owner_code: '8888', store_code: '8205DSP' }
   }
@@ -547,7 +552,6 @@ function calcCountdown(range) {
   if (nowSec < endSec) return { text: `距截止还有 ${fmt(endSec - nowSec)}`, bg: 'linear-gradient(135deg,#f6ffed 0%,#e6f4ff 100%)', border: '#b7eb8f', color: '#389e0d' }
   return { text: '今日预约已截止', bg: 'linear-gradient(135deg,#fff2f0 0%,#ffccc7 100%)', border: '#ffa39e', color: '#cf1322' }
 }
-
 // ================= 填报 =================
 async function renderFill(view) {
   let selectedVendor = null
@@ -602,7 +606,7 @@ async function renderFill(view) {
   const myStores = (stores||[]).filter(s => !s.warehouse_code || myWhs.includes(s.warehouse_code))
 
   async function loadProducts(vendorCode) {
-    const { data } = await supabase.from('product_master').select('product_code, product_name, spec').eq('default_vendor_code', vendorCode).order('product_code')
+    const { data } = await supabase.from('product_master').select('product_code, product_name, spec, length, width, height, weight').eq('default_vendor_code', vendorCode).order('product_code')
     return data || []
   }
   let productList = await loadProducts(myVendorCode)
@@ -827,7 +831,7 @@ async function renderFill(view) {
     const btnAddOut = document.getElementById('btn-add-out')
     if (btnAddOut) btnAddOut.onclick = () => { outRows.push(newOutRowForVendor(myVendorCode)); renderOutTable(); renderPreview() }
 
-    // ★ 入库解析
+    // ★ 入库解析（含纯数字校验）
     document.getElementById('btn-parse-in').onclick = () => {
       const txt = document.getElementById('in-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -846,11 +850,15 @@ async function renderFill(view) {
         const boxQtyStr = cols[cols.length - 1]
         const boxQty = Number(boxQtyStr)
 
+        if (!/^\d+$/.test(product_code)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 必须是纯数字`); continue }
         if (isNaN(boxQty) || boxQty <= 0) { errorMsgs.push(`第 ${i+1} 行：箱数 [${boxQtyStr}] 必须是大于 0 的数字`); continue }
 
         const p = findProduct(product_code)
         if (!p) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 在商品库不存在`); continue }
-        if (!isValidSpec(p.spec)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 规格 [${p.spec}] 不合规`); continue }
+        
+        // ★ 极速录入同样拦截资料不全的商品
+        if (isProductInvalid(p)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 资料不完善（缺长宽高或规格不正确），请先去补充`); continue }
+        if (!isValidSpec(p.spec)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 规格不合规`); continue }
 
         if (parsedMap.has(product_code)) {
           parsedMap.get(product_code).quantity += boxQty
@@ -880,7 +888,7 @@ async function renderFill(view) {
 
     document.getElementById('btn-clear-in-paste').onclick = () => { document.getElementById('in-paste-area').value = '' }
 
-    // ★ 出库解析 (修复WMS单号合并问题)
+    // ★ 出库解析（含纯数字校验）
     document.getElementById('btn-parse-out').onclick = () => {
       const txt = document.getElementById('out-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -895,17 +903,20 @@ async function renderFill(view) {
         
         if (cols.length < 3) { errorMsgs.push(`第 ${i+1} 行：列数不足（需包含 单号/货号/箱数）`); continue }
 
-        // ★ 核心修复：只取第一个单号，截断空格
         const rawSourceNo = cols[0].split(' ')[0].trim()
         const product_code = cols[1]
         const boxQtyStr = cols[2]
         const boxQty = Number(boxQtyStr)
 
         if (!/^\d{9}$/.test(rawSourceNo)) { errorMsgs.push(`第 ${i+1} 行：单号 [${rawSourceNo}] 格式错误，必须9位数字`); continue }
+        if (!/^\d+$/.test(product_code)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 必须是纯数字`); continue }
         if (isNaN(boxQty) || boxQty <= 0) { errorMsgs.push(`第 ${i+1} 行：箱数 [${boxQtyStr}] 错误`); continue }
 
         const p = findProduct(product_code)
         if (!p) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 不存在`); continue }
+        
+        // ★ 极速录入同样拦截资料不全的商品
+        if (isProductInvalid(p)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 资料不完善（缺长宽高或规格不正确），请先去补充`); continue }
         if (!isValidSpec(p.spec)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 规格不合规`); continue }
 
         let billType = 'VMI出库'
@@ -923,7 +934,6 @@ async function renderFill(view) {
           storeCode = matchedStore.store_code
         }
 
-        // ★ 严格区分单号
         const key = `${rawSourceNo}_${product_code}_${billType}_${storeCode}`
         if (parsedMap.has(key)) {
           parsedMap.get(key).quantity += boxQty
@@ -962,7 +972,6 @@ async function renderFill(view) {
           newRow.quantity = item.quantity
           
           newRow.bill_type = item.billType
-          // 针对DSP出库特殊设置货主
           if (item.billType === 'DSP出库') {
             newRow.owner_code = '8888'
             newRow.store_code = item.storeCode
@@ -1099,7 +1108,8 @@ async function renderFill(view) {
         location_code: r.location_code, logistics_mode: getModeByType(r.bill_type),
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, arrival_date: r.arrival_date || null, effective_date: addOneDay(r.arrival_date),
-        whole_process: 'NO', product_remark: r.product_name || null,
+        whole_process: 'NO', 
+        product_remark: r.product_name || r.product_code || '无', // ★ 备注兜底
         submitter_type: isAdmin ? 'admin' : 'vendor'
       }))
 
@@ -1110,7 +1120,8 @@ async function renderFill(view) {
         location_code: r.location_code, logistics_mode: getModeByType(r.bill_type),
         pick_date: r.pick_date || null, effective_date: addOneDay(r.pick_date),
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
-        price: 1, product_remark: r.product_name || null,
+        price: 1, 
+        product_remark: r.product_name || r.product_code || '无', // ★ 备注兜底
         submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode
       }))
 
@@ -1170,7 +1181,19 @@ async function renderFill(view) {
         if (f === 'product_code') {
           r.product_code = el.value
           const p = findProduct(el.value)
-          if (p) { r.product_name = p.product_name || ''; r.spec = p.spec || ''; el.closest('tr').querySelector('[data-f="spec"]').value = r.spec } 
+          if (p) { 
+            // ★ 拦截资料不完善
+            if (isProductInvalid(p)) {
+              alert(`⚠️ 商品 [${p.product_code}] 资料不完善！\n\n可能原因：\n- 缺失长宽高或重量\n- 规格不是 1*1*X 格式\n- 品名或货号不规范\n\n请先到「商品资料」页面补充完整后再填报！`)
+              el.value = ''
+              r.product_code = ''
+              r.spec = ''
+              return
+            }
+            r.product_name = p.product_name || ''; 
+            r.spec = p.spec || ''; 
+            el.closest('tr').querySelector('[data-f="spec"]').value = r.spec 
+          } 
           else { r.product_name = '' }
           renderPreview(); return
         }
@@ -1244,7 +1267,19 @@ async function renderFill(view) {
         if (f === 'product_code') {
           r.product_code = el.value
           const p = findProduct(el.value)
-          if (p) { r.product_name = p.product_name || ''; r.spec = p.spec || ''; el.closest('tr').querySelector('[data-f="spec"]').value = r.spec } 
+          if (p) { 
+            // ★ 拦截资料不完善
+            if (isProductInvalid(p)) {
+              alert(`⚠️ 商品 [${p.product_code}] 资料不完善！\n\n可能原因：\n- 缺失长宽高或重量\n- 规格不是 1*1*X 格式\n- 品名或货号不规范\n\n请先到「商品资料」页面补充完整后再填报！`)
+              el.value = ''
+              r.product_code = ''
+              r.spec = ''
+              return
+            }
+            r.product_name = p.product_name || ''; 
+            r.spec = p.spec || ''; 
+            el.closest('tr').querySelector('[data-f="spec"]').value = r.spec 
+          } 
           else { r.product_name = '' }
           renderPreview(); return
         }
@@ -1303,12 +1338,12 @@ async function renderFill(view) {
 
   render()
 }
-
 // ================= 商品资料 =================
 async function renderProducts(view) {
   if (isAdmin) {
     view.innerHTML = `<div class="card"><h2>商品资料</h2><p style="color:#999;">管理员请到管理后台的商品主数据里维护。</p></div>`
-    return  }
+    return  
+  }
 
   let selectedVendorCode
 
@@ -1346,7 +1381,22 @@ async function renderProducts(view) {
     })
     const mergedList = Object.values(merged)
 
+    // ★ 新增：统计不合格数量并显示顶部警告
+    const invalidCount = mergedList.filter(r => isProductInvalid(r)).length
+    let warningHtml = ''
+    if (invalidCount > 0) {
+      warningHtml = `
+        <div style="background:#fff2f0; border:1px solid #ffccc7; border-radius:8px; padding:16px; margin-bottom:16px;">
+          <h3 style="color:#cf1322; margin:0 0 8px 0;">⚠️ 您有 ${invalidCount} 个商品资料不完善</h3>
+          <p style="color:#cf1322; font-size:13px; margin:0;">
+            长宽高重量未填、规格不符或货号非纯数字的商品已被标红，<strong>在补充完整之前将无法用于填报</strong>。请尽快点击下方的「编辑」进行修改！
+          </p>
+        </div>
+      `
+    }
+
     view.innerHTML = `
+      ${warningHtml}
       ${isLogistics ? `
         <div class="card">
           <div class="row">
@@ -1362,7 +1412,7 @@ async function renderProducts(view) {
         <h2>新增商品</h2>
         <div id="prod-msg"></div>
         <div class="row">
-          <div><label>商品编码 *</label><input id="pd-code" /></div>
+          <div><label>商品编码 * (纯数字)</label><input id="pd-code" /></div>
           <div><label>品名 *</label><input id="pd-name" /></div>
           <div><label>规格 * (1*1*X)</label><input id="pd-spec" placeholder="如 1*1*24" /></div>
         </div>
@@ -1381,15 +1431,19 @@ async function renderProducts(view) {
           <table>
             <tr><th>商品编码</th><th>品名</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
             <tbody>
-              ${mergedList.map(r => `<tr>
-                <td>${r.product_code||''}</td>
-                <td>${r.product_name||''}</td>
-                <td>${r.spec||''}</td>
-                <td>${r.length ?? ''}×${r.width ?? ''}×${r.height ?? ''} cm</td>
-                <td>${r.weight ?? ''} kg</td>
-                <td style="font-size:12px;">${r.warehouses.join(', ')}</td>
-                <td><button class="small secondary" data-edit="${r.product_code}">编辑</button></td>
-              </tr>`).join('') || '<tr><td colspan="7">无数据</td></tr>'}
+              ${mergedList.map(r => {
+                const invalid = isProductInvalid(r)
+                const bgColor = invalid ? 'background:#fff1f0;' : ''
+                return `<tr style="${bgColor}">
+                  <td>${r.product_code||''} ${invalid ? '<span style="color:#cf1322;font-size:11px;">(资料不全)</span>' : ''}</td>
+                  <td>${r.product_name||'<span style="color:#cf1322;">缺失</span>'}</td>
+                  <td>${r.spec||'<span style="color:#cf1322;">缺失</span>'}</td>
+                  <td>${r.length ?? '<span style="color:#cf1322;">0</span>'}×${r.width ?? '0'}×${r.height ?? '0'} cm</td>
+                  <td>${r.weight ?? '<span style="color:#cf1322;">0</span>'} kg</td>
+                  <td style="font-size:12px;">${r.warehouses.join(', ')}</td>
+                  <td><button class="small ${invalid ? '' : 'secondary'}" data-edit="${r.product_code}">编辑</button></td>
+                </tr>`
+              }).join('') || '<tr><td colspan="7">无数据</td></tr>'}
             </tbody>
           </table>
         </div>
@@ -1417,6 +1471,7 @@ async function renderProducts(view) {
       const weight = document.getElementById('pd-weight').value.trim()
 
       if (!code || !name) return msgEl.innerHTML = msg('商品编码、品名为必填', false)
+      if (!/^\d+$/.test(code)) return msgEl.innerHTML = msg('商品编码（货号）必须是纯数字，不能包含字母或空格', false)
       if (!spec) return msgEl.innerHTML = msg('包装规格为必填', false)
       if (!isValidSpec(spec)) return msgEl.innerHTML = msg('包装规格格式错误，必须是 1*1*X', false)
       if (!length || !width || !height || !weight) return msgEl.innerHTML = msg(SIZE_EMPTY_MSG, false)
@@ -1556,7 +1611,6 @@ async function renderMy(view) {
     }
   })
 }
-
 // ================= 质检报告 =================
 async function renderQC(view) {
   let mySelectedVendorId = null
@@ -1808,4 +1862,5 @@ async function renderQC(view) {
   })
 }
 
+// 启动系统
 init()
