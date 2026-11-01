@@ -1758,7 +1758,8 @@ async function renderQC(view) {
       // 1. 获取上传链接
       msgEl.innerHTML = msg('正在获取上传凭证...', true)
       const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/upload-qc`, {
+      // ★ 单独强制走代理
+      const res = await fetch(`https://api.mahui.pw/functions/v1/upload-qc`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({ fileNames: fileInfos.map(f => f.fileName) })
@@ -1791,7 +1792,8 @@ async function renderQC(view) {
       if (oldReports && oldReports.length > 0) {
         await Promise.all(oldReports.map(async (old) => {
           try {
-            await fetch(`${SUPABASE_URL}/functions/v1/delete-qc`, {
+            // ★ 单独强制走代理
+            await fetch(`https://api.mahui.pw/functions/v1/delete-qc`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
               body: JSON.stringify({ filePath: old.file_path })
@@ -1840,7 +1842,8 @@ async function renderQC(view) {
 
       try {
         const { data: { session } } = await supabase.auth.getSession()
-        const res = await fetch(`${SUPABASE_URL}/functions/v1/delete-qc`, {
+        // ★ 单独强制走代理
+        const res = await fetch(`https://api.mahui.pw/functions/v1/delete-qc`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ filePath: path })
