@@ -2771,7 +2771,7 @@ async function renderBilling(v) {
       
       // 1. 获取 R2 预签名上传链接
       msgEl.innerHTML = ctx.msg('获取 R2 上传凭证...', true)
-      const uploadRes = await fetch(`${ctx.SUPABASE_URL}/functions/v1/upload-billing`, {
+      const uploadRes = await fetch(`https://api.mahui.pw/functions/v1/upload-billing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({ fileNames: [srcName, tmplName] })
@@ -2812,7 +2812,7 @@ async function renderBilling(v) {
       // 4. 循环调用云函数生成
       while (true) {
         msgEl.innerHTML = ctx.msg(`生成中... 已处理 ${offset} 个`, true)
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/generate-billing`, {
+        const res = await fetch(`https://api.mahui.pw/functions/v1/generate-billing`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ batch_id: batch.id, source_url: srcName, template_url: tmplName, month, mode, offset, limit })
