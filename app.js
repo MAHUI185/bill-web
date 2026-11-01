@@ -1772,7 +1772,7 @@ async function renderQC(view) {
       await Promise.all(fileInfos.map(async (info, i) => {
         const uploadRes = await fetch(urls[i].uploadUrl, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/pdf' },
+          // 注意：这里绝对不能加 'Content-Type': 'application/pdf'，否则会导致 R2 签名不匹配
           body: info.file
         })
         if (!uploadRes.ok) throw new Error(`文件 [${info.originalName}] 上传失败`)
