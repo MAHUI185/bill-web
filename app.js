@@ -2,7 +2,9 @@
 
 import { supabase } from './supabase.js'
 
-const SUPABASE_URL = 'https://api.mahui.pw'
+const SUPABASE_URL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent)
+  ? 'https://api.mahui.pw'
+  : 'https://gpjdzakvqhnpykuqbfr.supabase.co'
 
 const app = document.getElementById('app')
 let currentUser = null
