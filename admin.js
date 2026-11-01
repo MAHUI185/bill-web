@@ -124,51 +124,20 @@ async function logOp(action, target, detail = {}) {
 }
 
 const ACTION_CN = {
-  create_vendor: '创建厂商',
-  batch_import_vendor: '批量导入厂商',
-  update_vendor: '修改厂商',
-  delete_vendor: '删除厂商',
-  toggle_vendor: '启用/禁用厂商',
-  grant_vendor_warehouse: '授权厂商仓库',
-  reset_vendor_pwd: '重置厂商密码',
-  create_logistics: '创建物流商',
-  delete_logistics: '删除物流商',
-  grant_logistics_vendors: '修改物流商负责厂商',
-  reset_logistics_pwd: '重置物流商密码',
-  create_admin: '创建管理员',
-  update_admin: '修改管理员',
-  delete_admin: '删除管理员',
-  toggle_admin: '启用/禁用管理员',
-  reset_admin_pwd: '重置管理员密码',
-  import_bills: '导入单据',
-  export_bills: '导出单据',
-  export_bills_admin: '导出代报单据',
-  update_bill: '修改单据',
-  delete_bill: '删除单据',
-  delete_qc: '删除质检报告',
-  export_qc: '导出质检报告',
-  create_warehouse: '新增仓库',
-  delete_warehouse: '删除仓库',
-  create_location: '新增仓位',
-  delete_location: '删除仓位',
-  create_store: '新增门店',
-  delete_store: '删除门店',
-  create_product: '新增商品',
-  delete_product: '删除商品',
-  create_deadline: '新增提报时间段',
-  delete_deadline: '删除提报时间段',
-  create_holiday: '新增节假日',
-  delete_holiday: '删除节假日',
-  create_bypass: '新增强制放行',
-  delete_bypass: '删除强制放行',
-  save_cleanup_config: '修改清理配置',
-  save_system_config: '保存系统配置',
-  delete_system_config: '删除系统配置',
-  add_version: '新增版本记录',
-  import_dingtalk_webhook: '导入钉钉Webhook',
-  create_billing_batch: '创建对账批次',
-  generate_billing: '生成对账单',
-  send_billing: '推送对账单'
+  create_vendor: '创建厂商', batch_import_vendor: '批量导入厂商', update_vendor: '修改厂商',
+  delete_vendor: '删除厂商', toggle_vendor: '启用/禁用厂商', grant_vendor_warehouse: '授权厂商仓库',
+  reset_vendor_pwd: '重置厂商密码', create_logistics: '创建物流商', delete_logistics: '删除物流商',
+  grant_logistics_vendors: '修改物流商负责厂商', reset_logistics_pwd: '重置物流商密码',
+  create_admin: '创建管理员', update_admin: '修改管理员', delete_admin: '删除管理员',
+  toggle_admin: '启用/禁用管理员', reset_admin_pwd: '重置管理员密码',
+  import_bills: '导入单据', export_bills: '导出单据', export_bills_admin: '导出代报单据',
+  update_bill: '修改单据', delete_bill: '删除单据', delete_qc: '删除质检报告', export_qc: '导出质检报告',
+  create_warehouse: '新增仓库', delete_warehouse: '删除仓库', create_location: '新增仓位', delete_location: '删除仓位',
+  create_store: '新增门店', delete_store: '删除门店', create_product: '新增商品', delete_product: '删除商品',
+  create_deadline: '新增提报时间段', delete_deadline: '删除提报时间段', create_holiday: '新增节假日', delete_holiday: '删除节假日',
+  create_bypass: '新增强制放行', delete_bypass: '删除强制放行', save_cleanup_config: '修改清理配置',
+  save_system_config: '保存系统配置', delete_system_config: '删除系统配置', add_version: '新增版本记录',
+  import_dingtalk_webhook: '导入钉钉Webhook', create_billing_batch: '创建对账批次', generate_billing: '生成对账单', send_billing: '推送对账单'
 }
 
 // ================= 1. 提报进度 =================
@@ -179,10 +148,7 @@ async function renderProgress(v) {
   const todayStr = nowBj.toISOString().slice(0, 10)
   const startOfToday = new Date(todayStr + 'T00:00:00+08:00').toISOString()
 
-  const { data: qcs } = await ctx.supabase.from('qc_report')
-    .select('vendor_code')
-    .gte('created_at', startOfToday)
-
+  const { data: qcs } = await ctx.supabase.from('qc_report').select('vendor_code').gte('created_at', startOfToday)
   const qcSet = new Set((qcs || []).map(q => q.vendor_code))
 
   v.innerHTML = `
@@ -212,10 +178,7 @@ async function renderProgress(v) {
     const st = document.getElementById('p-status').value
     let list = data || []
 
-    if (kw) list = list.filter(r =>
-      (r.vendor_code || '').toLowerCase().includes(kw) ||
-      (r.vendor_name || '').toLowerCase().includes(kw))
-
+    if (kw) list = list.filter(r => (r.vendor_code || '').toLowerCase().includes(kw) || (r.vendor_name || '').toLowerCase().includes(kw))
     if (st === 'reported') list = list.filter(r => r.reported_today)
     if (st === 'not') list = list.filter(r => !r.reported_today)
     if (st === 'nologin') list = list.filter(r => !r.logged_in_today)
@@ -230,19 +193,10 @@ async function renderProgress(v) {
         <td>${r.warehouse_name || r.warehouse_code || ''}</td>
         <td>${r.contact_name || ''}</td>
         <td>${r.contact_phone || ''}</td>
-        <td>${
-          r.login_status === '在线'
-            ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;">● 在线</span>'
-            : r.login_status === '今日已登录'
-              ? '<span class="stat ok">已登录</span>'
-              : '<span class="stat no">未登录</span>'
-        }</td>
+        <td>${r.login_status === '在线' ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;">● 在线</span>' : r.login_status === '今日已登录' ? '<span class="stat ok">已登录</span>' : '<span class="stat no">未登录</span>'}</td>
         <td>${r.reported_today ? '<span class="stat ok">已提报</span>' : '<span class="stat no">未提报</span>'}</td>
         <td>${r.today_count || 0}</td>
-        <td>${hasQc
-          ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;border:1px solid #91caff;">✅ 已传</span>'
-          : '<span class="stat no" style="background:#f5f5f5;color:#999;border:1px solid #ddd;">❌ 未传</span>'
-        }</td>
+        <td>${hasQc ? '<span class="stat ok" style="background:#e6f4ff;color:#1677ff;border:1px solid #91caff;">✅ 已传</span>' : '<span class="stat no" style="background:#f5f5f5;color:#999;border:1px solid #ddd;">❌ 未传</span>'}</td>
         <td>${r.last_report_at ? new Date(r.last_report_at).toLocaleString() : '-'}</td>
         <td>${r.last_active_at ? new Date(r.last_active_at).toLocaleString() : '-'}</td>
       </tr>`
@@ -253,6 +207,7 @@ async function renderProgress(v) {
   document.getElementById('p-status').onchange = render
   render()
 }
+
 // ================= 2. 单据管理 =================
 async function renderBills(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
@@ -262,7 +217,6 @@ async function renderBills(v) {
 
   v.innerHTML = `
     <div style="display:grid; grid-template-columns: 1fr; gap:16px; margin-bottom:16px;">
-      <!-- 导出 WMS -->
       <div class="card" style="box-shadow:none; margin:0; padding:16px;">
         <h2 style="margin-bottom:12px; font-size:16px;">导出 WMS 模板</h2>
         <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center; flex-wrap:wrap;">
@@ -282,7 +236,6 @@ async function renderBills(v) {
       </div>
     </div>
 
-    <!-- 底部：单据查询 -->
     <div class="card" style="box-shadow:none; padding:16px; margin:0;" id="bill-query-card">
       <h2 style="margin-bottom:12px; font-size:16px;">单据查询</h2>
       
@@ -320,9 +273,7 @@ async function renderBills(v) {
         </table>
       </div>
       
-      <!-- 分页栏 -->
       <div id="bill-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;">
-        <!-- 动态生成 -->
       </div>
     </div>
     <div id="admin-edit-bill-panel"></div>`
@@ -341,10 +292,7 @@ async function renderBills(v) {
     const { data: { session } } = await ctx.supabase.auth.getSession()
     const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/export-bills`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session.access_token}`
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
       body: JSON.stringify({
         warehouse_code, start_date, end_date,
         include_exported: document.getElementById('exp-include')?.checked || false,
@@ -376,7 +324,6 @@ async function renderBills(v) {
   document.getElementById('btn-export').onclick = () => doExport(null, false)
   document.getElementById('btn-export-admin').onclick = () => doExport('admin', true)
 
-  // 分页状态变量
   let currentPage = 0;
   const pageSize = 50;
 
@@ -1667,6 +1614,7 @@ async function renderAdmins(v) {
     }
   })
 }
+
 // ================= 5. 基础数据 =================
 async function renderBase(v) {
   v.innerHTML = `
@@ -1700,7 +1648,7 @@ async function renderBaseSub(key) {
   if (key === 'bypass') return renderBypass(v)
 }
 
-// ===== 5.1 仓库（三块合一：仓库 + 仓位 + 映射只读） =====
+// ===== 5.1 仓库 =====
 async function renderWh(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').order('warehouse_code')
   const list = whs || []
@@ -1708,15 +1656,12 @@ async function renderWh(v) {
 
   const renderAll = async () => {
     const sel = list.find(w => w.warehouse_code === selectedCode)
-
     let locs = []
     let maps = []
     if (selectedCode) {
-      const { data: l } = await ctx.supabase.from('location_config_detail')
-        .select('*').eq('warehouse_code', selectedCode).order('location_code')
+      const { data: l } = await ctx.supabase.from('location_config_detail').select('*').eq('warehouse_code', selectedCode).order('location_code')
       locs = l || []
-      const { data: m } = await ctx.supabase.from('location_warehouse_map')
-        .select('*').eq('warehouse_code', selectedCode).order('location_code')
+      const { data: m } = await ctx.supabase.from('location_warehouse_map').select('*').eq('warehouse_code', selectedCode).order('location_code')
       maps = m || []
     }
 
@@ -1780,9 +1725,7 @@ async function renderWh(v) {
       const name = document.getElementById('w-name').value.trim()
       const region = document.getElementById('w-region').value.trim() || null
       if (!code || !name) return
-      const { error } = await ctx.supabase.from('warehouse').insert({
-        warehouse_code: code, warehouse_name: name, region
-      })
+      const { error } = await ctx.supabase.from('warehouse').insert({ warehouse_code: code, warehouse_name: name, region })
       if (error) {
         document.getElementById('w-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
         return
@@ -1797,21 +1740,12 @@ async function renderWh(v) {
       const code = document.getElementById('l-code').value.trim()
       const name = document.getElementById('l-name').value.trim() || null
       if (!code) return
-      const { error } = await ctx.supabase.from('location_config').insert({
-        warehouse_code: selectedCode,
-        location_code: code,
-        location_name: name,
-        created_by: ctx.operatorName
-      })
+      const { error } = await ctx.supabase.from('location_config').insert({ warehouse_code: selectedCode, location_code: code, location_name: name, created_by: ctx.operatorName })
       if (error) {
         document.getElementById('l-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
         return
       }
-      await ctx.supabase.from('location_warehouse_map').insert({
-        location_code: code,
-        warehouse_code: selectedCode,
-        warehouse_name: sel?.warehouse_name || null
-      })
+      await ctx.supabase.from('location_warehouse_map').insert({ location_code: code, warehouse_code: selectedCode, warehouse_name: sel?.warehouse_name || null })
       await logOp('create_location', '仓位 ' + selectedCode + '/' + code)
       document.getElementById('l-msg').innerHTML = ctx.msg('已新增', true)
       renderAll()
@@ -1821,8 +1755,7 @@ async function renderWh(v) {
       b.onclick = async () => {
         const id = b.dataset.delWh
         const code = b.dataset.code
-        const { data: cnt } = await ctx.supabase.from('location_config')
-          .select('id').eq('warehouse_code', code).limit(1)
+        const { data: cnt } = await ctx.supabase.from('location_config').select('id').eq('warehouse_code', code).limit(1)
         if (cnt && cnt.length) return alert('该仓库下还有仓位，请先删除仓位')
         if (!confirm('确定删除该仓库？')) return
         const { error } = await ctx.supabase.from('warehouse').delete().eq('id', id)
@@ -1892,6 +1825,7 @@ async function renderStore(v) {
     }
   })
 }
+
 // ===== 5.3 商品主数据 =====
 async function renderProduct(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
@@ -1958,7 +1892,11 @@ async function renderProduct(v) {
 
   const loadProducts = async (page = 0) => {
     currentPage = page
-    document.getElementById('prod-body').innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>'
+    
+    // ★ 修复 Cannot set properties of null
+    const prodBody = document.getElementById('prod-body')
+    if (!prodBody) return
+    prodBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>'
     
     let q = ctx.supabase.from('product_master').select('*', { count: 'exact' })
     if (keyword) {
@@ -1973,12 +1911,16 @@ async function renderProduct(v) {
     q = q.order('id', { ascending: false }).range(from, to)
 
     const { data, error, count } = await q
+    
+    const currentProdBody = document.getElementById('prod-body')
+    if (!currentProdBody) return
+    
     if (error) {
-      document.getElementById('prod-body').innerHTML = `<tr><td colspan="8" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
+      currentProdBody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
       return
     }
 
-    document.getElementById('prod-body').innerHTML = (data || []).map(r => {
+    currentProdBody.innerHTML = (data || []).map(r => {
       const isSpecValid = r.spec && /^1\*1\*[1-9]\d*$/.test(String(r.spec).trim())
       const isSizeValid = r.length > 0 && r.width > 0 && r.height > 0 && r.weight > 0
       const isNameValid = r.product_name && r.product_name.trim() !== ''
@@ -2000,13 +1942,15 @@ async function renderProduct(v) {
 
     const totalPages = Math.ceil((count || 0) / pageSize)
     const pageEl = document.getElementById('prod-pagination')
-    pageEl.innerHTML = `
-      <span style="font-size:13px;color:#666;">共 ${count || 0} 条记录，第 ${totalPages === 0 ? 0 : page + 1} / ${totalPages} 页</span>
-      <button class="secondary small" id="btn-page-prev" ${page === 0 ? 'disabled' : ''} style="${page === 0 ? 'opacity:0.5;' : ''}">上一页</button>
-      <button class="secondary small" id="btn-page-next" ${page >= totalPages - 1 ? 'disabled' : ''} style="${page >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
-    `
-    document.getElementById('btn-page-prev').onclick = () => { if (page > 0) loadProducts(page - 1) }
-    document.getElementById('btn-page-next').onclick = () => { if (page < totalPages - 1) loadProducts(page + 1) }
+    if (pageEl) {
+      pageEl.innerHTML = `
+        <span style="font-size:13px;color:#666;">共 ${count || 0} 条记录，第 ${totalPages === 0 ? 0 : page + 1} / ${totalPages} 页</span>
+        <button class="secondary small" id="btn-page-prev" ${page === 0 ? 'disabled' : ''} style="${page === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+        <button class="secondary small" id="btn-page-next" ${page >= totalPages - 1 ? 'disabled' : ''} style="${page >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+      `
+      document.getElementById('btn-page-prev').onclick = () => { if (page > 0) loadProducts(page - 1) }
+      document.getElementById('btn-page-next').onclick = () => { if (page < totalPages - 1) loadProducts(page + 1) }
+    }
     
     v.querySelectorAll('[data-del]').forEach(b => {
       b.onclick = async () => {
@@ -2293,13 +2237,9 @@ async function renderBypass(v) {
 
 // ================= 6. 日志 =================
 async function renderLogs(v) {
-  const { data: ops } = await ctx.supabase.from('operation_log')
-    .select('*').order('id', { ascending: false }).limit(200)
-  const { data: edits } = await ctx.supabase.from('vendor_edit_log')
-    .select('*').order('id', { ascending: false }).limit(200)
-  
-  const { data: batches } = await ctx.supabase.from('export_batch_detail')
-    .select('*').order('id', { ascending: false }).limit(200)
+  const { data: ops } = await ctx.supabase.from('operation_log').select('*').order('id', { ascending: false }).limit(200)
+  const { data: edits } = await ctx.supabase.from('vendor_edit_log').select('*').order('id', { ascending: false }).limit(200)
+  const { data: batches } = await ctx.supabase.from('export_batch_detail').select('*').order('id', { ascending: false }).limit(200)
 
   v.innerHTML = `
     <div class="tabs" id="log-tabs">
@@ -2517,7 +2457,6 @@ async function renderSys(v) {
       <div id="cleanup-msg"></div>
     </div>
     
-    <!-- 钉钉质检报告推送配置 -->
     <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #1677ff;">
       <h2>钉钉质检报告推送（仅超管）</h2>
       <p style="font-size:12px;color:#666;margin:8px 0;">
@@ -2588,8 +2527,7 @@ async function renderSys(v) {
     const val = document.getElementById('c-val').value
     if (!key) return
     const { error } = await ctx.supabase.from('system_config')
-      .upsert({ config_key: key, config_value: val, updated_by: ctx.operatorName },
-              { onConflict: 'config_key' })
+      .upsert({ config_key: key, config_value: val, updated_by: ctx.operatorName }, { onConflict: 'config_key' })
     if (error) {
       document.getElementById('c-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
       return
@@ -2710,8 +2648,7 @@ async function renderBilling(v) {
   if (!isSuper()) { v.innerHTML = ctx.msg('仅超级管理员可访问', false); return }
 
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
-  const { data: dingRows } = await ctx.supabase.from('vendor_dingtalk')
-    .select('vendor_code', { count: 'exact', head: true })
+  const { data: dingRows } = await ctx.supabase.from('vendor_dingtalk').select('vendor_code', { count: 'exact', head: true })
 
   v.innerHTML = `
     <div class="card" style="box-shadow:none; padding:16px; margin:0;">
@@ -2797,8 +2734,7 @@ async function renderBilling(v) {
       let success = 0
       for (let i = 0; i < list.length; i += 100) {
         const chunk = list.slice(i, i + 100)
-        const { error } = await ctx.supabase.from('vendor_dingtalk')
-          .upsert(chunk, { onConflict: 'vendor_code' })
+        const { error } = await ctx.supabase.from('vendor_dingtalk').upsert(chunk, { onConflict: 'vendor_code' })
         if (error) throw error
         success += chunk.length
       }
@@ -2830,11 +2766,37 @@ async function renderBilling(v) {
     try {
       const srcName = `source/${crypto.randomUUID()}.xlsx`
       const tmplName = `template/${crypto.randomUUID()}.xlsx`
-      const { error: e1 } = await ctx.supabase.storage.from('billing_files').upload(srcName, srcFile)
-      if (e1) throw e1
-      const { error: e2 } = await ctx.supabase.storage.from('billing_files').upload(tmplName, tmplFile)
-      if (e2) throw e2
+      
+      const { data: { session } } = await ctx.supabase.auth.getSession()
+      
+      // 1. 获取 R2 预签名上传链接
+      msgEl.innerHTML = ctx.msg('获取 R2 上传凭证...', true)
+      const uploadRes = await fetch(`${ctx.SUPABASE_URL}/functions/v1/upload-billing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        body: JSON.stringify({ fileNames: [srcName, tmplName] })
+      })
+      if (!uploadRes.ok) throw new Error('获取 R2 上传凭证失败')
+      const { urls } = await uploadRes.json()
 
+      // 2. 前端直接 PUT 上传到 R2
+      msgEl.innerHTML = ctx.msg('正在上传文件到 R2...', true)
+      const [r1, r2] = await Promise.all([
+        fetch(urls[0].uploadUrl, { 
+          method: 'PUT', 
+          body: srcFile
+          // ★ 注意：千万别加 Content-Type，防签名校验失败
+        }),
+        fetch(urls[1].uploadUrl, { 
+          method: 'PUT', 
+          body: tmplFile
+          // ★ 千万别加 Content-Type
+        })
+      ])
+      if (!r1.ok || !r2.ok) throw new Error('上传到 R2 失败，请检查 R2 的 CORS 策略')
+
+      // 3. 写入数据库
+      msgEl.innerHTML = ctx.msg('创建处理批次...', true)
       const { data: batch, error: e3 } = await ctx.supabase.from('billing_batch').insert({
         month, warehouse_code: wh, source_file_url: srcName, template_file_url: tmplName,
         operator_name: ctx.operatorName, status: 'PENDING'
@@ -2847,9 +2809,9 @@ async function renderBilling(v) {
       let offset = 0
       let totalSuccess = 0, totalFailed = 0, total = 0
 
+      // 4. 循环调用云函数生成
       while (true) {
         msgEl.innerHTML = ctx.msg(`生成中... 已处理 ${offset} 个`, true)
-        const { data: { session } } = await ctx.supabase.auth.getSession()
         const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/generate-billing`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
