@@ -1,4 +1,4 @@
-// admin.js — 管理后台（含单据分页查询、真实操作人记录、财务对账）
+// admin.js — 管理后台（提报进度、单据管理、质检报告、厂商/物流商管理、基础数据、日志、系统配置）
 
 let ctx = null
 let operatorName = '未知'
@@ -32,7 +32,6 @@ export async function renderAdmin(view, context) {
       <button data-t="logistics">物流商管理</button>
       <button data-t="admins">管理员管理</button>
       <button data-t="base">基础数据</button>
-      <button data-t="billing">财务对账</button>
       <button data-t="logs">日志</button>
       <button data-t="sys">系统配置</button>
     `
@@ -80,13 +79,6 @@ export async function renderAdmin(view, context) {
 
 async function renderTab(key) {
   const v = document.getElementById('admin-view')
-
-  // ★ 超管专属模块守卫
-  if (key === 'billing' && !isSuper()) {
-    v.innerHTML = ctx.msg('仅超级管理员可访问', false)
-    return
-  }
-
   v.innerHTML = '<p>加载中...</p>'
   try {
     if (key === 'progress') return renderProgress(v)
@@ -96,7 +88,6 @@ async function renderTab(key) {
     if (key === 'logistics') return renderLogistics(v)
     if (key === 'admins') return renderAdmins(v)
     if (key === 'base') return renderBase(v)
-    if (key === 'billing') return renderBilling(v)
     if (key === 'logs') return renderLogs(v)
     if (key === 'sys') return renderSys(v)
   } catch (e) {
@@ -136,8 +127,7 @@ const ACTION_CN = {
   create_store: '新增门店', delete_store: '删除门店', create_product: '新增商品', delete_product: '删除商品',
   create_deadline: '新增提报时间段', delete_deadline: '删除提报时间段', create_holiday: '新增节假日', delete_holiday: '删除节假日',
   create_bypass: '新增强制放行', delete_bypass: '删除强制放行', save_cleanup_config: '修改清理配置',
-  save_system_config: '保存系统配置', delete_system_config: '删除系统配置', add_version: '新增版本记录',
-  import_dingtalk_webhook: '导入钉钉Webhook', create_billing_batch: '创建对账批次', generate_billing: '生成对账单', send_billing: '推送对账单'
+  save_system_config: '保存系统配置', delete_system_config: '删除系统配置', add_version: '新增版本记录'
 }
 
 // ================= 1. 提报进度 =================
@@ -174,6 +164,9 @@ async function renderProgress(v) {
     </div>`
 
   const render = () => {
+    const tbody = document.getElementById('p-body')
+    if (!tbody) return
+
     const kw = (document.getElementById('p-search').value || '').toLowerCase()
     const st = document.getElementById('p-status').value
     let list = data || []
@@ -185,7 +178,7 @@ async function renderProgress(v) {
     if (st === 'qc_uploaded') list = list.filter(r => qcSet.has(r.vendor_code))
     if (st === 'qc_missing') list = list.filter(r => !qcSet.has(r.vendor_code))
 
-    document.getElementById('p-body').innerHTML = list.map(r => {
+    tbody.innerHTML = list.map(r => {
       const hasQc = qcSet.has(r.vendor_code)
       return `<tr>
         <td>${r.vendor_code || ''}</td>
@@ -203,8 +196,10 @@ async function renderProgress(v) {
     }).join('') || '<tr><td colspan="11" style="text-align:center;color:#999;">无数据</td></tr>'
   }
 
-  document.getElementById('p-search').oninput = render
-  document.getElementById('p-status').onchange = render
+  const searchEl = document.getElementById('p-search')
+  const statusEl = document.getElementById('p-status')
+  if (searchEl) searchEl.oninput = render
+  if (statusEl) statusEl.onchange = render
   render()
 }
 
@@ -278,47 +273,127 @@ async function renderBills(v) {
     </div>
     <div id="admin-edit-bill-panel"></div>`
 
+  // ==========================================
+  // ★ 核心修改：纯前端分页导出 & 强制置空商品标识
+  // ==========================================
   const doExport = async (submitterType = null, isDelegate = false) => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
     const end_date = document.getElementById('exp-end').value
     if (!start_date || !end_date) return alert('请选择完整的开始和结束日期')
     
+    const include_exported = document.getElementById('exp-include')?.checked || false
     const btn = isDelegate ? document.getElementById('btn-export-admin') : document.getElementById('btn-export')
     const originalText = btn.innerText
     btn.disabled = true
-    btn.innerText = '导出中...'
+    btn.innerText = '查询数据中...'
+    const msgEl = document.getElementById('export-msg')
+    msgEl.innerHTML = '<span style="color:#1677ff;font-size:13px;">正在拉取数据，请稍候...</span>'
 
-    const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/export-bills`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-      body: JSON.stringify({
-        warehouse_code, start_date, end_date,
-        include_exported: document.getElementById('exp-include')?.checked || false,
-        submitter_type: submitterType,
-        operator_name: ctx.operatorName || 'admin'
-      })
-    })
-    
-    btn.disabled = false
-    btn.innerText = originalText
+    try {
+      // 1. 分页循环拉取数据 (突破1000条限制)
+      let allBills = []
+      let page = 0
+      const pageSize = 1000
+      let hasMore = true
 
-    if (!res.ok) {
-      const txt = await res.text()
-      let msgText = '导出失败'
-      try { const j = JSON.parse(txt); msgText = ctx.translateError(j.error || '导出失败') } catch (e) {}
-      document.getElementById('export-msg').innerHTML = ctx.msg(msgText, false)
-      return
+      while (hasMore) {
+        let q = ctx.supabase.from('bill_order').select('*')
+          .eq('warehouse_code', warehouse_code)
+          .gte('created_at', start_date + 'T00:00:00+08:00')
+          .lte('created_at', end_date + 'T23:59:59+08:00')
+          .order('id', { ascending: true })
+          .range(page * pageSize, (page + 1) * pageSize - 1)
+        
+        if (!include_exported) q = q.eq('exported', false)
+        if (submitterType) q = q.eq('submitter_type', submitterType)
+        
+        const { data, error } = await q
+        if (error) throw error
+        
+        if (data && data.length > 0) {
+          allBills = allBills.concat(data)
+          page++
+          msgEl.innerHTML = `<span style="color:#1677ff;font-size:13px;">已拉取 ${allBills.length} 条数据...</span>`
+          if (data.length < pageSize) hasMore = false
+        } else {
+          hasMore = false
+        }
+      }
+
+      if (allBills.length === 0) throw new Error('没有可导出的单据')
+
+      msgEl.innerHTML = `<span style="color:#1677ff;font-size:13px;">正在生成 Excel (共 ${allBills.length} 条)...</span>`
+
+      // 2. 区分入库/出库
+      const IN_TYPES = ['VMI入库', 'DSP入库', '济转西RT(入库)', '济转西DSP(入库)']
+      const OUT_TYPES = ['VMI出库', 'DSP出库', '济转西RT(留库)', '济转西RT(越库)', '济转西DSP(留库)', '济转西DSP(越库)']
+      
+      const inBills = allBills.filter(b => IN_TYPES.includes(b.bill_type))
+      const outBills = allBills.filter(b => OUT_TYPES.includes(b.bill_type))
+
+      const IN_HEADERS = ['来源单号','单据类型','供应商代码','货主代码','仓位代码','物流模式','商品代码','商品标识','包装规格','数量','单价','订单到效日期','到货日期','整单加工','商品备注','备注','分单标识','分单描述','皮重维度','皮重值','预约线路']
+      const OUT_HEADERS = ['配单类型','货主代码','门店代码','物流方式','仓位代码','到效日期','配货日期','备注','来源单号','入库订单单号','商品代码','商品标识','包装规格','数量','单价','商品备注','组别','分单标识','分单描述']
+      
+      const fmtDate = (d) => { if(!d) return ''; const s=String(d); return s.includes('T')?s.slice(0,10):(s.includes(' ')?s.slice(0,10):s) }
+
+      // ★ 注意：下标 7 和下标 11 的位置，直接写死为 null，彻底拦截脏数据
+      const inRows = inBills.map(b => [
+        b.source_no || '', b.bill_type || '', b.vendor_code || '', b.owner_code || '',
+        b.location_code || '', b.logistics_mode || '', b.product_code || '',
+        null, // ★ 强制置空「商品标识」
+        b.spec || '', b.quantity ?? '', b.price ?? '',
+        fmtDate(b.effective_date), fmtDate(b.arrival_date), b.whole_process || '',
+        b.product_remark || b.product_code || '无', b.remark || '', b.split_flag || '',
+        b.split_desc || '', b.tare_dimension || null, b.tare_value ?? null, b.route || ''
+      ])
+
+      const outRows = outBills.map(b => [
+        b.bill_type || '', b.owner_code || '', b.store_code || '',
+        b.logistics_mode || '', b.location_code || '',
+        fmtDate(b.effective_date), fmtDate(b.pick_date), b.remark || '',
+        b.source_no || '', b.inbound_order_no || '', b.product_code || '',
+        null, // ★ 强制置空「商品标识」
+        b.spec || '', b.quantity ?? '', b.price ?? '',
+        b.product_remark || b.product_code || '无', b.group_name || '', b.split_flag || '', b.split_desc || ''
+      ])
+
+      // 3. 前端本地生成 Excel 并触发下载
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([IN_HEADERS, ...inRows]), '入库')
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([OUT_HEADERS, ...outRows]), '出库')
+      
+      const batchNo = `EXP${Date.now()}`
+      XLSX.writeFile(wb, `${isDelegate ? '代报导出' : 'export'}_${batchNo}.xlsx`)
+
+      msgEl.innerHTML = ctx.msg(isDelegate ? '代报数据导出成功' : '导出成功', true)
+
+      // 4. 异步批量更新状态（不阻塞用户下载）
+      const ids = allBills.map(b => b.id)
+      const updateBatchSize = 500
+      for (let i = 0; i < ids.length; i += updateBatchSize) {
+        const batchIds = ids.slice(i, i + updateBatchSize)
+        ctx.supabase.from('bill_order').update({
+          exported: true, exported_at: new Date().toISOString(), export_batch: batchNo
+        }).in('id', batchIds).then() // 后台静默执行
+      }
+      
+      ctx.supabase.from('export_batch').insert({
+        batch_no: batchNo, warehouse_code, start_date, end_date, bill_type: 'ALL',
+        count: allBills.length, operator: ctx.operatorName || 'admin'
+      }).then()
+
+      await logOp(isDelegate ? 'export_bills_admin' : 'export_bills', (isDelegate ? '导出代报 ' : '导出 ') + warehouse_code, { start_date, end_date })
+      
+      if (typeof search === 'function') search(0)
+
+    } catch (err) {
+      console.error('导出异常:', err)
+      msgEl.innerHTML = ctx.msg(`导出失败：${err.message}`, false)
+    } finally {
+      btn.disabled = false
+      btn.innerText = originalText
     }
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = isDelegate ? `代报导出_${Date.now()}.xlsx` : `export_${Date.now()}.xlsx`
-    a.click()
-    document.getElementById('export-msg').innerHTML = ctx.msg(isDelegate ? '代报数据导出成功' : '导出成功', true)
-    await logOp(isDelegate ? 'export_bills_admin' : 'export_bills', (isDelegate ? '导出代报 ' : '导出 ') + warehouse_code, { start_date, end_date })
   }
 
   document.getElementById('btn-export').onclick = () => doExport(null, false)
@@ -329,7 +404,10 @@ async function renderBills(v) {
 
   const search = async (page = 0) => {
     currentPage = page;
-    document.getElementById('query-result-box').innerHTML = `
+    const resultBox = document.getElementById('query-result-box')
+    if (!resultBox) return
+    
+    resultBox.innerHTML = `
       <table>
         <tr><th>ID</th><th>来源单号</th><th>类型</th><th>厂编</th><th>厂商名称</th><th>仓库</th><th>商品</th><th>数量</th><th>已导出</th><th>时间</th><th>操作</th></tr>
         <tbody id="b-body"><tr><td colspan="11" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
@@ -367,7 +445,10 @@ async function renderBills(v) {
        return
     }
 
-    document.getElementById('b-body').innerHTML = (data||[]).map(b => `<tr>
+    const bBody = document.getElementById('b-body')
+    if (!bBody) return 
+
+    bBody.innerHTML = (data||[]).map(b => `<tr>
       <td>${b.id}</td><td>${b.source_no||''}</td><td>${b.bill_type||''}</td>
       <td>${b.vendor_code||''}</td><td>${vMap[b.vendor_code] || ''}</td>
       <td>${b.warehouse_name||b.warehouse_code||''}</td>
@@ -466,7 +547,8 @@ async function renderBills(v) {
           ;(async () => {
             try {
               const { data: { session } } = await ctx.supabase.auth.getSession()
-              const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-bill`, {
+              // 强制走代理
+              const res = await fetch(`https://api.mahui.pw/functions/v1/delete-bill`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -554,6 +636,7 @@ async function renderBills(v) {
 
   search(0)
 }
+
 // ================= 2.5 质检报告管理 =================
 async function renderQCAdmin(v) {
   const { data: reports } = await ctx.supabase.from('qc_report')
@@ -596,7 +679,10 @@ async function renderQCAdmin(v) {
              (r.report_name || '').toLowerCase().includes(kw)
     })
 
-    document.getElementById('qc-body').innerHTML = filtered.map(r => {
+    const qcBody = document.getElementById('qc-body')
+    if (!qcBody) return
+
+    qcBody.innerHTML = filtered.map(r => {
       const sizeMB = ((r.file_size || 0) / 1024 / 1024).toFixed(2)
       const timeStr = new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19)
       return `<tr>
@@ -640,7 +726,8 @@ async function renderQCAdmin(v) {
 
         try {
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-qc`, {
+          // 强制走代理
+          const res = await fetch(`https://api.mahui.pw/functions/v1/delete-qc`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -677,7 +764,8 @@ async function renderQCAdmin(v) {
     })
   }
 
-  document.getElementById('qc-search').oninput = (e) => renderTable(e.target.value)
+  const searchEl = document.getElementById('qc-search')
+  if (searchEl) searchEl.oninput = (e) => renderTable(e.target.value)
 
   document.getElementById('btn-qc-export').onclick = () => {
     const listToExport = reports.map(r => ({
@@ -779,9 +867,12 @@ async function renderVendors(v) {
       return matchCode || matchName || matchContact || matchPhone || matchWh
     })
 
-    document.getElementById('v-total-count').innerText = kw ? `${filtered.length}/${vps.length}` : vps.length
+    const totalEl = document.getElementById('v-total-count')
+    if (totalEl) totalEl.innerText = kw ? `${filtered.length}/${vps.length}` : vps.length
 
     const tbody = document.getElementById('v-table-body')
+    if (!tbody) return
+    
     tbody.innerHTML = filtered.map(p => `<tr>
       <td>${p.vendor_code||''}</td>
       <td>${p.vendor_name||''}</td>
@@ -800,7 +891,6 @@ async function renderVendors(v) {
 
     bindTableActions()
   }
-
   const bindTableActions = () => {
     v.querySelectorAll('button[data-act]').forEach(b => {
       b.onclick = async () => {
@@ -853,7 +943,7 @@ async function renderVendors(v) {
           const p = vps.find(x => x.id === id)
           if (!confirm(`确定${action}该厂商？`)) return
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
+          const res = await fetch(`https://api.mahui.pw/functions/v1/toggle-user-status`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -879,7 +969,7 @@ async function renderVendors(v) {
           if (input === null) return
           const codes = input.split(',').map(s => s.trim()).filter(Boolean)
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-warehouse`, {
+          const res = await fetch(`https://api.mahui.pw/functions/v1/grant-warehouse`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -902,7 +992,7 @@ async function renderVendors(v) {
           const pwd = prompt('输入新密码（至少 6 位）')
           if (!pwd || pwd.length < 6) return alert('密码太短')
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/reset-password`, {
+          const res = await fetch(`https://api.mahui.pw/functions/v1/reset-password`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -924,7 +1014,7 @@ async function renderVendors(v) {
           if (!confirm(`确定删除厂商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 厂商档案\n- 仓库授权\n\n此操作不可撤销！`)) return
 
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-vendor`, {
+          const res = await fetch(`https://api.mahui.pw/functions/v1/delete-vendor`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -948,15 +1038,17 @@ async function renderVendors(v) {
 
   const searchInput = document.getElementById('v-search')
   const clearBtn = document.getElementById('btn-v-clear')
-  searchInput.oninput = (e) => {
-    const val = e.target.value
-    clearBtn.style.display = val ? 'block' : 'none'
-    renderVendorTable(val)
-  }
-  clearBtn.onclick = () => {
-    searchInput.value = ''
-    clearBtn.style.display = 'none'
-    renderVendorTable('')
+  if (searchInput && clearBtn) {
+    searchInput.oninput = (e) => {
+      const val = e.target.value
+      clearBtn.style.display = val ? 'block' : 'none'
+      renderVendorTable(val)
+    }
+    clearBtn.onclick = () => {
+      searchInput.value = ''
+      clearBtn.style.display = 'none'
+      renderVendorTable('')
+    }
   }
   renderVendorTable()
 
@@ -973,7 +1065,7 @@ async function renderVendors(v) {
       return document.getElementById('vendor-msg').innerHTML = ctx.msg('厂编、名称、联系人、手机号、密码为必填', false)
     }
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-vendor`, {
+    const res = await fetch(`https://api.mahui.pw/functions/v1/create-vendor`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1061,7 +1153,7 @@ async function renderVendors(v) {
           const item = list[i]
           msgEl.innerHTML = ctx.msg(`导入中（${i+1} / ${list.length}）：${item.vendor_code} ${item.vendor_name}...`, true)
           try {
-            const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-vendor`, {
+            const res = await fetch(`https://api.mahui.pw/functions/v1/create-vendor`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -1124,6 +1216,7 @@ async function renderVendors(v) {
     }
   }
 }
+
 // ================= 3.5 物流商管理 =================
 function buildVendorPicker(rootId, allVendors, initialSelected = []) {
   const root = document.getElementById(rootId)
@@ -1158,6 +1251,7 @@ function buildVendorPicker(rootId, allVendors, initialSelected = []) {
 
     const input = document.getElementById(`${rootId}-input`)
     const suggest = document.getElementById(`${rootId}-suggest`)
+    if (!input || !suggest) return
 
     function doSearch() {
       const kw = input.value.trim()
@@ -1286,7 +1380,7 @@ async function renderLogistics(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-logistics`, {
+    const res = await fetch(`https://api.mahui.pw/functions/v1/create-logistics`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1339,7 +1433,7 @@ async function renderLogistics(v) {
         document.getElementById('btn-modal-save').onclick = async () => {
           const finalCodes = mvPicker.getSelected()
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/grant-logistics-vendors`, {
+          const res = await fetch(`https://api.mahui.pw/functions/v1/grant-logistics-vendors`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1365,7 +1459,7 @@ async function renderLogistics(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/reset-password`, {
+        const res = await fetch(`https://api.mahui.pw/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1386,7 +1480,7 @@ async function renderLogistics(v) {
         if (!confirm(`确定删除物流商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 物流商档案\n- 负责厂商关联\n\n此操作不可撤销！`)) return
 
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/delete-logistics`, {
+        const res = await fetch(`https://api.mahui.pw/functions/v1/delete-logistics`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1485,7 +1579,7 @@ async function renderAdmins(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/create-admin`, {
+    const res = await fetch(`https://api.mahui.pw/functions/v1/create-admin`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1561,7 +1655,7 @@ async function renderAdmins(v) {
         if (id === ctx.currentUser.id) return alert('不能禁用自己的账号')
         if (!confirm(`确定${action}该管理员？`)) return
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/toggle-user-status`, {
+        const res = await fetch(`https://api.mahui.pw/functions/v1/toggle-user-status`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1584,7 +1678,7 @@ async function renderAdmins(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/reset-password`, {
+        const res = await fetch(`https://api.mahui.pw/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1892,8 +1986,6 @@ async function renderProduct(v) {
 
   const loadProducts = async (page = 0) => {
     currentPage = page
-    
-    // ★ 修复 Cannot set properties of null
     const prodBody = document.getElementById('prod-body')
     if (!prodBody) return
     prodBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>'
@@ -2076,7 +2168,7 @@ async function renderProduct(v) {
     }
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/import-products`, {
+    const res = await fetch(`https://api.mahui.pw/functions/v1/import-products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
       body: JSON.stringify({ warehouse_code: document.getElementById('p-wh').value, products })
@@ -2099,6 +2191,7 @@ async function renderProduct(v) {
 
   loadProducts(0)
 }
+
 // ===== 5.4 提报时间段 =====
 async function renderDeadline(v) {
   const { data } = await ctx.supabase.from('deadline_config').select('*').order('id')
@@ -2378,17 +2471,13 @@ const CONFIG_CN = {
   release_date: '发布日期',
   maintenance_mode: '维护模式',
   cleanup_days: '清理保留天数',
-  cleanup_time: '清理执行时间',
-  dingtalk_qc_webhook: '钉钉推送Webhook',
-  dingtalk_qc_secret: '钉钉推送加签',
-  dingtalk_qc_push_time: '钉钉推送执行时间'
+  cleanup_time: '清理执行时间'
 }
 
 function formatConfigValue(key, val) {
   if (key === 'maintenance_mode') return val === 'true' ? '开启' : '关闭'
   if (key === 'cleanup_days') return (val || '') + ' 天'
   if (key === 'cleanup_time') return '每天 ' + (val || '')
-  if (key === 'dingtalk_qc_push_time') return '每天 ' + (val || '')
   return val || ''
 }
 
@@ -2457,32 +2546,6 @@ async function renderSys(v) {
       <div id="cleanup-msg"></div>
     </div>
     
-    <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #1677ff;">
-      <h2>钉钉质检报告推送（仅超管）</h2>
-      <p style="font-size:12px;color:#666;margin:8px 0;">
-        每天定时将当天的质检报告汇总推送到钉钉群（支持多个群，换行输入）。
-      </p>
-      <div class="row">
-        <div style="flex:2;">
-          <label>Webhook 地址（多个群请换行输入）</label>
-          <textarea id="dingtalk-webhook" rows="3" placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxx&#10;https://oapi.dingtalk.com/robot/send?access_token=yyy" style="width:100%; font-family:monospace;">${cfgMap['dingtalk_qc_webhook'] || ''}</textarea>
-        </div>
-        <div style="flex:1;">
-          <label>加签密钥（与上方一一对应换行）</label>
-          <textarea id="dingtalk-secret" rows="3" placeholder="SECxxx&#10;SECyyy" style="width:100%; font-family:monospace;">${cfgMap['dingtalk_qc_secret'] || ''}</textarea>
-        </div>
-        <div style="flex:0 0 150px;">
-          <label>每日执行时间</label>
-          <input type="time" id="dingtalk-push-time" value="${cfgMap['dingtalk_qc_push_time'] || '08:00'}" style="width:100%;" />
-        </div>
-      </div>
-      <div style="display:flex; gap:12px; margin-top:8px;">
-        <button id="btn-save-dingtalk" ${isSuper() ? '' : 'disabled'}>保存配置</button>
-        <button class="secondary" id="btn-test-dingtalk" ${isSuper() ? '' : 'disabled'}>发送测试消息</button>
-      </div>
-      <div id="dingtalk-msg" style="margin-top:12px;"></div>
-    </div>
-
     <div class="card" style="box-shadow:none;padding:0;">
       <details>
         <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">版本历史（点击展开）</summary>
@@ -2557,64 +2620,6 @@ async function renderSys(v) {
     setTimeout(() => renderTab('sys'), 800)
   }
 
-  document.getElementById('btn-save-dingtalk').onclick = async () => {
-    if (!isSuper()) return
-    const webhook = document.getElementById('dingtalk-webhook').value.trim()
-    const secret = document.getElementById('dingtalk-secret').value.trim()
-    const msgEl = document.getElementById('dingtalk-msg')
-    
-    msgEl.innerHTML = ctx.msg('保存中...', true)
-
-    const upsert = async (key, val) => {
-      await ctx.supabase.from('system_config').upsert({ config_key: key, config_value: val, updated_by: ctx.operatorName }, { onConflict: 'config_key' })
-    }
-    await upsert('dingtalk_qc_webhook', webhook)
-    await upsert('dingtalk_qc_secret', secret)
-    
-    const pushTime = document.getElementById('dingtalk-push-time').value || '08:00'
-    await upsert('dingtalk_qc_push_time', pushTime)
-    
-    const hh = parseInt(pushTime.split(':')[0], 10)
-    const mm = parseInt(pushTime.split(':')[1], 10)
-    const utcH = (hh - 8 + 24) % 24
-    const cronExp = `${mm} ${utcH} * * *`
-
-    await ctx.supabase.rpc('reschedule_dingtalk_qc_push', { cron_expr: cronExp })
-
-    await logOp('save_system_config', '保存钉钉配置', { time: pushTime })
-    msgEl.innerHTML = ctx.msg(`配置已保存，定时推送时间已更新为每天 ${pushTime}`, true)
-  }
-
-  document.getElementById('btn-test-dingtalk').onclick = async () => {
-    if (!isSuper()) return
-    const btn = document.getElementById('btn-test-dingtalk')
-    const msgEl = document.getElementById('dingtalk-msg')
-    
-    btn.disabled = true
-    btn.innerText = '发送中...'
-    msgEl.innerHTML = ctx.msg('正在请求云函数发送测试消息...', true)
-
-    try {
-      const { data: { session } } = await ctx.supabase.auth.getSession()
-      const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/daily-qc-push?test=1`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${session.access_token}` }
-      })
-      
-      const json = await res.json()
-      if (res.ok) {
-        msgEl.innerHTML = ctx.msg('测试消息已发送！请去群里查看', true)
-      } else {
-        msgEl.innerHTML = ctx.msg('发送失败：' + (json.error || '未知错误'), false)
-      }
-    } catch (e) {
-      msgEl.innerHTML = ctx.msg('网络错误：' + e.message, false)
-    }
-    
-    btn.disabled = false
-    btn.innerText = '发送测试消息'
-  }
-
   document.getElementById('btn-v-add').onclick = async () => {
     const version = document.getElementById('v-version').value.trim()
     if (!version) return
@@ -2641,268 +2646,4 @@ async function renderSys(v) {
       renderTab('sys')
     }
   })
-}
-
-// ================= 8. 财务对账（仅超管）=================
-async function renderBilling(v) {
-  if (!isSuper()) { v.innerHTML = ctx.msg('仅超级管理员可访问', false); return }
-
-  const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
-  const { data: dingRows } = await ctx.supabase.from('vendor_dingtalk').select('vendor_code', { count: 'exact', head: true })
-
-  v.innerHTML = `
-    <div class="card" style="box-shadow:none; padding:16px; margin:0;">
-      <h2 style="margin-bottom:12px; font-size:16px;">钉钉 Webhook 配置</h2>
-      <p style="font-size:12px;color:#666;margin-bottom:8px;">
-        已导入 <strong>${dingRows?.length ?? 0}</strong> 个厂商的 Webhook。
-        来源：模板里的「厂商清单」工作表（列：厂商编码 / 厂商名称 / 钉钉群Webhook地址）。
-      </p>
-      <div class="row">
-        <div style="flex:2;">
-          <input id="bl-webhook-file" type="file" accept=".xlsx,.xls" />
-        </div>
-        <button id="btn-import-webhook" style="flex:0 0 140px;">导入 Webhook</button>
-      </div>
-      <div id="webhook-msg"></div>
-    </div>
-
-    <div class="card" style="box-shadow:none; padding:16px; margin:16px 0 0 0;">
-      <h2 style="margin-bottom:12px; font-size:16px;">生成对账单</h2>
-      <div class="row">
-        <div>
-          <label>对账月份 (YYYY-MM)</label>
-          <input id="bl-month" placeholder="2026-09" />
-        </div>
-        <div>
-          <label>仓库</label>
-          <select id="bl-wh">${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-        </div>
-        <div>
-          <label>生成范围</label>
-          <select id="bl-mode">
-            <option value="withData">只生成有业务量的厂商（推荐）</option>
-            <option value="all">生成全部厂商（含 0 金额）</option>
-          </select>
-        </div>
-      </div>
-      <div class="row">
-        <div><label>源数据 Excel</label><input id="bl-src-file" type="file" accept=".xlsx" /></div>
-        <div><label>模板 Excel</label><input id="bl-tmpl-file" type="file" accept=".xlsx" /></div>
-      </div>
-      <button id="btn-gen-billing" style="margin-top:16px;">开始生成</button>
-      <div id="bl-gen-msg"></div>
-    </div>
-
-    <div class="card" style="box-shadow:none; padding:16px; margin:16px 0 0 0;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <h2 style="margin:0;">对账结果</h2>
-        <div style="display:flex; gap:8px;">
-          <input id="bl-search" placeholder="搜索厂编/厂商名" style="width:220px; margin:0;" />
-          <button class="secondary small" id="btn-refresh-billing">刷新</button>
-        </div>
-      </div>
-      <div class="scroll" style="max-height: calc(100vh - 500px);">
-        <table>
-          <tr><th>批次</th><th>厂编</th><th>厂商名称</th><th>含税</th><th>未税</th><th>状态</th><th>操作</th></tr>
-          <tbody id="bl-result-body"></tbody>
-        </table>
-      </div>
-    </div>`
-
-  // ===== 导入 Webhook =====
-  document.getElementById('btn-import-webhook').onclick = async () => {
-    const file = document.getElementById('bl-webhook-file').files[0]
-    const msgEl = document.getElementById('webhook-msg')
-    if (!file) return msgEl.innerHTML = ctx.msg('请选择 Excel 文件', false)
-
-    msgEl.innerHTML = ctx.msg('解析导入中...', true)
-    try {
-      const buf = await file.arrayBuffer()
-      const wb = XLSX.read(buf)
-      const ws = wb.Sheets['厂商清单']
-      if (!ws) throw new Error('Excel 里没有「厂商清单」工作表')
-
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
-      const list = rows.map(r => ({
-        vendor_code: String(r['厂商编码'] || r['vendor_code'] || '').trim(),
-        vendor_name: String(r['厂商名称'] || r['vendor_name'] || '').trim(),
-        webhook:     String(r['钉钉群Webhook地址'] || r['webhook'] || '').trim()
-      })).filter(x => x.vendor_code && x.webhook)
-
-      if (!list.length) throw new Error('没有解析到有效数据（需含「厂商编码」「钉钉群Webhook地址」列）')
-
-      let success = 0
-      for (let i = 0; i < list.length; i += 100) {
-        const chunk = list.slice(i, i + 100)
-        const { error } = await ctx.supabase.from('vendor_dingtalk').upsert(chunk, { onConflict: 'vendor_code' })
-        if (error) throw error
-        success += chunk.length
-      }
-
-      await logOp('import_dingtalk_webhook', '导入钉钉 Webhook', { total: list.length, success })
-      msgEl.innerHTML = ctx.msg(`导入成功：${success} 条`, true)
-      setTimeout(() => renderBilling(v), 800)
-    } catch (e) {
-      msgEl.innerHTML = ctx.msg('导入失败：' + e.message, false)
-    }
-  }
-
-  // ===== 生成对账单 =====
-  document.getElementById('btn-gen-billing').onclick = async () => {
-    const month = document.getElementById('bl-month').value.trim()
-    const wh = document.getElementById('bl-wh').value
-    const mode = document.getElementById('bl-mode').value
-    const srcFile = document.getElementById('bl-src-file').files[0]
-    const tmplFile = document.getElementById('bl-tmpl-file').files[0]
-    const msgEl = document.getElementById('bl-gen-msg')
-
-    if (!/^\d{4}-\d{2}$/.test(month)) return msgEl.innerHTML = ctx.msg('月份格式应为 YYYY-MM', false)
-    if (!srcFile || !tmplFile) return msgEl.innerHTML = ctx.msg('请选择源数据和模板文件', false)
-
-    const btn = document.getElementById('btn-gen-billing')
-    btn.disabled = true; btn.innerText = '上传中...'
-    msgEl.innerHTML = ctx.msg('正在上传文件...', true)
-
-    try {
-      const srcName = `source/${crypto.randomUUID()}.xlsx`
-      const tmplName = `template/${crypto.randomUUID()}.xlsx`
-      
-      const { data: { session } } = await ctx.supabase.auth.getSession()
-      
-      // 1. 获取 R2 预签名上传链接
-      msgEl.innerHTML = ctx.msg('获取 R2 上传凭证...', true)
-      const uploadRes = await fetch(`https://api.mahui.pw/functions/v1/upload-billing`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-        body: JSON.stringify({ fileNames: [srcName, tmplName] })
-      })
-      if (!uploadRes.ok) throw new Error('获取 R2 上传凭证失败')
-      const { urls } = await uploadRes.json()
-
-      // 2. 前端直接 PUT 上传到 R2
-      msgEl.innerHTML = ctx.msg('正在上传文件到 R2...', true)
-      const [r1, r2] = await Promise.all([
-        fetch(urls[0].uploadUrl, { 
-          method: 'PUT', 
-          body: srcFile
-          // ★ 注意：千万别加 Content-Type，防签名校验失败
-        }),
-        fetch(urls[1].uploadUrl, { 
-          method: 'PUT', 
-          body: tmplFile
-          // ★ 千万别加 Content-Type
-        })
-      ])
-      if (!r1.ok || !r2.ok) throw new Error('上传到 R2 失败，请检查 R2 的 CORS 策略')
-
-      // 3. 写入数据库
-      msgEl.innerHTML = ctx.msg('创建处理批次...', true)
-      const { data: batch, error: e3 } = await ctx.supabase.from('billing_batch').insert({
-        month, warehouse_code: wh, source_file_url: srcName, template_file_url: tmplName,
-        operator_name: ctx.operatorName, status: 'PENDING'
-      }).select().single()
-      if (e3) throw e3
-
-      await logOp('create_billing_batch', '创建对账批次 ' + batch.id, { month, mode })
-
-      const limit = 20
-      let offset = 0
-      let totalSuccess = 0, totalFailed = 0, total = 0
-
-      // 4. 循环调用云函数生成
-      while (true) {
-        msgEl.innerHTML = ctx.msg(`生成中... 已处理 ${offset} 个`, true)
-        const res = await fetch(`https://api.mahui.pw/functions/v1/generate-billing`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-          body: JSON.stringify({ batch_id: batch.id, source_url: srcName, template_url: tmplName, month, mode, offset, limit })
-        })
-        const json = await res.json()
-        if (!res.ok) throw new Error(json.error || '云函数调用失败')
-
-        totalSuccess += json.success
-        totalFailed += json.failed
-        total = json.total
-        offset += limit
-        if (json.done) break
-      }
-
-      await logOp('generate_billing', '生成对账单 ' + batch.id, {
-        month, mode, total, success: totalSuccess, failed: totalFailed
-      })
-      msgEl.innerHTML = ctx.msg(`生成完成：成功 ${totalSuccess}，失败 ${totalFailed}，共 ${total} 个厂商`, true)
-      loadResults()
-    } catch (e) {
-      msgEl.innerHTML = ctx.msg('生成失败：' + e.message, false)
-    } finally {
-      btn.disabled = false; btn.innerText = '开始生成'
-    }
-  }
-
-  // ===== 加载结果 =====
-  let allResults = []
-  const loadResults = async () => {
-    const { data } = await ctx.supabase.from('billing_result')
-      .select('*').order('id', { ascending: false }).limit(500)
-    allResults = data || []
-    renderResultTable()
-  }
-
-  const renderResultTable = (kw = '') => {
-    const k = kw.toLowerCase().trim()
-    const filtered = allResults.filter(r =>
-      !k || (r.vendor_code || '').toLowerCase().includes(k) || (r.vendor_name || '').toLowerCase().includes(k)
-    )
-    document.getElementById('bl-result-body').innerHTML = filtered.map(r => `
-      <tr>
-        <td>${r.batch_id}</td>
-        <td>${r.vendor_code}</td>
-        <td>${r.vendor_name}</td>
-        <td>${r.amount_tax != null ? '¥' + Number(r.amount_tax).toFixed(2) : '-'}</td>
-        <td>${r.amount_untax != null ? '¥' + Number(r.amount_untax).toFixed(2) : '-'}</td>
-        <td>${
-          r.status === 'SENT' ? '<span class="stat ok">已推送</span>'
-          : r.status === 'GENERATED' ? '<span class="stat">已生成</span>'
-          : r.status === 'SKIPPED' ? '<span class="stat">已跳过</span>'
-          : r.status === 'FAILED' ? `<span class="stat no" title="${r.error_msg||''}">失败</span>`
-          : r.status
-        }</td>
-        <td>
-          ${r.file_url ? `<a href="${r.file_url}" target="_blank" class="small secondary" style="text-decoration:none; padding:4px 10px; border-radius:4px; margin-right:6px;">下载</a>` : ''}
-          ${r.status !== 'SENT' && r.file_url
-            ? `<button class="small" data-send-id="${r.id}" style="background:#1677ff;">推送钉钉</button>` : ''}
-        </td>
-      </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:#999;">暂无数据</td></tr>'
-
-    v.querySelectorAll('[data-send-id]').forEach(btn => {
-      btn.onclick = async () => {
-        const id = Number(btn.dataset.sendId)
-        btn.disabled = true; btn.innerText = '推送中...'
-        try {
-          const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`${ctx.SUPABASE_URL}/functions/v1/send-dingtalk`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
-            body: JSON.stringify({ result_id: id })
-          })
-          const json = await res.json()
-          if (!res.ok) throw new Error(json.error || '推送失败')
-          await logOp('send_billing', '推送对账单 ' + id)
-          btn.innerText = '已推送'
-          btn.style.background = '#389e0d'
-          const r = allResults.find(x => x.id === id)
-          if (r) r.status = 'SENT'
-          renderResultTable(document.getElementById('bl-search').value)
-        } catch (e) {
-          alert('推送失败：' + e.message)
-          btn.disabled = false; btn.innerText = '推送钉钉'
-        }
-      }
-    })
-  }
-
-  document.getElementById('bl-search').oninput = (e) => renderResultTable(e.target.value)
-  document.getElementById('btn-refresh-billing').onclick = loadResults
-
-  loadResults()
 }
