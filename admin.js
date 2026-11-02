@@ -273,9 +273,6 @@ async function renderBills(v) {
     </div>
     <div id="admin-edit-bill-panel"></div>`
 
-  // ==========================================
-  // ★ 核心修改：纯前端分页导出 & 强制置空商品标识
-  // ==========================================
   const doExport = async (submitterType = null, isDelegate = false) => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
@@ -291,7 +288,6 @@ async function renderBills(v) {
     msgEl.innerHTML = '<span style="color:#1677ff;font-size:13px;">正在拉取数据，请稍候...</span>'
 
     try {
-      // 1. 分页循环拉取数据 (突破1000条限制)
       let allBills = []
       let page = 0
       const pageSize = 1000
@@ -325,7 +321,6 @@ async function renderBills(v) {
 
       msgEl.innerHTML = `<span style="color:#1677ff;font-size:13px;">正在生成 Excel (共 ${allBills.length} 条)...</span>`
 
-      // 2. 区分入库/出库
       const IN_TYPES = ['VMI入库', 'DSP入库', '济转西RT(入库)', '济转西DSP(入库)']
       const OUT_TYPES = ['VMI出库', 'DSP出库', '济转西RT(留库)', '济转西RT(越库)', '济转西DSP(留库)', '济转西DSP(越库)']
       
@@ -337,7 +332,6 @@ async function renderBills(v) {
       
       const fmtDate = (d) => { if(!d) return ''; const s=String(d); return s.includes('T')?s.slice(0,10):(s.includes(' ')?s.slice(0,10):s) }
 
-      // ★ 注意：下标 7 和下标 11 的位置，直接写死为 null，彻底拦截脏数据
       const inRows = inBills.map(b => [
         b.source_no || '', b.bill_type || '', b.vendor_code || '', b.owner_code || '',
         b.location_code || '', b.logistics_mode || '', b.product_code || '',
@@ -358,7 +352,6 @@ async function renderBills(v) {
         b.product_remark || b.product_code || '无', b.group_name || '', b.split_flag || '', b.split_desc || ''
       ])
 
-      // 3. 前端本地生成 Excel 并触发下载
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([IN_HEADERS, ...inRows]), '入库')
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([OUT_HEADERS, ...outRows]), '出库')
@@ -368,14 +361,13 @@ async function renderBills(v) {
 
       msgEl.innerHTML = ctx.msg(isDelegate ? '代报数据导出成功' : '导出成功', true)
 
-      // 4. 异步批量更新状态（不阻塞用户下载）
       const ids = allBills.map(b => b.id)
       const updateBatchSize = 500
       for (let i = 0; i < ids.length; i += updateBatchSize) {
         const batchIds = ids.slice(i, i + updateBatchSize)
         ctx.supabase.from('bill_order').update({
           exported: true, exported_at: new Date().toISOString(), export_batch: batchNo
-        }).in('id', batchIds).then() // 后台静默执行
+        }).in('id', batchIds).then()
       }
       
       ctx.supabase.from('export_batch').insert({
@@ -639,21 +631,21 @@ async function renderBills(v) {
 
 // ================= 2.5 质检报告管理 =================
 async function renderQCAdmin(v) {
-  const { data: reports } = await ctx.supabase.from('qc_report')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(1000)
-
   const { data: vendors } = await ctx.supabase.from('vendor_profile').select('vendor_code, vendor_name')
   const vMap = {}
   ;(vendors || []).forEach(x => { vMap[x.vendor_code] = x.vendor_name })
 
+  let currentPage = 0
+  const pageSize = 20
+  let keyword = ''
+
   v.innerHTML = `
     <div class="card" style="box-shadow:none; padding:16px; margin:0;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-        <h2 style="margin:0; font-size:16px;">质检报告列表（共 ${(reports||[]).length} 条）</h2>
+        <h2 style="margin:0; font-size:16px;">质检报告列表</h2>
         <div style="display:flex; gap:8px;">
-          <input id="qc-search" placeholder="搜索厂编/厂商名/文件名" style="width:240px; margin:0;" />
+          <input id="qc-search" placeholder="搜索厂编/厂商名/文件名" style="width:240px; margin:0;" value="${keyword}" />
+          <button class="secondary" id="btn-qc-search">查询</button>
           <button class="secondary" id="btn-qc-export" style="background:#f6ffed; border-color:#b7eb8f; color:#389e0d;">导出 Excel</button>
         </div>
       </div>
@@ -667,29 +659,56 @@ async function renderQCAdmin(v) {
           <tbody id="qc-body"></tbody>
         </table>
       </div>
+      <div id="qc-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;"></div>
     </div>`
 
-  const renderTable = (keyword = '') => {
-    const kw = keyword.toLowerCase().trim()
-    const filtered = reports.filter(r => {
-      if (!kw) return true
-      const vName = (vMap[r.vendor_code] || '').toLowerCase()
-      return (r.vendor_code || '').toLowerCase().includes(kw) ||
-             vName.includes(kw) ||
-             (r.report_name || '').toLowerCase().includes(kw)
-    })
+  const loadData = async (page = 0) => {
+    currentPage = page
+    const tbody = document.getElementById('qc-body')
+    if (!tbody) return
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">加载中...</td></tr>'
 
-    const qcBody = document.getElementById('qc-body')
-    if (!qcBody) return
+    let matchedCodes = []
+    if (keyword) {
+      const kw = keyword.toLowerCase()
+      const matchVps = (vendors || []).filter(v => 
+        (v.vendor_code || '').toLowerCase().includes(kw) || 
+        (v.vendor_name || '').toLowerCase().includes(kw)
+      )
+      matchedCodes = matchVps.map(v => v.vendor_code)
+    }
 
-    qcBody.innerHTML = filtered.map(r => {
+    let q = ctx.supabase.from('qc_report').select('*', { count: 'exact' })
+    
+    if (keyword) {
+      if (matchedCodes.length > 0) {
+        q = q.or(`report_name.ilike.%${keyword}%,vendor_code.in.(${matchedCodes.join(',')})`)
+      } else {
+        q = q.ilike('report_name', `%${keyword}%`)
+      }
+    }
+
+    const from = currentPage * pageSize
+    const to = from + pageSize - 1
+    q = q.order('created_at', { ascending: false }).range(from, to)
+
+    const { data, error, count } = await q
+
+    if (error) {
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
+      return
+    }
+
+    tbody.innerHTML = (data || []).map(r => {
       const sizeMB = ((r.file_size || 0) / 1024 / 1024).toFixed(2)
       const timeStr = new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19)
       return `<tr>
         <td>${timeStr}</td>
         <td>${r.vendor_code}</td>
         <td>${vMap[r.vendor_code] || '-'}</td>
-        <td><a href="${r.file_url}" target="_blank" style="color:#1677ff; text-decoration:none;">${r.report_name}</a></td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.report_name}">
+          <a href="${r.file_url}" target="_blank" style="color:#1677ff; text-decoration:none;">${r.report_name}</a>
+        </td>
         <td>${sizeMB} MB</td>
         <td>
           <button class="small secondary" data-download="${r.file_url}" data-name="${r.report_name}">下载</button>
@@ -698,10 +717,22 @@ async function renderQCAdmin(v) {
       </tr>`
     }).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">无匹配数据</td></tr>'
 
-    bindActions(filtered)
+    const totalPages = Math.ceil((count || 0) / pageSize)
+    const pageEl = document.getElementById('qc-pagination')
+    if (pageEl) {
+      pageEl.innerHTML = `
+        <span style="font-size:13px;color:#666;">共 ${count || 0} 条记录，第 ${totalPages === 0 ? 0 : currentPage + 1} / ${totalPages} 页</span>
+        <button class="secondary small" id="btn-qc-prev" ${currentPage === 0 ? 'disabled' : ''} style="${currentPage === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+        <button class="secondary small" id="btn-qc-next" ${currentPage >= totalPages - 1 ? 'disabled' : ''} style="${currentPage >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+      `
+      document.getElementById('btn-qc-prev').onclick = () => { if (currentPage > 0) loadData(currentPage - 1) }
+      document.getElementById('btn-qc-next').onclick = () => { if (currentPage < totalPages - 1) loadData(currentPage + 1) }
+    }
+
+    bindActions()
   }
 
-  const bindActions = (currentData) => {
+  const bindActions = () => {
     v.querySelectorAll('[data-download]').forEach(btn => {
       btn.onclick = () => {
         const url = btn.dataset.download
@@ -726,7 +757,6 @@ async function renderQCAdmin(v) {
 
         try {
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          // 强制走代理
           const res = await fetch(`https://api.mahui.pw/functions/v1/delete-qc`, {
             method: 'POST',
             headers: {
@@ -736,25 +766,14 @@ async function renderQCAdmin(v) {
             body: JSON.stringify({ filePath: path })
           })
 
-          if (!res.ok) {
-            let errText = 'R2 文件删除失败'
-            try {
-              const errJson = await res.json()
-              errText = errJson.error || JSON.stringify(errJson)
-            } catch (e) {
-              errText = await res.text() || `HTTP ${res.status}`
-            }
-            throw new Error(errText)
-          }
+          if (!res.ok) throw new Error('R2 文件删除失败')
 
           const { error } = await ctx.supabase.from('qc_report').delete().eq('id', id)
-          if (error) {
-            throw new Error('数据库删除失败: ' + error.message)
-          }
+          if (error) throw new Error('数据库删除失败: ' + error.message)
 
           await logOp('delete_qc', '删除质检报告 ' + path)
           alert('删除成功')
-          renderTab('qc')
+          loadData(currentPage)
         } catch (err) {
           alert('删除失败：' + err.message)
           btn.disabled = false
@@ -764,27 +783,76 @@ async function renderQCAdmin(v) {
     })
   }
 
-  const searchEl = document.getElementById('qc-search')
-  if (searchEl) searchEl.oninput = (e) => renderTable(e.target.value)
-
-  document.getElementById('btn-qc-export').onclick = () => {
-    const listToExport = reports.map(r => ({
-      '上传时间': new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19),
-      '厂编': r.vendor_code,
-      '厂商名称': vMap[r.vendor_code] || '',
-      '文件名': r.report_name,
-      '文件大小(MB)': ((r.file_size || 0) / 1024 / 1024).toFixed(2),
-      '下载链接': r.file_url
-    }))
-
-    const ws = XLSX.utils.json_to_sheet(listToExport)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, '质检报告汇总')
-    XLSX.writeFile(wb, `质检报告汇总_${new Date().getTime()}.xlsx`)
-    logOp('export_qc', '导出质检报告数据')
+  document.getElementById('btn-qc-search').onclick = () => {
+    keyword = document.getElementById('qc-search').value.trim()
+    loadData(0)
+  }
+  document.getElementById('qc-search').onkeydown = (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-qc-search').click()
   }
 
-  renderTable()
+  document.getElementById('btn-qc-export').onclick = async () => {
+    try {
+      let allReports = []
+      let page = 0
+      let hasMore = true
+      
+      while(hasMore) {
+        let q = ctx.supabase.from('qc_report').select('*')
+          .order('created_at', { ascending: false })
+          .range(page * 1000, (page + 1) * 1000 - 1)
+        
+        if (keyword) {
+          // 需与上面的查询逻辑保持一致
+          let matchedCodes = []
+          const kw = keyword.toLowerCase()
+          const matchVps = (vendors || []).filter(v => 
+            (v.vendor_code || '').toLowerCase().includes(kw) || 
+            (v.vendor_name || '').toLowerCase().includes(kw)
+          )
+          matchedCodes = matchVps.map(v => v.vendor_code)
+
+          if (matchedCodes.length > 0) {
+            q = q.or(`report_name.ilike.%${keyword}%,vendor_code.in.(${matchedCodes.join(',')})`)
+          } else {
+            q = q.ilike('report_name', `%${keyword}%`)
+          }
+        }
+
+        const { data, error } = await q
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allReports = allReports.concat(data)
+          page++
+          if (data.length < 1000) hasMore = false
+        } else {
+          hasMore = false
+        }
+      }
+
+      const listToExport = allReports.map(r => ({
+        '上传时间': new Date(new Date(r.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19),
+        '厂编': r.vendor_code,
+        '厂商名称': vMap[r.vendor_code] || '',
+        '文件名': r.report_name,
+        '文件大小(MB)': ((r.file_size || 0) / 1024 / 1024).toFixed(2),
+        '下载链接': r.file_url
+      }))
+
+      if (!listToExport.length) return alert('无数据可导出')
+
+      const ws = XLSX.utils.json_to_sheet(listToExport)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, '质检报告汇总')
+      XLSX.writeFile(wb, `质检报告汇总_${new Date().getTime()}.xlsx`)
+      logOp('export_qc', '导出质检报告数据')
+    } catch(e) {
+      alert('导出失败：' + e.message)
+    }
+  }
+
+  loadData(0)
 }
 
 // ================= 3. 厂商管理 =================
@@ -852,10 +920,15 @@ async function renderVendors(v) {
           <tbody id="v-table-body"></tbody>
         </table>
       </div>
+      <div id="v-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;"></div>
     </div>
     <div id="vendor-edit-panel"></div>`
 
-  const renderVendorTable = (keyword = '') => {
+  let currentPage = 0
+  const pageSize = 20
+  let keyword = ''
+
+  const renderVendorTable = () => {
     const kw = keyword.toLowerCase().trim()
     const filtered = vps.filter(p => {
       const whsStr = (vwMap[p.id] || []).join(', ').toLowerCase()
@@ -870,10 +943,13 @@ async function renderVendors(v) {
     const totalEl = document.getElementById('v-total-count')
     if (totalEl) totalEl.innerText = kw ? `${filtered.length}/${vps.length}` : vps.length
 
+    const totalPages = Math.ceil(filtered.length / pageSize)
+    const paginated = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
+
     const tbody = document.getElementById('v-table-body')
     if (!tbody) return
     
-    tbody.innerHTML = filtered.map(p => `<tr>
+    tbody.innerHTML = paginated.map(p => `<tr>
       <td>${p.vendor_code||''}</td>
       <td>${p.vendor_name||''}</td>
       <td>${p.contact_name||''}</td>
@@ -889,8 +965,20 @@ async function renderVendors(v) {
       </td>
     </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:#999;">暂无匹配数据</td></tr>'
 
+    const pageEl = document.getElementById('v-pagination')
+    if (pageEl) {
+      pageEl.innerHTML = `
+        <span style="font-size:13px;color:#666;">共 ${filtered.length} 条记录，第 ${totalPages === 0 ? 0 : currentPage + 1} / ${totalPages} 页</span>
+        <button class="secondary small" id="btn-v-prev" ${currentPage === 0 ? 'disabled' : ''} style="${currentPage === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+        <button class="secondary small" id="btn-v-next" ${currentPage >= totalPages - 1 ? 'disabled' : ''} style="${currentPage >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+      `
+      document.getElementById('btn-v-prev').onclick = () => { if (currentPage > 0) { currentPage--; renderVendorTable(); } }
+      document.getElementById('btn-v-next').onclick = () => { if (currentPage < totalPages - 1) { currentPage++; renderVendorTable(); } }
+    }
+
     bindTableActions()
   }
+
   const bindTableActions = () => {
     v.querySelectorAll('button[data-act]').forEach(b => {
       b.onclick = async () => {
@@ -1042,12 +1130,16 @@ async function renderVendors(v) {
     searchInput.oninput = (e) => {
       const val = e.target.value
       clearBtn.style.display = val ? 'block' : 'none'
-      renderVendorTable(val)
+      keyword = val
+      currentPage = 0
+      renderVendorTable()
     }
     clearBtn.onclick = () => {
       searchInput.value = ''
       clearBtn.style.display = 'none'
-      renderVendorTable('')
+      keyword = ''
+      currentPage = 0
+      renderVendorTable()
     }
   }
   renderVendorTable()
@@ -1878,20 +1970,98 @@ async function renderWh(v) {
 async function renderStore(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data } = await ctx.supabase.from('store_config_detail').select('*')
+
+  let currentPage = 0
+  const pageSize = 20
+  let keyword = ''
+
   v.innerHTML = `
-    <div class="row">
-      <select id="s-wh"><option value="">全部仓库</option>${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}</select>
-      <input id="s-code" placeholder="门店代码 *" />
-      <input id="s-name" placeholder="门店名称" />
-      <button id="btn-s-add">新增</button>
-    </div>
-    <div id="s-msg"></div>
-    <table><tr><th>仓库</th><th>门店代码</th><th>名称</th><th>单据数</th><th>操作</th></tr>
-      <tbody>${(data||[]).map(r=>`<tr>
-        <td>${r.warehouse_name||''}</td><td>${r.store_code}</td><td>${r.store_name||''}</td>
-        <td>${r.bill_count||0}</td>
-        <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.store_code}">删除</button>` : ''}</td>
-      </tr>`).join('')}</tbody></table>`
+    <div class="card" style="box-shadow:none; padding:16px;">
+      <div class="row" style="margin-bottom:12px;">
+        <select id="s-wh" style="flex:1; margin:0;">
+          <option value="">全部仓库</option>
+          ${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}
+        </select>
+        <input id="s-search" placeholder="搜索门店代码/名称" style="flex:2; margin:0;" value="${keyword}" />
+        <button id="btn-s-search" class="secondary" style="flex:0 0 80px;">查询</button>
+      </div>
+      <div class="row" style="margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid #eee;">
+        <input id="s-code" placeholder="门店代码 *" style="flex:1; margin:0;" />
+        <input id="s-name" placeholder="门店名称" style="flex:2; margin:0;" />
+        <button id="btn-s-add" style="flex:0 0 100px;">新增</button>
+      </div>
+      <div id="s-msg"></div>
+      
+      <div class="scroll">
+        <table>
+          <tr><th>仓库</th><th>门店代码</th><th>名称</th><th>单据数</th><th>操作</th></tr>
+          <tbody id="store-body"></tbody>
+        </table>
+      </div>
+      <div id="store-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;"></div>
+    </div>`
+
+  const loadData = () => {
+    const tbody = document.getElementById('store-body')
+    if (!tbody) return
+
+    const whFilter = document.getElementById('s-wh').value
+    const kw = keyword.toLowerCase()
+
+    const filtered = (data || []).filter(r => {
+      if (whFilter && r.warehouse_code !== whFilter) return false
+      if (kw) {
+        const matchCode = (r.store_code || '').toLowerCase().includes(kw)
+        const matchName = (r.store_name || '').toLowerCase().includes(kw)
+        if (!matchCode && !matchName) return false
+      }
+      return true
+    })
+
+    const totalPages = Math.ceil(filtered.length / pageSize)
+    const paginated = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
+
+    tbody.innerHTML = paginated.map(r => `<tr>
+      <td>${r.warehouse_name||''}</td><td>${r.store_code}</td><td>${r.store_name||''}</td>
+      <td>${r.bill_count||0}</td>
+      <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-code="${r.store_code}">删除</button>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">无匹配数据</td></tr>'
+
+    const pageEl = document.getElementById('store-pagination')
+    if (pageEl) {
+      pageEl.innerHTML = `
+        <span style="font-size:13px;color:#666;">共 ${filtered.length} 条记录，第 ${totalPages === 0 ? 0 : currentPage + 1} / ${totalPages} 页</span>
+        <button class="secondary small" id="btn-s-prev" ${currentPage === 0 ? 'disabled' : ''} style="${currentPage === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+        <button class="secondary small" id="btn-s-next" ${currentPage >= totalPages - 1 ? 'disabled' : ''} style="${currentPage >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+      `
+      document.getElementById('btn-s-prev').onclick = () => { if (currentPage > 0) { currentPage--; loadData(); } }
+      document.getElementById('btn-s-next').onclick = () => { if (currentPage < totalPages - 1) { currentPage++; loadData(); } }
+    }
+
+    v.querySelectorAll('[data-del]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('确定删除？')) return
+        const { error } = await ctx.supabase.from('store_config').delete().eq('id', b.dataset.del)
+        if (error) return alert(ctx.translateError(error.message))
+        await logOp('delete_store', '门店 ' + b.dataset.code)
+        renderStore(v) // 重新加载整个页面以刷新数据
+      }
+    })
+  }
+
+  document.getElementById('btn-s-search').onclick = () => {
+    keyword = document.getElementById('s-search').value.trim()
+    currentPage = 0
+    loadData()
+  }
+  document.getElementById('s-search').onkeydown = (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-s-search').click()
+  }
+  document.getElementById('s-wh').onchange = () => {
+    currentPage = 0
+    loadData()
+  }
+
   document.getElementById('btn-s-add').onclick = async () => {
     const code = document.getElementById('s-code').value.trim()
     if (!code) return
@@ -1907,17 +2077,10 @@ async function renderStore(v) {
     }
     await logOp('create_store', '门店 ' + code)
     document.getElementById('s-msg').innerHTML = ctx.msg('已新增', true)
-    renderBaseSub('store')
+    renderStore(v)
   }
-  v.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('确定删除？')) return
-      const { error } = await ctx.supabase.from('store_config').delete().eq('id', b.dataset.del)
-      if (error) return alert(ctx.translateError(error.message))
-      await logOp('delete_store', '门店 ' + b.dataset.code)
-      renderBaseSub('store')
-    }
-  })
+
+  loadData()
 }
 
 // ===== 5.3 商品主数据 =====
@@ -1956,7 +2119,7 @@ async function renderProduct(v) {
     </div>
     
     <div class="card" style="box-shadow:none;padding:0;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:12px;">
         <div style="display:flex; align-items:center; gap:16px;">
           <h2 style="margin:0;">商品列表</h2>
           <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#cf1322; cursor:pointer; font-weight:bold;">
@@ -1964,8 +2127,9 @@ async function renderProduct(v) {
           </label>
         </div>
         <div style="display:flex; gap:8px;">
-          <input id="prod-search" placeholder="搜索货号/品名/厂编" style="width:240px; margin:0;" />
+          <input id="prod-search" placeholder="搜索货号/品名/厂编" style="width:200px; margin:0;" />
           <button class="secondary" id="btn-prod-search">查询</button>
+          <button class="secondary" id="btn-export-products" style="background:#f6ffed; border-color:#b7eb8f; color:#389e0d;">导出 Excel</button>
         </div>
       </div>
       <div class="scroll" style="max-height: calc(100vh - 500px);">
@@ -2063,6 +2227,63 @@ async function renderProduct(v) {
   document.getElementById('btn-prod-search').onclick = () => {
     keyword = document.getElementById('prod-search').value.trim()
     loadProducts(0)
+  }
+  document.getElementById('prod-search').onkeydown = (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-prod-search').click()
+  }
+
+  // ★ 导出商品
+  document.getElementById('btn-export-products').onclick = async () => {
+    try {
+      let allProducts = []
+      let page = 0
+      let hasMore = true
+
+      while(hasMore) {
+        let q = ctx.supabase.from('product_master').select('*')
+          .order('id', { ascending: false })
+          .range(page * 1000, (page + 1) * 1000 - 1)
+        
+        if (keyword) {
+          q = q.or(`product_code.ilike.%${keyword}%,product_name.ilike.%${keyword}%,default_vendor_code.ilike.%${keyword}%`)
+        }
+        if (onlyInvalid) {
+          q = q.or('length.is.null,length.lte.0,width.is.null,width.lte.0,height.is.null,height.lte.0,weight.is.null,weight.lte.0')
+        }
+
+        const { data, error } = await q
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allProducts = allProducts.concat(data)
+          page++
+          if (data.length < 1000) hasMore = false
+        } else {
+          hasMore = false
+        }
+      }
+
+      if (!allProducts.length) return alert('无数据可导出')
+
+      const listToExport = allProducts.map(r => ({
+        '仓库代码': r.warehouse_code,
+        '货号': r.product_code,
+        '商品名称': r.product_name,
+        '包装规格': r.spec,
+        '长(cm)': r.length,
+        '宽(cm)': r.width,
+        '高(cm)': r.height,
+        '重量(kg)': r.weight,
+        '默认厂编': r.default_vendor_code
+      }))
+
+      const ws = XLSX.utils.json_to_sheet(listToExport)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, '商品主数据')
+      XLSX.writeFile(wb, `商品主数据_${new Date().getTime()}.xlsx`)
+    } catch(e) {
+      alert('导出失败：' + e.message)
+    }
   }
 
   document.getElementById('btn-pm-add').onclick = async () => {
@@ -2332,7 +2553,6 @@ async function renderBypass(v) {
 async function renderLogs(v) {
   const { data: ops } = await ctx.supabase.from('operation_log').select('*').order('id', { ascending: false }).limit(200)
   const { data: edits } = await ctx.supabase.from('vendor_edit_log').select('*').order('id', { ascending: false }).limit(200)
-  const { data: batches } = await ctx.supabase.from('export_batch_detail').select('*').order('id', { ascending: false }).limit(200)
 
   v.innerHTML = `
     <div class="tabs" id="log-tabs">
@@ -2434,20 +2654,76 @@ async function renderLogs(v) {
   }
 
   const renderBatch = () => {
+    let currentPage = 0
+    const pageSize = 20
+    let keyword = ''
+
     document.getElementById('log-view').innerHTML = `
+      <div class="row" style="margin-bottom:12px;">
+        <input id="batch-search" placeholder="搜索批次号/仓库代码" style="flex:2; margin:0;" value="${keyword}" />
+        <button id="btn-batch-search" class="secondary" style="flex:0 0 80px;">查询</button>
+      </div>
       <div class="scroll">
         <table>
           <tr><th>批次号</th><th>仓库</th><th>开始日期</th><th>结束日期</th><th>类型</th><th>条数</th><th>操作人</th><th>时间</th></tr>
-          <tbody>${(batches||[]).map(r=>`<tr>
-            <td>${r.batch_no}</td><td>${r.warehouse_code||''}</td>
-            <td>${r.start_date||''}</td><td>${r.end_date||''}</td>
-            <td>${r.bill_type||''}</td>
-            <td>${r.bill_count_snapshot ?? r.count ?? 0}（实际 ${r.actual_count||0}）</td>
-            <td>${r.operator||''}</td>
-            <td>${new Date(r.created_at).toLocaleString()}</td>
-          </tr>`).join('') || '<tr><td colspan="8">暂无数据</td></tr>'}</tbody>
+          <tbody id="batch-body"></tbody>
         </table>
-      </div>`
+      </div>
+      <div id="batch-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;"></div>`
+
+    const loadBatches = async (page = 0) => {
+      currentPage = page
+      const tbody = document.getElementById('batch-body')
+      if (!tbody) return
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>'
+
+      let q = ctx.supabase.from('export_batch_detail').select('*', { count: 'exact' })
+      if (keyword) {
+        q = q.or(`batch_no.ilike.%${keyword}%,warehouse_code.ilike.%${keyword}%`)
+      }
+
+      const from = currentPage * pageSize
+      const to = from + pageSize - 1
+      q = q.order('id', { ascending: false }).range(from, to)
+
+      const { data, error, count } = await q
+
+      if (error) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
+        return
+      }
+
+      tbody.innerHTML = (data||[]).map(r=>`<tr>
+        <td>${r.batch_no}</td><td>${r.warehouse_code||''}</td>
+        <td>${r.start_date||''}</td><td>${r.end_date||''}</td>
+        <td>${r.bill_type||''}</td>
+        <td>${r.bill_count_snapshot ?? r.count ?? 0}（实际 ${r.actual_count||0}）</td>
+        <td>${r.operator||''}</td>
+        <td>${new Date(r.created_at).toLocaleString()}</td>
+      </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无数据</td></tr>'
+
+      const totalPages = Math.ceil((count || 0) / pageSize)
+      const pageEl = document.getElementById('batch-pagination')
+      if (pageEl) {
+        pageEl.innerHTML = `
+          <span style="font-size:13px;color:#666;">共 ${count || 0} 条记录，第 ${totalPages === 0 ? 0 : currentPage + 1} / ${totalPages} 页</span>
+          <button class="secondary small" id="btn-batch-prev" ${currentPage === 0 ? 'disabled' : ''} style="${currentPage === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+          <button class="secondary small" id="btn-batch-next" ${currentPage >= totalPages - 1 ? 'disabled' : ''} style="${currentPage >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+        `
+        document.getElementById('btn-batch-prev').onclick = () => { if (currentPage > 0) loadBatches(currentPage - 1) }
+        document.getElementById('btn-batch-next').onclick = () => { if (currentPage < totalPages - 1) loadBatches(currentPage + 1) }
+      }
+    }
+
+    document.getElementById('btn-batch-search').onclick = () => {
+      keyword = document.getElementById('batch-search').value.trim()
+      loadBatches(0)
+    }
+    document.getElementById('batch-search').onkeydown = (e) => {
+      if (e.key === 'Enter') document.getElementById('btn-batch-search').click()
+    }
+
+    loadBatches(0)
   }
 
   document.querySelectorAll('#log-tabs button').forEach(b => {
@@ -2471,7 +2747,11 @@ const CONFIG_CN = {
   release_date: '发布日期',
   maintenance_mode: '维护模式',
   cleanup_days: '清理保留天数',
-  cleanup_time: '清理执行时间'
+  cleanup_time: '清理执行时间',
+  dingtalk_qc_webhook: '钉钉质检推送 Webhook',
+  dingtalk_qc_secret: '钉钉质检推送 Secret',
+  dingtalk_qc_push_time: '钉钉推送时间',
+  cleanup_qc_days: '质检清理保留天数'
 }
 
 function formatConfigValue(key, val) {
@@ -2513,18 +2793,28 @@ async function renderSys(v) {
     <div class="card" style="box-shadow:none;padding:0 0 16px;">
       <h2>系统配置（手动修改）</h2>
       <div class="row">
-        <input id="c-key" placeholder="配置键 *" />
-        <input id="c-val" placeholder="配置值" />
-        <button id="btn-c-save">保存</button>
+        <input id="c-key" placeholder="配置键 *" style="flex:1;" />
+        <input id="c-val" placeholder="配置值" style="flex:2;" />
+        <button id="btn-c-save" style="flex:0 0 100px;">保存</button>
       </div>
       <div id="c-msg"></div>
-      <table><tr><th>配置项</th><th>值</th><th>更新时间</th><th>操作</th></tr>
-        <tbody>${(cfgs||[]).map(r=>`<tr>
-          <td>${CONFIG_CN[r.config_key] || r.config_key}</td>
-          <td>${formatConfigValue(r.config_key, r.config_value)}</td>
-          <td>${new Date(r.updated_at).toLocaleString()}</td>
-          <td>${isSuper() ? `<button class="small danger" data-del="${r.id}" data-key="${r.config_key}">删除</button>` : ''}</td>
-        </tr>`).join('')}</tbody></table>
+      
+      <div class="scroll" style="max-height: 400px; overflow: auto;">
+        <table>
+          <tr><th>配置项</th><th>值</th><th>更新时间</th><th>操作</th></tr>
+          <tbody>${(cfgs||[]).map(r=>`<tr>
+            <td style="white-space:nowrap;">${CONFIG_CN[r.config_key] || r.config_key}</td>
+            <td style="max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${r.config_value || ''}">
+              ${formatConfigValue(r.config_key, r.config_value)}
+            </td>
+            <td style="white-space:nowrap;">${new Date(r.updated_at).toLocaleString()}</td>
+            <td style="white-space:nowrap;">
+              <button class="small secondary" data-copy="${r.config_value || ''}" style="margin-right:4px;">复制</button>
+              ${isSuper() ? `<button class="small danger" data-del="${r.id}" data-key="${r.config_key}">删除</button>` : ''}
+            </td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card" style="box-shadow:none;padding:0 0 16px;border:2px dashed #91caff;">
@@ -2551,9 +2841,9 @@ async function renderSys(v) {
         <summary style="cursor:pointer;font-size:16px;font-weight:600;padding:8px 0;">版本历史（点击展开）</summary>
         <div style="margin-top:12px;">
           <div class="row">
-            <input id="v-version" placeholder="版本号 *" />
-            <input id="v-notes" placeholder="更新说明" />
-            <button id="btn-v-add">新增</button>
+            <input id="v-version" placeholder="版本号 *" style="flex:1;" />
+            <input id="v-notes" placeholder="更新说明" style="flex:2;" />
+            <button id="btn-v-add" style="flex:0 0 100px;">新增</button>
           </div>
           <div id="v-msg"></div>
           <table><tr><th>版本</th><th>说明</th><th>发布时间</th></tr>
@@ -2636,6 +2926,18 @@ async function renderSys(v) {
     document.getElementById('v-msg').innerHTML = ctx.msg('已新增', true)
     renderTab('sys')
   }
+
+  v.querySelectorAll('[data-copy]').forEach(b => {
+    b.onclick = () => {
+      const val = b.dataset.copy
+      if (!val) return alert('值为空')
+      navigator.clipboard.writeText(val).then(() => {
+        alert('已复制到剪贴板')
+      }).catch(err => {
+        alert('复制失败，请手动选择复制')
+      })
+    }
+  })
 
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {

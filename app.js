@@ -36,7 +36,7 @@ function isValidSize(length, width, height, weight) {
   return vals.every(v => !isNaN(v) && v > 0)
 }
 
-// ★ 新增：判断商品资料是否不完善（含纯数字、规格、长宽高）
+// ★ 判断商品资料是否不完善（含纯数字、规格、长宽高）
 function isProductInvalid(p) {
   if (!p) return true
   const isSpecValid = p.spec && /^1\*1\*[1-9]\d*$/.test(String(p.spec).trim())
@@ -211,6 +211,8 @@ function renderLogin(errMsg = '') {
     } else if (/^\d+$/.test(email)) {
       if (email.startsWith('999')) email += '@logistics.local'
       else email += '@vendor.local'
+    } else if (/^[a-zA-Z0-9_]+$/.test(email)) {
+      email += '@admin.local'
     } else {
       document.getElementById('login-msg').innerHTML = msg('账号格式错误', false); return
     }
@@ -272,6 +274,8 @@ function renderChangePwd() {
     } else if (/^\d+$/.test(email)) {
       if (email.startsWith('999')) email += '@logistics.local'
       else email += '@vendor.local'
+    } else if (/^[a-zA-Z0-9_]+$/.test(email)) {
+      email += '@admin.local'
     } else {
       msgEl.innerHTML = msg('账号格式错误', false); return
     }
@@ -480,6 +484,7 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
+// ★ 核心修改：济转西系列门店代码统一改为 8205
 function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
@@ -490,17 +495,17 @@ function calcOutFields(billType, supplierInput, defaultStore) {
   }
   
   if (billType === '济转西RT(留库)') {
-    return { owner_code: supplierInput, store_code: '8205RT' }
+    return { owner_code: supplierInput, store_code: '8205' }
   }
   if (billType === '济转西RT(越库)') {
-    return { owner_code: supplierInput, store_code: '8205RT' }
+    return { owner_code: supplierInput, store_code: '8205' }
   }
   
   if (billType === '济转西DSP(留库)') {
-    return { owner_code: '8888', store_code: '8205DSP' }
+    return { owner_code: '8888', store_code: '8205' }
   }
   if (billType === '济转西DSP(越库)') {
-    return { owner_code: '8888', store_code: '8205DSP' }
+    return { owner_code: '8888', store_code: '8205' }
   }
   
   return { owner_code: '', store_code: '' }
@@ -830,7 +835,8 @@ async function renderFill(view) {
 
     const btnAddOut = document.getElementById('btn-add-out')
     if (btnAddOut) btnAddOut.onclick = () => { outRows.push(newOutRowForVendor(myVendorCode)); renderOutTable(); renderPreview() }
-    // ★ 入库解析（含纯数字校验）
+    
+    // 入库解析
     document.getElementById('btn-parse-in').onclick = () => {
       const txt = document.getElementById('in-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -855,7 +861,6 @@ async function renderFill(view) {
         const p = findProduct(product_code)
         if (!p) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 在商品库不存在`); continue }
         
-        // ★ 极速录入同样拦截资料不全的商品
         if (isProductInvalid(p)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 资料不完善（缺长宽高或规格不正确），请先去补充`); continue }
         if (!isValidSpec(p.spec)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 规格不合规`); continue }
 
@@ -887,7 +892,7 @@ async function renderFill(view) {
 
     document.getElementById('btn-clear-in-paste').onclick = () => { document.getElementById('in-paste-area').value = '' }
 
-    // ★ 出库解析（含纯数字校验）
+    // 出库解析
     document.getElementById('btn-parse-out').onclick = () => {
       const txt = document.getElementById('out-paste-area').value.trim()
       if (!txt) return alert('请先粘贴数据')
@@ -914,7 +919,6 @@ async function renderFill(view) {
         const p = findProduct(product_code)
         if (!p) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 不存在`); continue }
         
-        // ★ 极速录入同样拦截资料不全的商品
         if (isProductInvalid(p)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 资料不完善（缺长宽高或规格不正确），请先去补充`); continue }
         if (!isValidSpec(p.spec)) { errorMsgs.push(`第 ${i+1} 行：货号 [${product_code}] 规格不合规`); continue }
 
@@ -1053,9 +1057,8 @@ async function renderFill(view) {
           if (r.bill_type.includes('DSP')) validDspInKeys.add(`${(r.owner_code||'').trim()}||${(r.product_code||'').trim()}`)
         })
 
-        const startOfToday = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
-        startOfToday.setHours(0, 0, 0, 0)
-        const startIso = startOfToday.toISOString()
+        const todayStr = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).toISOString().slice(0, 10)
+        const startIso = new Date(todayStr + 'T00:00:00+08:00').toISOString()
 
         const { data: dbDspIns, error: dspErr } = await supabase.from('bill_order')
           .select('owner_code, product_code')
@@ -1141,7 +1144,7 @@ async function renderFill(view) {
     const tbody = document.getElementById('in-body')
     if (!tbody) return
     tbody.innerHTML = inRows.map((r, i) => {
-      const autoSource = (r.vendor_code && r.arrival_date) ? r.vendor_code + r.arrival_date.replace(/-/g, '') : ''
+      const autoSource = (r.owner_code && r.arrival_date) ? r.owner_code + r.arrival_date.replace(/-/g, '') : ''
       if (autoSource) r.source_no = autoSource
       return `<tr>
       <td>
@@ -1181,12 +1184,13 @@ async function renderFill(view) {
           r.product_code = el.value
           const p = findProduct(el.value)
           if (p) { 
-            // ★ 拦截资料不完善
             if (isProductInvalid(p)) {
               alert(`⚠️ 商品 [${p.product_code}] 资料不完善！\n\n可能原因：\n- 缺失长宽高或重量\n- 规格不是 1*1*X 格式\n- 品名或货号不规范\n\n请先到「商品资料」页面补充完整后再填报！`)
               el.value = ''
               r.product_code = ''
               r.spec = ''
+              const specInput = el.closest('tr').querySelector('[data-f="spec"]')
+              if (specInput) specInput.value = ''
               return
             }
             r.product_name = p.product_name || ''; 
@@ -1207,7 +1211,7 @@ async function renderFill(view) {
 
         r[f] = el.value
         if (f === 'vendor_code' || f === 'arrival_date') {
-          r.source_no = (r.vendor_code && r.arrival_date) ? r.vendor_code + r.arrival_date.replace(/-/g, '') : ''
+          r.source_no = (r.owner_code && r.arrival_date) ? r.owner_code + r.arrival_date.replace(/-/g, '') : ''
         }
         renderPreview()
       }
@@ -1267,12 +1271,13 @@ async function renderFill(view) {
           r.product_code = el.value
           const p = findProduct(el.value)
           if (p) { 
-            // ★ 拦截资料不完善
             if (isProductInvalid(p)) {
               alert(`⚠️ 商品 [${p.product_code}] 资料不完善！\n\n可能原因：\n- 缺失长宽高或重量\n- 规格不是 1*1*X 格式\n- 品名或货号不规范\n\n请先到「商品资料」页面补充完整后再填报！`)
               el.value = ''
               r.product_code = ''
               r.spec = ''
+              const specInput = el.closest('tr').querySelector('[data-f="spec"]')
+              if (specInput) specInput.value = ''
               return
             }
             r.product_name = p.product_name || ''; 
@@ -1337,6 +1342,7 @@ async function renderFill(view) {
 
   render()
 }
+
 // ================= 商品资料 =================
 async function renderProducts(view) {
   if (isAdmin) {
@@ -1371,6 +1377,10 @@ async function renderProducts(view) {
   let myWhs = await loadWhs(selectedVendorCode)
   let list = await loadList(selectedVendorCode)
 
+  let currentPage = 0
+  const pageSize = 20
+  let keyword = ''
+
   function renderAll() {
     const merged = {}
     ;(list || []).forEach(r => {
@@ -1380,8 +1390,16 @@ async function renderProducts(view) {
     })
     const mergedList = Object.values(merged)
 
-    // ★ 新增：统计不合格数量并显示顶部警告
-    const invalidCount = mergedList.filter(r => isProductInvalid(r)).length
+    // ★ 前端搜索过滤
+    const filteredList = mergedList.filter(r => {
+      if (!keyword) return true
+      const kw = keyword.toLowerCase()
+      return (r.product_code || '').toLowerCase().includes(kw) || 
+             (r.product_name || '').toLowerCase().includes(kw)
+    })
+
+    // ★ 统计不合格数量并显示顶部警告
+    const invalidCount = filteredList.filter(r => isProductInvalid(r)).length
     let warningHtml = ''
     if (invalidCount > 0) {
       warningHtml = `
@@ -1393,6 +1411,10 @@ async function renderProducts(view) {
         </div>
       `
     }
+
+    // ★ 分页切片
+    const totalPages = Math.ceil(filteredList.length / pageSize)
+    const paginatedList = filteredList.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
 
     view.innerHTML = `
       ${warningHtml}
@@ -1424,13 +1446,20 @@ async function renderProducts(view) {
         <p style="font-size:12px;color:#666;margin:8px 0;">授权仓库：${myWhs.join(', ') || '无'}（新增时会写入全部授权仓库）</p>
         <button id="btn-pd-add">新增商品</button>
       </div>
+      
       <div class="card">
-        <h2>商品列表（${mergedList.length}）</h2>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h2 style="margin:0;">商品列表（${filteredList.length}）</h2>
+          <div style="display:flex; gap:8px;">
+            <input id="prod-search" placeholder="搜索货号/品名" style="width:240px; margin:0;" value="${keyword}" />
+            <button class="secondary" id="btn-prod-search">查询</button>
+          </div>
+        </div>
         <div class="scroll">
           <table>
             <tr><th>货号</th><th>品名</th><th>规格</th><th>长×宽×高</th><th>重量</th><th>仓库</th><th>操作</th></tr>
             <tbody>
-              ${mergedList.map(r => {
+              ${paginatedList.map(r => {
                 const invalid = isProductInvalid(r)
                 const bgColor = invalid ? 'background:#fff1f0;' : ''
                 return `<tr style="${bgColor}">
@@ -1446,6 +1475,11 @@ async function renderProducts(view) {
             </tbody>
           </table>
         </div>
+        <div id="prod-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;">
+          <span style="font-size:13px;color:#666;">共 ${filteredList.length} 条记录，第 ${totalPages === 0 ? 0 : currentPage + 1} / ${totalPages} 页</span>
+          <button class="secondary small" id="btn-page-prev" ${currentPage === 0 ? 'disabled' : ''} style="${currentPage === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+          <button class="secondary small" id="btn-page-next" ${currentPage >= totalPages - 1 ? 'disabled' : ''} style="${currentPage >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+        </div>
       </div>
       <div id="edit-product-panel"></div>`
 
@@ -1455,8 +1489,28 @@ async function renderProducts(view) {
         selectedVendorCode = vs.value
         myWhs = await loadWhs(selectedVendorCode)
         list = await loadList(selectedVendorCode)
+        currentPage = 0 // 切换厂商重置分页
+        keyword = ''    // 清空搜索
         renderAll()
       }
+    }
+
+    // 绑定搜索
+    document.getElementById('btn-prod-search').onclick = () => {
+      keyword = document.getElementById('prod-search').value.trim()
+      currentPage = 0
+      renderAll()
+    }
+    document.getElementById('prod-search').onkeydown = (e) => {
+      if (e.key === 'Enter') document.getElementById('btn-prod-search').click()
+    }
+
+    // 绑定分页
+    document.getElementById('btn-page-prev').onclick = () => {
+      if (currentPage > 0) { currentPage--; renderAll(); }
+    }
+    document.getElementById('btn-page-next').onclick = () => {
+      if (currentPage < totalPages - 1) { currentPage++; renderAll(); }
     }
 
     document.getElementById('btn-pd-add').onclick = async () => {
@@ -1492,7 +1546,11 @@ async function renderProducts(view) {
       if (error) return msgEl.innerHTML = msg(translateError(error.message), false)
 
       msgEl.innerHTML = msg(`新增成功（写入 ${rows.length} 个仓库）`, true)
-      setTimeout(async () => { list = await loadList(selectedVendorCode); renderAll() }, 600)
+      setTimeout(async () => { 
+        list = await loadList(selectedVendorCode)
+        currentPage = 0 // 新增后回到第一页
+        renderAll() 
+      }, 600)
     }
 
     view.querySelectorAll('[data-edit]').forEach(btn => {
@@ -1544,7 +1602,10 @@ async function renderProducts(view) {
           if (error) return msgEl.innerHTML = msg(translateError(error.message), false)
 
           msgEl.innerHTML = msg('已保存', true)
-          setTimeout(async () => { list = await loadList(selectedVendorCode); renderAll() }, 600)
+          setTimeout(async () => { 
+            list = await loadList(selectedVendorCode)
+            renderAll() 
+          }, 600)
         }
       }
     })
@@ -1555,60 +1616,116 @@ async function renderProducts(view) {
 
 // ================= 我的单据 =================
 async function renderMy(view) {
-  let q = supabase.from('bill_order').select('*').order('id', { ascending: false }).limit(200)
-
-  if (isLogistics) {
-    const codes = myVendors.map(v => v.vendor_code)
-    if (!codes.length) { view.innerHTML = `<div class="card"><h2>我的单据</h2><p style="color:#cf1322;">未配置负责厂商。</p></div>`; return }
-    q = q.in('vendor_code', codes)
-  } else {
-    q = q.eq('vendor_id', currentUser.id)
-  }
-
-  const { data } = await q
+  let currentPage = 0;
+  const pageSize = 20;
+  let keyword = '';
 
   view.innerHTML = `
     <div class="card">
       <h2>${isLogistics ? '我负责厂商的单据' : '我的单据'}</h2>
+      <div class="row" style="margin-bottom:12px; align-items:center;">
+        <input id="my-search" placeholder="输入单号/商品代码/类型查询" style="flex:1; margin:0;" />
+        <button id="btn-my-search" class="secondary" style="flex:0 0 80px;">查询</button>
+      </div>
       <div id="my-msg"></div>
       <div class="scroll" style="max-height: 600px;">
         <table>
           <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th><th>操作</th></tr>
-          ${(data||[]).map(b => `<tr>
-            <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
-            <td>${b.quantity}</td><td>${b.warehouse_code}</td><td>${b.exported ? '是' : '否'}</td>
-            <td>${new Date(b.created_at).toLocaleString()}</td>
-            <td>
-              ${b.exported 
-                ? `<button class="small secondary" disabled style="opacity:0.5; cursor:not-allowed;">已导出</button>` 
-                : `<button class="small danger" data-del="${b.id}">删除</button>`}
-            </td>
-          </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:#999;">暂无单据</td></tr>'}
+          <tbody id="my-body"></tbody>
         </table>
       </div>
-    </div>`
+      <div id="my-pagination" style="display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:12px;"></div>
+    </div>`;
 
-  view.querySelectorAll('[data-del]').forEach(btn => {
-    btn.onclick = async () => {
-      const id = Number(btn.dataset.del)
-      if (!confirm(`确定要删除单据 #${id} 吗？删除后无法恢复。`)) return
-      
-      btn.disabled = true
-      btn.innerText = '删除中...'
-      
-      const { error } = await supabase.from('bill_order').delete().eq('id', id)
-      
-      if (error) {
-        alert('删除失败：' + translateError(error.message))
-        btn.disabled = false
-        btn.innerText = '删除'
-        return
+  const loadData = async (page = 0) => {
+    currentPage = page;
+    const tbody = document.getElementById('my-body');
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;">加载中...</td></tr>';
+
+    let q = supabase.from('bill_order').select('*', { count: 'exact' });
+    
+    if (isLogistics) {
+      const codes = myVendors.map(v => v.vendor_code);
+      if (!codes.length) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>';
+        return;
       }
-      
-      alert('已删除')
-      renderMy(view)
+      q = q.in('vendor_code', codes);
+    } else {
+      q = q.eq('vendor_id', currentUser.id);
     }
-  })
+
+    if (keyword) {
+      q = q.or(`source_no.ilike.%${keyword}%,product_code.ilike.%${keyword}%,bill_type.ilike.%${keyword}%`);
+    }
+
+    const from = currentPage * pageSize;
+    const to = from + pageSize - 1;
+    q = q.order('id', { ascending: false }).range(from, to);
+
+    const { data, error, count } = await q;
+
+    if (error) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#cf1322;">查询失败：${error.message}</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = (data||[]).map(b => `<tr>
+      <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
+      <td>${b.quantity}</td><td>${b.warehouse_code}</td><td>${b.exported ? '是' : '否'}</td>
+      <td>${new Date(b.created_at).toLocaleString()}</td>
+      <td>
+        ${b.exported 
+          ? `<button class="small secondary" disabled style="opacity:0.5; cursor:not-allowed;">已导出</button>` 
+          : `<button class="small danger" data-del="${b.id}">删除</button>`}
+      </td>
+    </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:#999;">暂无单据</td></tr>';
+
+    const totalPages = Math.ceil((count || 0) / pageSize);
+    const pageEl = document.getElementById('my-pagination');
+    if (pageEl) {
+      pageEl.innerHTML = `
+        <span style="font-size:13px;color:#666;">共 ${count || 0} 条记录，第 ${totalPages === 0 ? 0 : currentPage + 1} / ${totalPages} 页</span>
+        <button class="secondary small" id="btn-my-prev" ${currentPage === 0 ? 'disabled' : ''} style="${currentPage === 0 ? 'opacity:0.5;' : ''}">上一页</button>
+        <button class="secondary small" id="btn-my-next" ${currentPage >= totalPages - 1 ? 'disabled' : ''} style="${currentPage >= totalPages - 1 ? 'opacity:0.5;' : ''}">下一页</button>
+      `;
+      document.getElementById('btn-my-prev').onclick = () => { if (currentPage > 0) loadData(currentPage - 1); };
+      document.getElementById('btn-my-next').onclick = () => { if (currentPage < totalPages - 1) loadData(currentPage + 1); };
+    }
+
+    view.querySelectorAll('[data-del]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = Number(btn.dataset.del);
+        if (!confirm(`确定要删除单据 #${id} 吗？删除后无法恢复。`)) return;
+        
+        btn.disabled = true;
+        btn.innerText = '删除中...';
+        
+        const { error } = await supabase.from('bill_order').delete().eq('id', id);
+        
+        if (error) {
+          alert('删除失败：' + translateError(error.message));
+          btn.disabled = false;
+          btn.innerText = '删除';
+          return;
+        }
+        
+        alert('已删除');
+        loadData(currentPage);
+      };
+    });
+  };
+
+  document.getElementById('btn-my-search').onclick = () => {
+    keyword = document.getElementById('my-search').value.trim();
+    loadData(0);
+  };
+  document.getElementById('my-search').onkeydown = (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-my-search').click();
+  };
+
+  loadData(0);
 }
 
 // ================= 质检报告 =================
@@ -1781,13 +1898,13 @@ async function renderQC(view) {
 
       // 3. 覆盖逻辑（精确到目标厂商的 ID，而不是当前登录用户的 ID）
       msgEl.innerHTML = msg('正在清理该厂商今日的旧报告...', true)
-      const todayStart = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }))
-      todayStart.setHours(0, 0, 0, 0)
+      const todayStr = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).toISOString().slice(0, 10)
+      const todayStartIso = new Date(todayStr + 'T00:00:00+08:00').toISOString()
       
       const { data: oldReports } = await supabase.from('qc_report')
         .select('id, file_path')
         .eq('vendor_id', targetId)  // ★ 核心修复：只覆盖所选厂商的旧数据
-        .gte('created_at', todayStart.toISOString())
+        .gte('created_at', todayStartIso)
 
       if (oldReports && oldReports.length > 0) {
         await Promise.all(oldReports.map(async (old) => {
