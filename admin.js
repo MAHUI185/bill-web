@@ -3014,14 +3014,28 @@ async function renderSys(v) {
     if (!t) {
       return document.getElementById('cleanup-msg').innerHTML = ctx.msg('请选择时间', false)
     }
+
+    const msgEl = document.getElementById('cleanup-msg')
+    msgEl.innerHTML = ctx.msg('保存中...', true)
+
+    // 1. 保存天数和时间到 system_config
     const { error } = await ctx.supabase.rpc('save_cleanup_config', { p_days: d, p_time: t })
     if (error) {
-      document.getElementById('cleanup-msg').innerHTML = ctx.msg(ctx.translateError(error.message), false)
+      msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
       return
     }
+
+    // 2. 动态更新 pg_cron 定时器
+    const { error: rpcErr } = await ctx.supabase.rpc('reschedule_cleanup_job', { p_time: t })
+    if (rpcErr) {
+      console.warn('刷新清理定时器失败', rpcErr)
+      msgEl.innerHTML = ctx.msg('天数已保存，但定时器刷新失败，请检查日志', false)
+    } else {
+      msgEl.innerHTML = ctx.msg('保存成功，清理任务执行时间已更新', true)
+    }
+
     await logOp('save_cleanup_config', '清理配置', { days: d, time: t })
-    document.getElementById('cleanup-msg').innerHTML = ctx.msg('已保存，新配置立即生效', true)
-    setTimeout(() => renderTab('sys'), 800)
+    setTimeout(() => renderTab('sys'), 1000)
   }
 
   // ====== 通用配置事件 ======
