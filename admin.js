@@ -359,21 +359,52 @@ async function renderBills(v) {
       const batchNo = `EXP${Date.now()}`
       XLSX.writeFile(wb, `${isDelegate ? '代报导出' : 'export'}_${batchNo}.xlsx`)
 
-      msgEl.innerHTML = ctx.msg(isDelegate ? '代报数据导出成功' : '导出成功', true)
+      // ================= 修复点：阻塞式更新状态 =================
+      msgEl.innerHTML = `<span style="color:#1677ff;font-size:13px;">Excel已下载，正在更新数据库状态（请勿关闭页面）...</span>`
 
       const ids = allBills.map(b => b.id)
       const updateBatchSize = 500
+      let hasUpdateError = false
+      let updateErrMsg = ''
+
       for (let i = 0; i < ids.length; i += updateBatchSize) {
         const batchIds = ids.slice(i, i + updateBatchSize)
-        ctx.supabase.from('bill_order').update({
-          exported: true, exported_at: new Date().toISOString(), export_batch: batchNo
-        }).in('id', batchIds).then()
+        const { error: updErr } = await ctx.supabase.from('bill_order').update({
+          exported: true, 
+          exported_at: new Date().toISOString(), 
+          export_batch: batchNo
+        }).in('id', batchIds)
+        
+        if (updErr) {
+          console.error('更新单据状态失败:', updErr)
+          hasUpdateError = true
+          updateErrMsg = updErr.message
+          break
+        }
       }
-      
-      ctx.supabase.from('export_batch').insert({
-        batch_no: batchNo, warehouse_code, start_date, end_date, bill_type: 'ALL',
-        count: allBills.length, operator: ctx.operatorName || 'admin'
-      }).then()
+
+      const { error: batchErr } = await ctx.supabase.from('export_batch').insert({
+        batch_no: batchNo, 
+        warehouse_code, 
+        start_date, 
+        end_date, 
+        bill_type: 'ALL',
+        count: allBills.length, 
+        operator: ctx.operatorName || 'admin'
+      })
+
+      if (batchErr) {
+        console.error('写入批次失败:', batchErr)
+        hasUpdateError = true
+        updateErrMsg = batchErr.message
+      }
+
+      if (hasUpdateError) {
+        msgEl.innerHTML = ctx.msg(`Excel已下载，但系统状态更新失败：${updateErrMsg}`, false)
+      } else {
+        msgEl.innerHTML = ctx.msg(isDelegate ? '代报数据导出成功' : '导出成功', true)
+      }
+      // ========================================================
 
       await logOp(isDelegate ? 'export_bills_admin' : 'export_bills', (isDelegate ? '导出代报 ' : '导出 ') + warehouse_code, { start_date, end_date })
       
