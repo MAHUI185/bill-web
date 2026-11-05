@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-11-05 终极完整版：安全请求降级、防假删除、防假已读）
+// app.js — 主逻辑（2026-11-05 终极完整版：济转西DSP货主修正、安全请求降级、防假删除）
 
 import { supabase } from './supabase.js'
 
@@ -510,12 +510,13 @@ function calcInFields(billType, supplierInput) {
   return { vendor_code: supplierInput, owner_code: '' }
 }
 
-// ★ 核心修改：济转西系列门店代码统一改为 8205
+// ★ 核心修改：济转西DSP出库货主代码改为厂商编码
 function calcOutFields(billType, supplierInput, defaultStore) {
   if (billType === 'VMI出库') {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
   }
   
+  // 普通 DSP 出库保持 8888 不变
   if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
   }
@@ -527,11 +528,12 @@ function calcOutFields(billType, supplierInput, defaultStore) {
     return { owner_code: supplierInput, store_code: '8205' }
   }
   
+  // ★ 济转西 DSP 的货主改为厂商编码
   if (billType === '济转西DSP(留库)') {
-    return { owner_code: '8888', store_code: '8205' }
+    return { owner_code: supplierInput, store_code: '8205' }
   }
   if (billType === '济转西DSP(越库)') {
-    return { owner_code: '8888', store_code: '8205' }
+    return { owner_code: supplierInput, store_code: '8205' }
   }
   
   return { owner_code: '', store_code: '' }

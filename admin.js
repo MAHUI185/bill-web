@@ -1,4 +1,4 @@
-// admin.js — 管理后台（提报进度、单据管理、质检报告、厂商/物流商管理、基础数据、日志、系统配置、公告管理）
+// admin.js — 管理后台（2026-11-05 终极完整版：济转西DSP货主修正、多选极速汇总导出）
 
 let ctx = null
 let operatorName = '未知'
@@ -247,6 +247,46 @@ async function renderBills(v) {
           <label style="display:flex; align-items:center; gap:6px; margin:0; font-size:13px; color:#666; cursor:pointer; white-space:nowrap;">
             <input type="checkbox" id="exp-include" style="width:auto; margin:0;" /> 包含已导出
           </label>
+
+          <!-- 导出类型下拉框 -->
+          <select id="exp-type" style="flex:0 0 140px; margin:0; font-weight:bold; color:#1677ff;" onchange="document.getElementById('multi-select-wrap').style.display = this.value === 'summary' ? 'inline-block' : 'none'">
+            <option value="wms">WMS 标准模板</option>
+            <option value="summary">出库配单汇总表</option>
+          </select>
+
+          <!-- 多选配单类型面板 -->
+          <div id="multi-select-wrap" style="position:relative; display:none; margin:0;">
+            <button id="ms-btn" class="secondary" style="height:32px; padding:0 12px; background:#fff7e6; border-color:#ffd591; color:#d46b08; font-weight:bold;">
+              <span id="ms-btn-text">全部出库类型</span> <span style="font-size:10px;">▼</span>
+            </button>
+            <div id="ms-dropdown" style="position:absolute; top:36px; left:0; background:#fff; border:1px solid #d9d9d9; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,0.1); padding:8px; z-index:100; width:200px; display:none;">
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px; border-bottom:1px solid #eee; margin-bottom:4px; color:#1677ff; font-weight:bold;">
+                <input type="checkbox" id="chk-all" style="width:14px; height:14px; margin:0;" onchange="toggleAll(this.checked)"> 全部出库类型
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="type-chk" value="VMI出库" style="width:14px; height:14px; margin:0;"> VMI出库
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="type-chk" value="DSP出库" style="width:14px; height:14px; margin:0;"> DSP出库
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px; color:#1677ff; font-weight:bold; border-top:1px dashed #eee; margin-top:4px;">
+                <input type="checkbox" id="chk-jzx" style="width:14px; height:14px; margin:0;" onchange="toggleJzx(this.checked)"> 全部济转西
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="type-chk jzx-chk" value="济转西RT(留库)" style="width:14px; height:14px; margin:0;"> 济转西RT(留库)
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="type-chk jzx-chk" value="济转西RT(越库)" style="width:14px; height:14px; margin:0;"> 济转西RT(越库)
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="type-chk jzx-chk" value="济转西DSP(留库)" style="width:14px; height:14px; margin:0;"> 济转西DSP(留库)
+              </label>
+              <label style="display:flex; align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:13px;">
+                <input type="checkbox" class="type-chk jzx-chk" value="济转西DSP(越库)" style="width:14px; height:14px; margin:0;"> 济转西DSP(越库)
+              </label>
+            </div>
+          </div>
+          
           <button id="btn-export" style="flex:0 0 80px;">导出</button>
           <button id="btn-export-admin" class="secondary" style="flex:0 0 100px; background:#e6f4ff; border-color:#91caff; color:#1677ff;">导出代报</button>
         </div>
@@ -296,6 +336,57 @@ async function renderBills(v) {
     </div>
     <div id="admin-edit-bill-panel"></div>`
 
+  // --- 多选下拉面板的事件绑定 ---
+  const msBtn = document.getElementById('ms-btn')
+  const msDropdown = document.getElementById('ms-dropdown')
+  
+  if (msBtn && msDropdown) {
+    msBtn.onclick = (e) => {
+      e.preventDefault()
+      msDropdown.style.display = msDropdown.style.display === 'block' ? 'none' : 'block'
+    }
+
+    document.addEventListener('click', function closeDropdown(e) {
+      if (!document.getElementById('multi-select-wrap')?.contains(e.target)) {
+        if(msDropdown) msDropdown.style.display = 'none'
+      }
+    })
+  }
+
+  window.toggleAll = (checked) => {
+    document.querySelectorAll('.type-chk').forEach(chk => chk.checked = checked)
+    document.getElementById('chk-jzx').checked = checked
+    updateMsBtnText()
+  }
+
+  window.toggleJzx = (checked) => {
+    document.querySelectorAll('.jzx-chk').forEach(chk => chk.checked = checked)
+    syncAllState()
+  }
+
+  document.querySelectorAll('.type-chk').forEach(chk => {
+    chk.onchange = () => {
+      const jzxChks = document.querySelectorAll('.jzx-chk')
+      document.getElementById('chk-jzx').checked = Array.from(jzxChks).every(c => c.checked)
+      syncAllState()
+    }
+  })
+
+  function syncAllState() {
+    const allChks = document.querySelectorAll('.type-chk')
+    document.getElementById('chk-all').checked = Array.from(allChks).every(c => c.checked)
+    updateMsBtnText()
+  }
+
+  function updateMsBtnText() {
+    const checkedCount = document.querySelectorAll('.type-chk:checked').length
+    const totalCount = document.querySelectorAll('.type-chk').length
+    const textEl = document.getElementById('ms-btn-text')
+    if (checkedCount === 0 || checkedCount === totalCount) textEl.innerText = "全部出库类型"
+    else textEl.innerText = `已选 ${checkedCount} 项`
+  }
+
+  // --- 原有标准导出逻辑 ---
   const doExport = async (submitterType = null, isDelegate = false) => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
@@ -411,7 +502,6 @@ async function renderBills(v) {
       } else {
         msgEl.innerHTML = ctx.msg(isDelegate ? '代报数据导出成功，状态已更新' : '导出成功，状态已更新', true)
       }
-      // ========================================================
 
       await logOp(isDelegate ? 'export_bills_admin' : 'export_bills', (isDelegate ? '导出代报 ' : '导出 ') + warehouse_code, { start_date, end_date })
       
@@ -426,8 +516,90 @@ async function renderBills(v) {
     }
   }
 
-  document.getElementById('btn-export').onclick = () => doExport(null, false)
-  document.getElementById('btn-export-admin').onclick = () => doExport('admin', true)
+  // --- 新增：出库配单汇总导出逻辑 (数据库聚合版) ---
+  const doExportSummary = async () => {
+    const warehouse_code = document.getElementById('exp-wh').value
+    const start_date = document.getElementById('exp-start').value
+    const end_date = document.getElementById('exp-end').value
+    if (!start_date || !end_date) return alert('请选择完整的开始和结束日期')
+
+    // 获取勾选的类型
+    const checkedChks = document.querySelectorAll('.type-chk:checked')
+    const selectedTypes = Array.from(checkedChks).map(c => c.value)
+
+    const btn = document.getElementById('btn-export')
+    const originalText = btn.innerText
+    btn.disabled = true
+    btn.innerText = '汇总中...'
+    const msgEl = document.getElementById('export-msg')
+    msgEl.innerHTML = '<span style="color:#389e0d;font-size:13px;">正在让数据库极速汇总，请稍候...</span>'
+
+    try {
+      // ★ 核心修改：直接调用数据库 RPC，一次性拿汇总结果
+      const { data, error } = await ctx.supabase.rpc('get_outbound_summary', {
+        p_warehouse_code: warehouse_code,
+        p_start_date: start_date,
+        p_end_date: end_date,
+        p_bill_types: selectedTypes.length > 0 ? selectedTypes : null
+      })
+
+      if (error) throw error
+      if (!data || data.length === 0) throw new Error('该时间段没有符合条件的数据')
+
+      // 组装 Excel 数据
+      const headers = ['配单类型', '货主代码', '商品代码', '品名', '箱数']
+      const rows = data.map(r => [r.bill_type, r.owner_code, r.product_code, r.product_name, r.total_boxes])
+      
+      let totalBoxes = 0
+      data.forEach(r => totalBoxes += Number(r.total_boxes))
+      
+      // 加上合计行
+      rows.push(['合计', '', '', '', totalBoxes])
+
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+      
+      // 设置列宽
+      ws['!cols'] = [
+        { wch: 20 }, // 配单类型
+        { wch: 15 }, // 货主代码
+        { wch: 15 }, // 商品代码
+        { wch: 40 }, // 品名
+        { wch: 10 }  // 箱数
+      ]
+
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, '出库配单汇总')
+      XLSX.writeFile(wb, `配单汇总_${start_date}_至_${end_date}_${Date.now()}.xlsx`)
+
+      msgEl.innerHTML = ctx.msg(`汇总导出成功！共 ${data.length} 项，总计 ${totalBoxes} 箱。`, true)
+    } catch (err) {
+      console.error('汇总异常:', err)
+      msgEl.innerHTML = ctx.msg(`汇总失败：${err.message}`, false)
+    } finally {
+      btn.disabled = false
+      btn.innerText = originalText
+    }
+  }
+
+  // --- 绑定按钮事件 ---
+  document.getElementById('btn-export').onclick = () => {
+    const type = document.getElementById('exp-type').value
+    if (type === 'summary') {
+      doExportSummary()
+    } else {
+      doExport(null, false)
+    }
+  }
+
+  document.getElementById('btn-export-admin').onclick = () => {
+    const typeSelect = document.getElementById('exp-type')
+    if (typeSelect) {
+      typeSelect.value = 'wms'
+      const wrap = document.getElementById('multi-select-wrap')
+      if (wrap) wrap.style.display = 'none'
+    }
+    doExport('admin', true)
+  }
 
   let currentPage = 0;
   const pageSize = 50;
@@ -577,7 +749,6 @@ async function renderBills(v) {
           ;(async () => {
             try {
               const { data: { session } } = await ctx.supabase.auth.getSession()
-              // ★ 使用 safeFetch
               const res = await safeFetch(`/functions/v1/delete-bill`, {
                 method: 'POST',
                 headers: {
@@ -842,7 +1013,6 @@ async function renderQCAdmin(v) {
           .range(page * 1000, (page + 1) * 1000 - 1)
         
         if (keyword) {
-          // 需与上面的查询逻辑保持一致
           let matchedCodes = []
           const kw = keyword.toLowerCase()
           const matchVps = (vendors || []).filter(v => 
@@ -1720,6 +1890,7 @@ async function renderAdmins(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
+    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/create-admin`, {
       method: 'POST',
       headers: {
@@ -1796,6 +1967,7 @@ async function renderAdmins(v) {
         if (id === ctx.currentUser.id) return alert('不能禁用自己的账号')
         if (!confirm(`确定${action}该管理员？`)) return
         const { data: { session } } = await ctx.supabase.auth.getSession()
+        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/toggle-user-status`, {
           method: 'POST',
           headers: {
@@ -1819,6 +1991,7 @@ async function renderAdmins(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
+        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
@@ -2437,6 +2610,7 @@ async function renderProduct(v) {
     }
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
+    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/import-products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -2956,7 +3130,6 @@ async function renderSys(v) {
       </details>
     </div>`
 
-  // ====== 维护模式事件 ======
   document.getElementById('btn-toggle-maintenance').onclick = async () => {
     const newStatus = isMaintenance ? 'false' : 'true'
     const action = isMaintenance ? '关闭' : '开启'
@@ -2977,7 +3150,6 @@ async function renderSys(v) {
     renderTab('sys')
   }
 
-  // ====== 钉钉配置事件 ======
   const dingBody = document.getElementById('ding-config-body')
   
   document.getElementById('btn-add-ding').onclick = () => {
@@ -3046,7 +3218,6 @@ async function renderSys(v) {
     setTimeout(() => renderTab('sys'), 1000)
   }
 
-  // ====== 清理配置事件 ======
   document.getElementById('btn-save-cleanup').onclick = async () => {
     if (!isSuper()) return alert('只有超级管理员可以修改')
     const d = Number(document.getElementById('cleanup-days').value)
@@ -3079,7 +3250,6 @@ async function renderSys(v) {
     setTimeout(() => renderTab('sys'), 1000)
   }
 
-  // ====== 通用配置事件 ======
   document.getElementById('btn-c-save').onclick = async () => {
     const key = document.getElementById('c-key').value.trim()
     const val = document.getElementById('c-val').value
@@ -3095,7 +3265,6 @@ async function renderSys(v) {
     renderTab('sys')
   }
 
-  // ====== 版本历史事件 ======
   document.getElementById('btn-v-add').onclick = async () => {
     const version = document.getElementById('v-version').value.trim()
     if (!version) return
