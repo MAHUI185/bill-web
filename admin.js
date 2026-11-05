@@ -365,15 +365,23 @@ async function renderBills(v) {
         b.split_desc || '', b.tare_dimension || null, b.tare_value ?? null, b.route || ''
       ])
 
-      const outRows = outBills.map(b => [
-        b.bill_type || '', b.owner_code || '', b.store_code || '',
-        b.logistics_mode || '', b.location_code || '',
-        fmtDate(b.effective_date), fmtDate(b.pick_date), b.remark || '',
-        b.source_no || '', b.inbound_order_no || '', b.product_code || '',
-        null, // ★ 强制置空「商品标识」
-        b.spec || '', b.quantity ?? '', b.price ?? '',
-        b.product_remark || b.product_code || '无', b.group_name || '', b.split_flag || '', b.split_desc || ''
-      ])
+      const outRows = outBills.map(b => {
+        // ★ 核心规则：济转西系列，导出门店强制写死为 8205
+        let storeCode = b.store_code || ''
+        if (b.bill_type.includes('济转西')) {
+          storeCode = '8205'
+        }
+
+        return [
+          b.bill_type || '', b.owner_code || '', storeCode,
+          b.logistics_mode || '', b.location_code || '',
+          fmtDate(b.effective_date), fmtDate(b.pick_date), b.remark || '',
+          b.source_no || '', b.inbound_order_no || '', b.product_code || '',
+          null, // ★ 强制置空「商品标识」
+          b.spec || '', b.quantity ?? '', b.price ?? '',
+          b.product_remark || b.product_code || '无', b.group_name || '', b.split_flag || '', b.split_desc || ''
+        ]
+      })
 
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([IN_HEADERS, ...inRows]), '入库')
@@ -569,7 +577,7 @@ async function renderBills(v) {
           ;(async () => {
             try {
               const { data: { session } } = await ctx.supabase.auth.getSession()
-              // ★ 强制使用 safeFetch 走代理
+              // ★ 使用 safeFetch
               const res = await safeFetch(`/functions/v1/delete-bill`, {
                 method: 'POST',
                 headers: {
@@ -1712,7 +1720,6 @@ async function renderAdmins(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/create-admin`, {
       method: 'POST',
       headers: {
@@ -1789,7 +1796,6 @@ async function renderAdmins(v) {
         if (id === ctx.currentUser.id) return alert('不能禁用自己的账号')
         if (!confirm(`确定${action}该管理员？`)) return
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/toggle-user-status`, {
           method: 'POST',
           headers: {
@@ -1813,7 +1819,6 @@ async function renderAdmins(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
@@ -2432,7 +2437,6 @@ async function renderProduct(v) {
     }
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/import-products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -2816,20 +2820,17 @@ async function renderSys(v) {
   const cleanupTime = cfgMap.cleanup_time || '03:00'
   const isMaintenance = cfgMap.maintenance_mode === 'true'
   
-  // 解析钉钉多群配置
   let dingConfigs = []
   try {
     if (cfgMap.dingtalk_qc_multi_configs) {
       dingConfigs = JSON.parse(cfgMap.dingtalk_qc_multi_configs)
     }
   } catch(e) {}
-  // 兼容旧数据展示
   if (dingConfigs.length === 0 && cfgMap.dingtalk_qc_webhook) {
     dingConfigs.push({ name: '默认群', webhook: cfgMap.dingtalk_qc_webhook, secret: cfgMap.dingtalk_qc_secret || '' })
   }
   const dingTime = cfgMap.dingtalk_qc_push_time || '08:00'
 
-  // 过滤掉要在专属卡片里编辑的字段
   const hiddenKeys = ['maintenance_mode', 'dingtalk_qc_webhook', 'dingtalk_qc_secret', 'dingtalk_qc_multi_configs']
   const displayCfgs = (cfgs || []).filter(c => !hiddenKeys.includes(c.config_key))
 
@@ -3025,7 +3026,6 @@ async function renderSys(v) {
 
     msgEl.innerHTML = ctx.msg('保存中...', true)
 
-    // 1. 保存 JSON 配置和推送时间
     const upserts = [
       { config_key: 'dingtalk_qc_multi_configs', config_value: JSON.stringify(configs), updated_by: ctx.operatorName },
       { config_key: 'dingtalk_qc_push_time', config_value: time, updated_by: ctx.operatorName }
@@ -3034,7 +3034,6 @@ async function renderSys(v) {
     const { error } = await ctx.supabase.from('system_config').upsert(upserts, { onConflict: 'config_key' })
     if (error) return msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
 
-    // 2. 调用 RPC 刷新定时器
     const { error: rpcErr } = await ctx.supabase.rpc('reschedule_dingtalk_qc_push', { p_time: time })
     if (rpcErr) {
       console.warn('刷新定时器失败', rpcErr)
@@ -3062,14 +3061,12 @@ async function renderSys(v) {
     const msgEl = document.getElementById('cleanup-msg')
     msgEl.innerHTML = ctx.msg('保存中...', true)
 
-    // 1. 保存天数和时间到 system_config
     const { error } = await ctx.supabase.rpc('save_cleanup_config', { p_days: d, p_time: t })
     if (error) {
       msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
       return
     }
 
-    // 2. 动态更新 pg_cron 定时器
     const { error: rpcErr } = await ctx.supabase.rpc('reschedule_cleanup_job', { p_time: t })
     if (rpcErr) {
       console.warn('刷新清理定时器失败', rpcErr)
@@ -3143,13 +3140,8 @@ async function renderSys(v) {
 async function renderAnnouncements(v) {
   if (!isSuper()) return v.innerHTML = ctx.msg('仅超级管理员可查看公告管理', false)
 
-  // 获取公告列表
   const { data: anns } = await ctx.supabase.from('announcement').select('*').order('id', { ascending: false })
-  
-  // 获取所有有效账号总数（包含厂商和物流商）
   const { count: totalUsers } = await ctx.supabase.from('vendor_profile').select('*', { count: 'exact', head: true }).in('account_type', ['vendor', 'logistics']).eq('status', 1)
-  
-  // 获取所有已读记录（统计用）
   const { data: allReads } = await ctx.supabase.from('announcement_read').select('announcement_id, vendor_code')
 
   const readMap = {}
@@ -3189,7 +3181,6 @@ async function renderAnnouncements(v) {
     </div>
     <div id="ann-modal"></div>`
 
-  // 发布事件
   document.getElementById('btn-publish-ann').onclick = async () => {
     const title = document.getElementById('ann-title').value.trim()
     const content = document.getElementById('ann-content').value.trim()
@@ -3209,7 +3200,6 @@ async function renderAnnouncements(v) {
     setTimeout(() => renderTab('ann'), 800)
   }
 
-  // 下线事件
   v.querySelectorAll('[data-del]').forEach(b => {
     b.onclick = async () => {
       if (!confirm('确定要将此公告下线吗？下线后用户登录不再弹出。')) return
@@ -3220,14 +3210,12 @@ async function renderAnnouncements(v) {
     }
   })
 
-  // 查看名单事件
   v.querySelectorAll('[data-view]').forEach(b => {
     b.onclick = async () => {
       const id = b.dataset.view
       const title = b.dataset.title
       const modal = document.getElementById('ann-modal')
       
-      // 获取厂商和物流商列表
       const { data: vps } = await ctx.supabase.from('vendor_profile')
         .select('vendor_code, vendor_name, account_type')
         .in('account_type', ['vendor', 'logistics'])

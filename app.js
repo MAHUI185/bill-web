@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-11-05 终极完整版：安全请求降级、防假删除、极速录入）
+// app.js — 主逻辑（2026-11-05 终极完整版：安全请求降级、防假删除、防假已读）
 
 import { supabase } from './supabase.js'
 
@@ -2098,25 +2098,35 @@ function showAnnouncementModal(ann) {
       btn.innerText = '提交中...'
 
       try {
-        // 写入已读记录
-        await supabase.from('announcement_read').insert({
+        // 1. 写入已读记录
+        const { error: readErr } = await supabase.from('announcement_read').insert({
           announcement_id: ann.id,
           user_id: currentUser.id,
           vendor_code: currentProfile?.vendor_code || ''
         })
 
-        // 同步到厂商修改记录 (bill_id = 0)
-        await supabase.from('vendor_edit_log').insert({
+        if (readErr) throw new Error('记录已读失败: ' + readErr.message)
+
+        // 2. 同步到厂商修改记录 (bill_id = 0)
+        const { error: logErr } = await supabase.from('vendor_edit_log').insert({
           bill_id: 0,
           vendor_code: currentProfile?.vendor_code || '',
           changed_fields: ['阅读公告'],
           before_data: null,
           after_data: { '公告标题': ann.title, '阅读时间': new Date().toLocaleString() }
         })
+        
+        if (logErr) console.warn('写入日志失败，但不影响已读状态', logErr)
+
       } catch (e) {
-        console.error('记录已读失败', e)
+        console.error(e)
+        alert('网络异常，保存已读状态失败，请刷新后重试！')
+        btn.disabled = false
+        btn.innerText = '我已知晓'
+        return // ★ 发生错误时不关闭弹窗，让用户重试
       }
 
+      // 成功才关闭弹窗
       modal.remove()
       resolve()
     }
