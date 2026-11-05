@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-11-05 终极完整版：济转西DSP货主修正、安全请求降级、防假删除）
+// app.js — 主逻辑（2026-11-05 终极完整版：支持新单据记录品名、济转西DSP货主修正、防假删除）
 
 import { supabase } from './supabase.js'
 
@@ -28,7 +28,6 @@ async function safeFetch(path, options = {}) {
   try {
     const res = await fetch(primaryUrl, { ...options, signal: controller.signal })
     clearTimeout(timeoutId)
-    // 如果返回网关错误，也触发降级
     if (res.status === 502 || res.status === 504) throw new Error('Gateway Error')
     return res
   } catch (err) {
@@ -516,7 +515,6 @@ function calcOutFields(billType, supplierInput, defaultStore) {
     return { owner_code: supplierInput, store_code: defaultStore || '' }
   }
   
-  // 普通 DSP 出库保持 8888 不变
   if (billType === 'DSP出库') {
     return { owner_code: '8888', store_code: '' }
   }
@@ -528,7 +526,6 @@ function calcOutFields(billType, supplierInput, defaultStore) {
     return { owner_code: supplierInput, store_code: '8205' }
   }
   
-  // ★ 济转西 DSP 的货主改为厂商编码
   if (billType === '济转西DSP(留库)') {
     return { owner_code: supplierInput, store_code: '8205' }
   }
@@ -1152,6 +1149,7 @@ async function renderFill(view) {
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, arrival_date: r.arrival_date || null, effective_date: addOneDay(r.arrival_date),
         whole_process: 'NO', 
+        product_name: r.product_name || '', // ★ 新增：保存品名
         product_remark: r.product_name || r.product_code || '无', // ★ 备注兜底
         submitter_type: isAdmin ? 'admin' : 'vendor'
       }))
@@ -1164,6 +1162,7 @@ async function renderFill(view) {
         pick_date: r.pick_date || null, effective_date: addOneDay(r.pick_date),
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, 
+        product_name: r.product_name || '', // ★ 新增：保存品名
         product_remark: r.product_name || r.product_code || '无', // ★ 备注兜底
         submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode
       }))
