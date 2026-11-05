@@ -9,6 +9,26 @@ function isValidSpec(spec) {
 }
 const SIZE_EMPTY_MSG = '长、宽、高、重量为必填，请到「商品资料」补全'
 
+// ★ 全局请求容错机制：优先走代理，失败或超时自动切直连
+async function safeFetch(path, options = {}) {
+  const primaryUrl = `https://api.mahui.pw${path}`
+  const fallbackUrl = `https://gpjdzgakvqhnpykuqbfr.supabase.co${path}`
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 5000) // 5秒超时强制降级
+
+  try {
+    const res = await fetch(primaryUrl, { ...options, signal: controller.signal })
+    clearTimeout(timeoutId)
+    if (res.status === 502 || res.status === 504) throw new Error('Gateway Error')
+    return res
+  } catch (err) {
+    clearTimeout(timeoutId)
+    console.warn(`代理请求失败，自动切换直连: ${err.message}`)
+    return await fetch(fallbackUrl, options)
+  }
+}
+
 export async function renderAdmin(view, context) {
   ctx = context
 
@@ -549,8 +569,8 @@ async function renderBills(v) {
           ;(async () => {
             try {
               const { data: { session } } = await ctx.supabase.auth.getSession()
-              // 强制走代理
-              const res = await fetch(`https://api.mahui.pw/functions/v1/delete-bill`, {
+              // ★ 强制使用 safeFetch 走代理
+              const res = await safeFetch(`/functions/v1/delete-bill`, {
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
@@ -767,7 +787,8 @@ async function renderQCAdmin(v) {
 
         try {
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`https://api.mahui.pw/functions/v1/delete-qc`, {
+          // ★ 使用 safeFetch
+          const res = await safeFetch(`/functions/v1/delete-qc`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1041,7 +1062,8 @@ async function renderVendors(v) {
           const p = vps.find(x => x.id === id)
           if (!confirm(`确定${action}该厂商？`)) return
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`https://api.mahui.pw/functions/v1/toggle-user-status`, {
+          // ★ 使用 safeFetch
+          const res = await safeFetch(`/functions/v1/toggle-user-status`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1067,7 +1089,8 @@ async function renderVendors(v) {
           if (input === null) return
           const codes = input.split(',').map(s => s.trim()).filter(Boolean)
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`https://api.mahui.pw/functions/v1/grant-warehouse`, {
+          // ★ 使用 safeFetch
+          const res = await safeFetch(`/functions/v1/grant-warehouse`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1090,7 +1113,8 @@ async function renderVendors(v) {
           const pwd = prompt('输入新密码（至少 6 位）')
           if (!pwd || pwd.length < 6) return alert('密码太短')
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`https://api.mahui.pw/functions/v1/reset-password`, {
+          // ★ 使用 safeFetch
+          const res = await safeFetch(`/functions/v1/reset-password`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1112,7 +1136,8 @@ async function renderVendors(v) {
           if (!confirm(`确定删除厂商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 厂商档案\n- 仓库授权\n\n此操作不可撤销！`)) return
 
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`https://api.mahui.pw/functions/v1/delete-vendor`, {
+          // ★ 使用 safeFetch
+          const res = await safeFetch(`/functions/v1/delete-vendor`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1167,7 +1192,8 @@ async function renderVendors(v) {
       return document.getElementById('vendor-msg').innerHTML = ctx.msg('厂编、名称、联系人、手机号、密码为必填', false)
     }
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`https://api.mahui.pw/functions/v1/create-vendor`, {
+    // ★ 使用 safeFetch
+    const res = await safeFetch(`/functions/v1/create-vendor`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1255,7 +1281,8 @@ async function renderVendors(v) {
           const item = list[i]
           msgEl.innerHTML = ctx.msg(`导入中（${i+1} / ${list.length}）：${item.vendor_code} ${item.vendor_name}...`, true)
           try {
-            const res = await fetch(`https://api.mahui.pw/functions/v1/create-vendor`, {
+            // ★ 使用 safeFetch
+            const res = await safeFetch(`/functions/v1/create-vendor`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -1482,7 +1509,8 @@ async function renderLogistics(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`https://api.mahui.pw/functions/v1/create-logistics`, {
+    // ★ 使用 safeFetch
+    const res = await safeFetch(`/functions/v1/create-logistics`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1535,7 +1563,8 @@ async function renderLogistics(v) {
         document.getElementById('btn-modal-save').onclick = async () => {
           const finalCodes = mvPicker.getSelected()
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          const res = await fetch(`https://api.mahui.pw/functions/v1/grant-logistics-vendors`, {
+          // ★ 使用 safeFetch
+          const res = await safeFetch(`/functions/v1/grant-logistics-vendors`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1561,7 +1590,8 @@ async function renderLogistics(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`https://api.mahui.pw/functions/v1/reset-password`, {
+        // ★ 使用 safeFetch
+        const res = await safeFetch(`/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1582,7 +1612,8 @@ async function renderLogistics(v) {
         if (!confirm(`确定删除物流商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 物流商档案\n- 负责厂商关联\n\n此操作不可撤销！`)) return
 
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`https://api.mahui.pw/functions/v1/delete-logistics`, {
+        // ★ 使用 safeFetch
+        const res = await safeFetch(`/functions/v1/delete-logistics`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1681,7 +1712,8 @@ async function renderAdmins(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`https://api.mahui.pw/functions/v1/create-admin`, {
+    // ★ 使用 safeFetch
+    const res = await safeFetch(`/functions/v1/create-admin`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1757,7 +1789,8 @@ async function renderAdmins(v) {
         if (id === ctx.currentUser.id) return alert('不能禁用自己的账号')
         if (!confirm(`确定${action}该管理员？`)) return
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`https://api.mahui.pw/functions/v1/toggle-user-status`, {
+        // ★ 使用 safeFetch
+        const res = await safeFetch(`/functions/v1/toggle-user-status`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1780,7 +1813,8 @@ async function renderAdmins(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        const res = await fetch(`https://api.mahui.pw/functions/v1/reset-password`, {
+        // ★ 使用 safeFetch
+        const res = await safeFetch(`/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -2398,7 +2432,8 @@ async function renderProduct(v) {
     }
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    const res = await fetch(`https://api.mahui.pw/functions/v1/import-products`, {
+    // ★ 使用 safeFetch
+    const res = await safeFetch(`/functions/v1/import-products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
       body: JSON.stringify({ warehouse_code: document.getElementById('p-wh').value, products })

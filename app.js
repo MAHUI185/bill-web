@@ -1,10 +1,10 @@
-// app.js — 主逻辑（2026-11-05 终极完整版：含公告强弹窗、防超时导出、极速录入）
+// app.js — 主逻辑（2026-11-05 终极完整版：安全请求降级、公告强弹窗、极速录入）
 
 import { supabase } from './supabase.js'
 
 const SUPABASE_URL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent)
   ? 'https://api.mahui.pw'
-  : 'https://gpjdzakvqhnpykuqbfr.supabase.co'
+  : 'https://gpjdzgakvqhnpykuqbfr.supabase.co'
 
 const app = document.getElementById('app')
 let currentUser = null
@@ -16,6 +16,27 @@ let myVendors = []
 let countdownTimer = null
 let activeHeartbeatTimer = null
 let maintenanceCheckTimer = null
+
+// ★ 全局请求容错机制：优先走代理，失败或超时自动切直连
+async function safeFetch(path, options = {}) {
+  const primaryUrl = `https://api.mahui.pw${path}`
+  const fallbackUrl = `https://gpjdzgakvqhnpykuqbfr.supabase.co${path}`
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 5000) // 5秒超时强制降级
+
+  try {
+    const res = await fetch(primaryUrl, { ...options, signal: controller.signal })
+    clearTimeout(timeoutId)
+    // 如果返回网关错误，也触发降级
+    if (res.status === 502 || res.status === 504) throw new Error('Gateway Error')
+    return res
+  } catch (err) {
+    clearTimeout(timeoutId)
+    console.warn(`代理请求失败，自动切换直连: ${err.message}`)
+    return await fetch(fallbackUrl, options)
+  }
+}
 
 function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
@@ -1408,7 +1429,6 @@ async function renderProducts(view) {
     })
     const mergedList = Object.values(merged)
 
-    // ★ 前端搜索过滤
     const filteredList = mergedList.filter(r => {
       if (!keyword) return true
       const kw = keyword.toLowerCase()
@@ -1416,7 +1436,6 @@ async function renderProducts(view) {
              (r.product_name || '').toLowerCase().includes(kw)
     })
 
-    // ★ 统计不合格数量并显示顶部警告
     const invalidCount = filteredList.filter(r => isProductInvalid(r)).length
     let warningHtml = ''
     if (invalidCount > 0) {
@@ -1430,7 +1449,6 @@ async function renderProducts(view) {
       `
     }
 
-    // ★ 分页切片
     const totalPages = Math.ceil(filteredList.length / pageSize)
     const paginatedList = filteredList.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
 
@@ -1884,7 +1902,12 @@ async function renderQC(view) {
 
       const fileInfos = files.map((file, index) => {
         const ext = file.name.split('.').pop()
-        let customName = file.name.replace(/\.[^/.]+$/, "").replace(/[\/\\:*?"<>|]/g, '')
+        // ★ 强力清洗：去除空格，并把全角括号替换为下划线
+        let customName = file.name.replace(/\.[^/.]+$/, "")
+          .replace(/[\/\\:*?"<>|]/g, '')
+          .replace(/ /g, '') 
+          .replace(/（/g, '_').replace(/）/g, '_') 
+        
         const timestamp = Date.now()
         const finalFileName = `qc/${targetCode}_${targetName}_${customName}_${timestamp}_${index}.${ext}`
         return { file, fileName: finalFileName, originalName: file.name }
@@ -1893,14 +1916,18 @@ async function renderQC(view) {
       // 1. 获取上传链接
       msgEl.innerHTML = msg('正在获取上传凭证...', true)
       const { data: { session } } = await supabase.auth.getSession()
-      // ★ 单独强制走代理
-      const res = await fetch(`https://api.mahui.pw/functions/v1/upload-qc`, {
+      
+      // ★ 使用 safeFetch 替代直接 fetch
+      const res = await safeFetch(`/functions/v1/upload-qc`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({ fileNames: fileInfos.map(f => f.fileName) })
       })
       
-      if (!res.ok) throw new Error('获取上传凭证失败')
+      if (!res.ok) {
+        const errText = await res.text()
+        throw new Error('获取上传凭证失败: ' + errText)
+      }
       const { urls } = await res.json()
 
       // 2. 并行上传 R2
@@ -1927,8 +1954,8 @@ async function renderQC(view) {
       if (oldReports && oldReports.length > 0) {
         await Promise.all(oldReports.map(async (old) => {
           try {
-            // ★ 单独强制走代理
-            await fetch(`https://api.mahui.pw/functions/v1/delete-qc`, {
+            // ★ 使用 safeFetch 替代直接 fetch
+            await safeFetch(`/functions/v1/delete-qc`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
               body: JSON.stringify({ filePath: old.file_path })
@@ -1977,8 +2004,9 @@ async function renderQC(view) {
 
       try {
         const { data: { session } } = await supabase.auth.getSession()
-        // ★ 单独强制走代理
-        const res = await fetch(`https://api.mahui.pw/functions/v1/delete-qc`, {
+        
+        // ★ 使用 safeFetch 替代直接 fetch
+        const res = await safeFetch(`/functions/v1/delete-qc`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
           body: JSON.stringify({ filePath: path })
