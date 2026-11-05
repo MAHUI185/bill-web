@@ -1,4 +1,4 @@
-// admin.js — 管理后台（提报进度、单据管理、质检报告、厂商/物流商管理、基础数据、日志、系统配置）
+// admin.js — 管理后台（提报进度、单据管理、质检报告、厂商/物流商管理、基础数据、日志、系统配置、公告管理）
 
 let ctx = null
 let operatorName = '未知'
@@ -33,6 +33,7 @@ export async function renderAdmin(view, context) {
       <button data-t="admins">管理员管理</button>
       <button data-t="base">基础数据</button>
       <button data-t="logs">日志</button>
+      <button data-t="ann">公告管理</button>
       <button data-t="sys">系统配置</button>
     `
   } else if (context.currentRole === 'admin') {
@@ -89,6 +90,7 @@ async function renderTab(key) {
     if (key === 'admins') return renderAdmins(v)
     if (key === 'base') return renderBase(v)
     if (key === 'logs') return renderLogs(v)
+    if (key === 'ann') return renderAnnouncements(v)
     if (key === 'sys') return renderSys(v)
   } catch (e) {
     console.error(e)
@@ -127,7 +129,8 @@ const ACTION_CN = {
   create_store: '新增门店', delete_store: '删除门店', create_product: '新增商品', delete_product: '删除商品',
   create_deadline: '新增提报时间段', delete_deadline: '删除提报时间段', create_holiday: '新增节假日', delete_holiday: '删除节假日',
   create_bypass: '新增强制放行', delete_bypass: '删除强制放行', save_cleanup_config: '修改清理配置',
-  save_system_config: '保存系统配置', delete_system_config: '删除系统配置', add_version: '新增版本记录'
+  save_system_config: '保存系统配置', delete_system_config: '删除系统配置', add_version: '新增版本记录',
+  publish_announcement: '发布公告', archive_announcement: '下线公告'
 }
 
 // ================= 1. 提报进度 =================
@@ -2051,7 +2054,7 @@ async function renderStore(v) {
         const { error } = await ctx.supabase.from('store_config').delete().eq('id', b.dataset.del)
         if (error) return alert(ctx.translateError(error.message))
         await logOp('delete_store', '门店 ' + b.dataset.code)
-        renderStore(v) // 重新加载整个页面以刷新数据
+        renderStore(v)
       }
     })
   }
@@ -2239,7 +2242,6 @@ async function renderProduct(v) {
     if (e.key === 'Enter') document.getElementById('btn-prod-search').click()
   }
 
-  // ★ 导出商品
   document.getElementById('btn-export-products').onclick = async () => {
     try {
       let allProducts = []
@@ -3098,6 +3100,133 @@ async function renderSys(v) {
       if (error) return alert(ctx.translateError(error.message))
       await logOp('delete_system_config', '配置 ' + (CONFIG_CN[b.dataset.key] || b.dataset.key))
       renderTab('sys')
+    }
+  })
+}
+
+// ================= 8. 公告管理 =================
+async function renderAnnouncements(v) {
+  if (!isSuper()) return v.innerHTML = ctx.msg('仅超级管理员可查看公告管理', false)
+
+  // 获取公告列表
+  const { data: anns } = await ctx.supabase.from('announcement').select('*').order('id', { ascending: false })
+  
+  // 获取所有有效账号总数（包含厂商和物流商）
+  const { count: totalUsers } = await ctx.supabase.from('vendor_profile').select('*', { count: 'exact', head: true }).in('account_type', ['vendor', 'logistics']).eq('status', 1)
+  
+  // 获取所有已读记录（统计用）
+  const { data: allReads } = await ctx.supabase.from('announcement_read').select('announcement_id, vendor_code')
+
+  const readMap = {}
+  ;(allReads || []).forEach(r => {
+    (readMap[r.announcement_id] ||= []).push(r.vendor_code)
+  })
+
+  v.innerHTML = `
+    <div class="card" style="box-shadow:none;padding:0 0 16px;">
+      <h2>发布新公告</h2>
+      <div id="ann-msg"></div>
+      <input id="ann-title" placeholder="公告标题 *" style="width:100%;margin-bottom:12px;" />
+      <textarea id="ann-content" placeholder="公告内容 *" rows="4" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:4px;font-family:inherit;margin-bottom:12px;resize:vertical;"></textarea>
+      <button id="btn-publish-ann" style="background:#1677ff;color:#fff;">发布公告</button>
+    </div>
+    <div class="card" style="box-shadow:none;padding:0;">
+      <h2>历史公告列表</h2>
+      <div class="scroll">
+        <table>
+          <tr><th>发布时间</th><th>标题</th><th>状态</th><th>已读统计</th><th>操作</th></tr>
+          <tbody>${(anns||[]).map(a => {
+            const readCount = (readMap[a.id] || []).length
+            const isActive = a.status === 'active'
+            return `<tr>
+              <td>${new Date(a.created_at).toLocaleString()}</td>
+              <td>${a.title}</td>
+              <td>${isActive ? '<span class="stat ok">生效中</span>' : '<span class="stat no" style="background:#f5f5f5;color:#999;">已下线</span>'}</td>
+              <td>${readCount} / ${totalUsers || 0} 人</td>
+              <td>
+                <button class="small secondary" data-view="${a.id}" data-title="${a.title}">已读名单</button>
+                ${isActive ? `<button class="small danger" data-del="${a.id}">下线</button>` : ''}
+              </td>
+            </tr>`
+          }).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">暂无公告</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+    <div id="ann-modal"></div>`
+
+  // 发布事件
+  document.getElementById('btn-publish-ann').onclick = async () => {
+    const title = document.getElementById('ann-title').value.trim()
+    const content = document.getElementById('ann-content').value.trim()
+    const msgEl = document.getElementById('ann-msg')
+    
+    if (!title || !content) return msgEl.innerHTML = ctx.msg('标题和内容为必填', false)
+    
+    msgEl.innerHTML = ctx.msg('发布中...', true)
+    const { error } = await ctx.supabase.from('announcement').insert({
+      title, content, created_by: ctx.operatorName
+    })
+    
+    if (error) return msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+    
+    await logOp('publish_announcement', '发布公告 ' + title)
+    msgEl.innerHTML = ctx.msg('发布成功', true)
+    setTimeout(() => renderTab('ann'), 800)
+  }
+
+  // 下线事件
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定要将此公告下线吗？下线后用户登录不再弹出。')) return
+      const { error } = await ctx.supabase.from('announcement').update({ status: 'archived' }).eq('id', b.dataset.del)
+      if (error) return alert(ctx.translateError(error.message))
+      await logOp('archive_announcement', '下线公告 ID ' + b.dataset.del)
+      renderTab('ann')
+    }
+  })
+
+  // 查看名单事件
+  v.querySelectorAll('[data-view]').forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.view
+      const title = b.dataset.title
+      const modal = document.getElementById('ann-modal')
+      
+      // 获取厂商和物流商列表
+      const { data: vps } = await ctx.supabase.from('vendor_profile')
+        .select('vendor_code, vendor_name, account_type')
+        .in('account_type', ['vendor', 'logistics'])
+        .eq('status', 1)
+        .order('account_type')
+        .order('vendor_code')
+        
+      const readCodes = new Set(readMap[id] || [])
+      const unread = (vps || []).filter(v => !readCodes.has(v.vendor_code))
+      const read = (vps || []).filter(v => readCodes.has(v.vendor_code))
+
+      modal.innerHTML = `
+        <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;">
+          <div style="background:#fff;border-radius:8px;padding:24px;max-width:700px;width:90%;max-height:80vh;display:flex;flex-direction:column;">
+            <h2 style="margin-bottom:16px;">公告已读名单 · ${title}</h2>
+            <div style="flex:1;overflow:auto;display:flex;gap:16px;">
+              <div style="flex:1;">
+                <h3 style="color:#389e0d;margin-bottom:8px;">已读 (${read.length})</h3>
+                <div style="font-size:13px;background:#f6ffed;border:1px solid #b7eb8f;padding:8px;border-radius:4px;height:350px;overflow-y:auto;">
+                  ${read.map(v => `<div style="padding:4px 0;border-bottom:1px dashed #d9f7be;">[${v.account_type === 'vendor' ? '厂商' : '物流'}] ${v.vendor_code} - ${v.vendor_name||''}</div>`).join('') || '无'}
+                </div>
+              </div>
+              <div style="flex:1;">
+                <h3 style="color:#cf1322;margin-bottom:8px;">未读 (${unread.length})</h3>
+                <div style="font-size:13px;background:#fff2f0;border:1px solid #ffccc7;padding:8px;border-radius:4px;height:350px;overflow-y:auto;">
+                  ${unread.map(v => `<div style="padding:4px 0;border-bottom:1px dashed #ffa39e;">[${v.account_type === 'vendor' ? '厂商' : '物流'}] ${v.vendor_code} - ${v.vendor_name||''}</div>`).join('') || '无'}
+                </div>
+              </div>
+            </div>
+            <div style="margin-top:16px;text-align:right;">
+              <button class="secondary" onclick="document.getElementById('ann-modal').innerHTML=''">关闭</button>
+            </div>
+          </div>
+        </div>`
     }
   })
 }

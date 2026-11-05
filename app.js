@@ -1,10 +1,10 @@
-// app.js — 主逻辑（2026-10-31 终极完整版：长宽高强校验、纯数字校验、分页搜索兼容）
+// app.js — 主逻辑（2026-11-05 终极完整版：含公告强弹窗、防超时导出、极速录入）
 
 import { supabase } from './supabase.js'
 
 const SUPABASE_URL = /Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent)
   ? 'https://api.mahui.pw'
-  : 'https://gpjdzgakvqhnpykuqbfr.supabase.co'
+  : 'https://gpjdzakvqhnpykuqbfr.supabase.co'
 
 const app = document.getElementById('app')
 let currentUser = null
@@ -21,13 +21,11 @@ function msg(text, ok = true) {
   return `<div class="msg ${ok ? 'ok' : 'err'}">${text}</div>`
 }
 
-// ========== 商品规格与尺寸校验工具 ==========
-
+// ========== 校验工具 ==========
 function isValidSpec(spec) {
   if (!spec) return false
   return /^1\*1\*[1-9]\d*$/.test(String(spec).trim())
 }
-
 const SPEC_EMPTY_MSG = '包装规格为空，请先到「商品资料」补全规格后再提报'
 const SIZE_EMPTY_MSG = '长、宽、高、重量为必填，请到「商品资料」补全'
 
@@ -36,7 +34,6 @@ function isValidSize(length, width, height, weight) {
   return vals.every(v => !isNaN(v) && v > 0)
 }
 
-// ★ 判断商品资料是否不完善（含纯数字、规格、长宽高）
 function isProductInvalid(p) {
   if (!p) return true
   const isSpecValid = p.spec && /^1\*1\*[1-9]\d*$/.test(String(p.spec).trim())
@@ -93,6 +90,7 @@ function withTimeout(promise, ms = 5000) {
   ])
 }
 
+// ========== 启动与路由 ==========
 async function init() {
   renderLogin()
 
@@ -344,6 +342,7 @@ function renderForceChangePwd() {
     }, 800)
   }
 }
+
 function renderMain() {
   const roleTag = isAdmin ? '（管理员）' : isLogistics ? '（物流商）' : ''
   app.innerHTML = `
@@ -405,6 +404,11 @@ function renderMain() {
     activeHeartbeatTimer = setInterval(beat, 3 * 60 * 1000)
   }
 
+  // ★ 公告弹窗检查 (仅厂商和物流商)
+  if (!isAdmin) {
+    checkAnnouncements()
+  }
+
   if (currentRole === 'super_admin') return; 
 
   if (maintenanceCheckTimer) { clearInterval(maintenanceCheckTimer); maintenanceCheckTimer = null }
@@ -446,6 +450,7 @@ async function renderView(key) {
   }
 }
 
+// ========== 时间与业务计算工具 ==========
 function addOneDay(d) {
   if (!d) return null
   const dt = new Date(d + 'T00:00:00Z')
@@ -602,13 +607,16 @@ async function renderFill(view) {
 
   const { range } = await loadDeadlineRange(myVendorCode, myWhs[0] || null)
 
-  const { data: locs } = await supabase.from('location_config')
+  let locs = []
+  const { data: locData } = await supabase.from('location_config')
     .select('warehouse_code, location_code')
     .eq('status', 1)
     .in('warehouse_code', myWhs.length ? myWhs : ['__none__'])
+  locs = locData || []
 
+  let myStores = []
   const { data: stores } = await supabase.from('store_config').select('warehouse_code, store_code, store_name').eq('status', 1)
-  const myStores = (stores||[]).filter(s => !s.warehouse_code || myWhs.includes(s.warehouse_code))
+  myStores = (stores||[]).filter(s => !s.warehouse_code || myWhs.includes(s.warehouse_code))
 
   async function loadProducts(vendorCode) {
     const { data } = await supabase.from('product_master').select('product_code, product_name, spec, length, width, height, weight').eq('default_vendor_code', vendorCode).order('product_code')
@@ -818,6 +826,16 @@ async function renderFill(view) {
               }
             }
             
+            // ★ 刷新 locs 和 myStores
+            const { data: locData } = await supabase.from('location_config')
+              .select('warehouse_code, location_code')
+              .eq('status', 1)
+              .in('warehouse_code', myWhs.length ? myWhs : ['__none__'])
+            locs = locData || []
+
+            const { data: stores } = await supabase.from('store_config').select('warehouse_code, store_code, store_name').eq('status', 1)
+            myStores = (stores||[]).filter(s => !s.warehouse_code || myWhs.includes(s.warehouse_code))
+
             inRows = [newInRowForVendor(vc)]
             outRows = [newOutRowForVendor(vc)]
             render()
@@ -1978,6 +1996,85 @@ async function renderQC(view) {
         btn.disabled = false
         btn.innerText = '删除'
       }
+    }
+  })
+}
+
+// ================= 公告强弹窗逻辑 =================
+async function checkAnnouncements() {
+  try {
+    // 1. 查生效中的公告
+    const { data: anns } = await supabase.from('announcement')
+      .select('*')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+    
+    if (!anns || !anns.length) return
+
+    // 2. 查我读过的公告
+    const { data: reads } = await supabase.from('announcement_read')
+      .select('announcement_id')
+      .eq('user_id', currentUser.id)
+      
+    const readIds = new Set((reads || []).map(r => r.announcement_id))
+    const unreadAnns = anns.filter(a => !readIds.has(a.id))
+
+    if (!unreadAnns.length) return
+
+    // 3. 依次弹窗
+    for (const ann of unreadAnns) {
+      await showAnnouncementModal(ann)
+    }
+  } catch (e) {
+    console.error('检查公告失败', e)
+  }
+}
+
+function showAnnouncementModal(ann) {
+  return new Promise((resolve) => {
+    const modal = document.createElement('div')
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;'
+    
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;max-width:500px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,0.2);display:flex;flex-direction:column;overflow:hidden;">
+        <div style="background:#1677ff;color:#fff;padding:16px 20px;">
+          <h2 style="margin:0;font-size:18px;color:#fff;">📢 系统公告</h2>
+        </div>
+        <div style="padding:24px;max-height:50vh;overflow-y:auto;font-size:14px;line-height:1.6;color:#333;white-space:pre-wrap;">${ann.content}</div>
+        <div style="padding:16px 20px;border-top:1px solid #eee;text-align:right;background:#fafafa;">
+          <button id="btn-ann-read" style="background:#1677ff;color:#fff;border:none;padding:8px 24px;border-radius:4px;cursor:pointer;font-size:14px;">我已知晓</button>
+        </div>
+      </div>
+    `
+    document.body.appendChild(modal)
+
+    document.getElementById('btn-ann-read').onclick = async () => {
+      const btn = document.getElementById('btn-ann-read')
+      btn.disabled = true
+      btn.innerText = '提交中...'
+
+      try {
+        // 写入已读记录
+        await supabase.from('announcement_read').insert({
+          announcement_id: ann.id,
+          user_id: currentUser.id,
+          vendor_code: currentProfile?.vendor_code || ''
+        })
+
+        // 同步到厂商修改记录 (bill_id = 0)
+        await supabase.from('vendor_edit_log').insert({
+          bill_id: 0,
+          vendor_code: currentProfile?.vendor_code || '',
+          changed_fields: ['阅读公告'],
+          before_data: null,
+          after_data: { '公告标题': ann.title, '阅读时间': new Date().toLocaleString() }
+        })
+      } catch (e) {
+        console.error('记录已读失败', e)
+      }
+
+      modal.remove()
+      resolve()
     }
   })
 }
