@@ -1,4 +1,4 @@
-// app.js — 主逻辑（2026-11-05 终极完整版：安全请求降级、公告强弹窗、极速录入）
+// app.js — 主逻辑（2026-11-05 终极完整版：安全请求降级、防假删除、极速录入）
 
 import { supabase } from './supabase.js'
 
@@ -1429,6 +1429,7 @@ async function renderProducts(view) {
     })
     const mergedList = Object.values(merged)
 
+    // ★ 前端搜索过滤
     const filteredList = mergedList.filter(r => {
       if (!keyword) return true
       const kw = keyword.toLowerCase()
@@ -1436,6 +1437,7 @@ async function renderProducts(view) {
              (r.product_name || '').toLowerCase().includes(kw)
     })
 
+    // ★ 统计不合格数量并显示顶部警告
     const invalidCount = filteredList.filter(r => isProductInvalid(r)).length
     let warningHtml = ''
     if (invalidCount > 0) {
@@ -1449,6 +1451,7 @@ async function renderProducts(view) {
       `
     }
 
+    // ★ 分页切片
     const totalPages = Math.ceil(filteredList.length / pageSize)
     const paginatedList = filteredList.slice(currentPage * pageSize, (currentPage + 1) * pageSize)
 
@@ -2014,11 +2017,24 @@ async function renderQC(view) {
         
         if (!res.ok) throw new Error('R2 文件删除失败')
 
-        const { error } = await supabase.from('qc_report').delete().eq('id', id)
+        // ★ 核心修复：带上 count: 'exact' 检查是否真的删除了数据，防止 RLS 拦截导致的假删除
+        const { error, count } = await supabase.from('qc_report').delete({ count: 'exact' }).eq('id', id)
+        
         if (error) throw error
+        if (count === 0) throw new Error('权限不足，未能删除该记录，请联系管理员')
 
         alert('删除成功')
-        renderQC(view)
+        
+        // ★ 优化：直接从前端 DOM 移除这一行，不再重新渲染整个页面，避免网络卡顿时卡死
+        const tr = btn.closest('tr')
+        if (tr) {
+          tr.remove()
+          const tbody = tr.parentElement
+          if (tbody && tbody.children.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;">暂无数据</td></tr>'
+          }
+        }
+
       } catch (err) {
         alert('删除失败：' + err.message)
         btn.disabled = false
