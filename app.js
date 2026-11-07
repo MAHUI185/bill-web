@@ -1,4 +1,5 @@
-// app.js — 主逻辑（2026-11-05 终极完整版：支持新单据记录品名、济转西DSP货主修正、防假删除）
+// app.js — 主逻辑（2026-11-07：新增「我的对账」，支持厂商/物流商查看+确认）
+// 其他业务（提报、单据导出、质检、公告等）保持 2026-11-05 版本完全不变
 
 import { supabase } from './supabase.js'
 
@@ -398,9 +399,10 @@ function renderMain() {
   }
   const nav = document.getElementById('nav')
   
+  // ★ 新增：厂商和物流商共用「我的对账」入口
   const tabs = isAdmin 
     ? [['fill','管理填报'], ['admin','管理后台']] 
-    : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告']]
+    : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告'],['billing','我的对账']]
   
   nav.innerHTML = tabs.map(([k, v]) => `<button data-k="${k}">${v}</button>`).join('')
   nav.querySelectorAll('button').forEach(b => {
@@ -456,6 +458,8 @@ async function renderView(key) {
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
   if (key === 'qc') return renderQC(view)
+  // ★ 新增：我的对账路由
+  if (key === 'billing') return renderBilling(view)
   if (key === 'admin') {
     try {
       const mod = await import('./admin.js')
@@ -2132,6 +2136,216 @@ function showAnnouncementModal(ann) {
       resolve()
     }
   })
+}
+
+// ================= 「我的对账」（厂商 + 物流商共用） =================
+// 厂商：只看自己的账单，可确认
+// 物流商：可查看/切换所有负责厂商的账单，可代为确认
+async function renderBilling(view) {
+  const isLg = isLogistics
+
+  // 1. 决定要查询的厂编列表
+  let vendorCodes = []
+  let vendorNameMap = {}
+
+  if (isLg) {
+    if (!myVendors || !myVendors.length) {
+      view.innerHTML = `<div class="card"><h2>我的对账</h2><p style="color:#cf1322;">当前物流商未配置负责厂商，请联系管理员。</p></div>`
+      return
+    }
+    vendorCodes = myVendors.map(v => v.vendor_code)
+    myVendors.forEach(v => { vendorNameMap[v.vendor_code] = v.vendor_name || '' })
+  } else {
+    const vc = currentProfile?.vendor_code || ''
+    if (!vc) {
+      view.innerHTML = `<div class="card"><h2>我的对账</h2><p style="color:#cf1322;">未找到当前账号对应的厂编，请联系管理员。</p></div>`
+      return
+    }
+    vendorCodes = [vc]
+    vendorNameMap[vc] = currentProfile?.vendor_name || ''
+  }
+
+  // 2. 一次拉取全部账单
+  const { data: bills, error } = await supabase
+    .from('vendor_billings')
+    .select('*')
+    .in('vendor_code', vendorCodes)
+    .order('bill_month', { ascending: false })
+    .order('warehouse_code', { ascending: true })
+
+  if (error) {
+    view.innerHTML = `<div class="card"><h2>我的对账</h2>${msg(translateError(error.message), false)}</div>`
+    return
+  }
+
+  if (!bills || bills.length === 0) {
+    view.innerHTML = '<div class="card"><h2>我的对账</h2><p style="color:#999;">暂无对账数据</p></div>'
+    return
+  }
+
+  // 3. 可选厂编列表（以实际出现在账单里的厂编为准）
+  const codesWithBills = [...new Set(bills.map(b => b.vendor_code))]
+  let currentVendor = isLg ? codesWithBills[0] : vendorCodes[0]
+  let currentWh = null
+
+  const renderUI = () => {
+    const vendorBills = bills.filter(b => b.vendor_code === currentVendor)
+    if (!vendorBills.length) {
+      view.innerHTML = `<div class="card"><h2>我的对账</h2><p style="color:#999;">该厂商暂无账单数据</p></div>`
+      return
+    }
+
+    const warehouses = [...new Set(vendorBills.map(b => b.warehouse_code))]
+    if (!currentWh || !warehouses.includes(currentWh)) {
+      currentWh = warehouses[0]
+    }
+
+    const monthBills = vendorBills.filter(b => b.warehouse_code === currentWh)
+    const months = [...new Set(monthBills.map(b => b.bill_month))].sort().reverse()
+    const currentMonth = months[0]
+    const currentBill = monthBills.find(b => b.bill_month === currentMonth) || monthBills[0]
+
+    // ★ 厂商和物流商都可确认
+    const canConfirm = currentBill?.status === 'pending'
+
+    view.innerHTML = `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:12px;">
+          <h2 style="margin:0;">${isLg ? '厂商对账单' : '我的对账单'}</h2>
+          <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+            ${isLg && codesWithBills.length > 1 ? `
+              <select id="bill-vendor-select" style="padding:6px; border-radius:4px; border:1px solid #d9d9d9;">
+                ${codesWithBills.map(code => `<option value="${code}" ${code===currentVendor?'selected':''}>${code}${vendorNameMap[code] ? ' - ' + vendorNameMap[code] : ''}</option>`).join('')}
+              </select>
+            ` : (isLg && vendorNameMap[currentVendor]
+                ? `<span style="padding:6px; font-weight:bold; color:#1677ff;">${currentVendor} - ${vendorNameMap[currentVendor]}</span>`
+                : '')}
+
+            ${warehouses.length > 1 ? `
+              <select id="bill-wh-select" style="padding:6px; border-radius:4px; border:1px solid #d9d9d9;">
+                ${warehouses.map(w => `<option value="${w}" ${w===currentWh?'selected':''}>${w}</option>`).join('')}
+              </select>
+            ` : `<span style="padding:6px; font-weight:bold; color:#666;">${currentWh}</span>`}
+
+            ${months.length > 1 ? `
+              <select id="bill-month-select" style="padding:6px; border-radius:4px; border:1px solid #d9d9d9;">
+                ${months.map(m => `<option value="${m}" ${m===currentMonth?'selected':''}>${m}</option>`).join('')}
+              </select>
+            ` : `<span style="padding:6px; font-weight:bold; color:#666;">${currentMonth}</span>`}
+          </div>
+        </div>
+
+        ${isLg ? `
+          <div style="background:#e6f4ff; border:1px solid #91caff; border-radius:6px; padding:10px 14px; margin-bottom:16px; font-size:13px; color:#1677ff;">
+            ℹ️ 您以物流商身份查看，可代为确认负责厂商的账单。
+          </div>
+        ` : ''}
+
+        <div style="display:flex; gap:20px; margin-bottom:24px; flex-wrap:wrap;">
+          <div style="flex:1; min-width:200px; padding:16px; background:#f8f9fa; border-radius:8px;">
+            <div style="color:#666; font-size:13px;">${currentBill.bill_month} 含税总金额</div>
+            <div style="font-size:24px; color:#cf1322; font-weight:bold;">¥ ${currentBill.total_amount_tax ?? 0}</div>
+          </div>
+          <div style="flex:1; min-width:200px; padding:16px; background:#f8f9fa; border-radius:8px;">
+            <div style="color:#666; font-size:13px;">当前状态</div>
+            <div style="font-size:20px; color:${currentBill.status === 'confirmed' ? '#389e0d' : '#d46b08'};">
+              ${currentBill.status === 'confirmed' ? '✅ 已确认' : '⏳ 待确认'}
+            </div>
+          </div>
+        </div>
+
+        <h3 style="margin-bottom:12px;">费用汇总明细</h3>
+        <table style="margin-bottom:24px;">
+          <tr><th>装卸(箱)</th><th>仓储(板)</th><th>操作(箱)</th><th>西安干线</th><th>DSP(东/西/蒙)</th></tr>
+          <tr>
+            <td>${currentBill.summary_data?.unloading ?? 0}</td>
+            <td>${currentBill.summary_data?.storage ?? 0}</td>
+            <td>${currentBill.summary_data?.operation ?? 0}</td>
+            <td>${currentBill.summary_data?.transit ?? 0}</td>
+            <td>${currentBill.summary_data?.dsp_east ?? 0} / ${currentBill.summary_data?.dsp_west ?? 0} / ${currentBill.summary_data?.dsp_nm ?? 0}</td>
+          </tr>
+        </table>
+
+        <h3 style="margin-bottom:12px;">原始产生明细</h3>
+        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+          <button class="secondary small" onclick="showBillDetail('unloading', '装卸明细')">装卸明细</button>
+          <button class="secondary small" onclick="showBillDetail('operation', '操作费明细')">操作费明细</button>
+          <button class="secondary small" onclick="showBillDetail('dsp', 'DSP配送明细')">DSP配送明细</button>
+        </div>
+        <div id="bill-detail-box" style="border:1px solid #eee; border-radius:8px; padding:12px; max-height:300px; overflow:auto; display:none; background:#fafafa;"></div>
+
+        ${canConfirm
+          ? `<button style="width:100%; margin-top:24px; background:#389e0d; color:#fff;" onclick="confirmBill(${currentBill.id})">确认账单无误</button>`
+          : (currentBill.status === 'confirmed'
+              ? `<div style="margin-top:24px; text-align:center; color:#389e0d; font-weight:bold;">✅ 账单已确认</div>`
+              : '')}
+      </div>
+    `
+
+    // 4. 事件绑定
+    const selVendor = document.getElementById('bill-vendor-select')
+    if (selVendor) {
+      selVendor.onchange = (e) => {
+        currentVendor = e.target.value
+        currentWh = null
+        renderUI()
+      }
+    }
+
+    const selWh = document.getElementById('bill-wh-select')
+    if (selWh) {
+      selWh.onchange = (e) => {
+        currentWh = e.target.value
+        renderUI()
+      }
+    }
+
+    // 月份下拉：同仓库有多月账单时，默认为最新月（下拉预留，点击切换如需展示历史账单可在此扩展）
+    const selMonth = document.getElementById('bill-month-select')
+    if (selMonth) {
+      selMonth.onchange = () => { /* 预留 */ }
+    }
+
+    // 5. 明细弹窗
+    window.showBillDetail = (type, title) => {
+      const box = document.getElementById('bill-detail-box')
+      const data = currentBill.details_data?.[type] || []
+      box.style.display = 'block'
+      if (data.length === 0) {
+        box.innerHTML = `<p style="color:#999;">暂无【${title}】数据</p>`
+        return
+      }
+      let headers = []
+      if (type === 'unloading') headers = ['单号', '日期', '商品名称', '件数', '数量']
+      if (type === 'operation') headers = ['单号', '日期', '商品名称', '件数', '数量']
+      if (type === 'dsp') headers = ['收货单号', '店号', '区域', '商品名称', '收货件数', '金额']
+      const colIndices = type === 'unloading'
+        ? [3, 4, 10, 13, 14]
+        : type === 'operation'
+          ? [1, 5, 7, 12, 13]
+          : [1, 4, 5, 13, 16, 18]
+      box.innerHTML = `<table><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+        ${data.map(r => `<tr>${colIndices.map(i => `<td>${r[i] ?? ''}</td>`).join('')}</tr>`).join('')}
+      </table>`
+    }
+
+    // 6. 确认（厂商 + 物流商均可）
+    window.confirmBill = async (id) => {
+      if (!confirm('确认本月账单金额及明细无误吗？')) return
+      const { error, count } = await supabase
+        .from('vendor_billings')
+        .update({ status: 'confirmed' })
+        .eq('id', id)
+        .select('id', { count: 'exact' })
+
+      if (error) return alert('确认失败：' + translateError(error.message))
+      if (count === 0) return alert('确认失败：权限不足或记录不存在，请联系管理员')
+      alert('已确认！财务将收到您的反馈。')
+      renderBilling(view)
+    }
+  }
+
+  renderUI()
 }
 
 // 启动系统
