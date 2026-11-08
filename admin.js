@@ -818,9 +818,48 @@ async function renderBills(v) {
 async function renderBillingAdmin(v) {
   if (!isSuper()) return v.innerHTML = ctx.msg('仅超级管理员可操作财务对账', false)
 
+  // 1. 读取已有的费率配置
+  const { data: cfg } = await ctx.supabase.from('system_config').select('config_value').eq('config_key', 'billing_rates_config').maybeSingle()
+  
+  let currentCfg = {
+    rates: { dsp_east: 10, dsp_west: 15, dsp_nm: 15, transit: 7, storage: 3.5, operation: 1.5, unloading: 0.3 },
+    taxes: { transport: 0.09, storage: 0.06, unloading: 0.06 }
+  }
+  if (cfg?.config_value) {
+    try { currentCfg = JSON.parse(cfg.config_value) } catch(e) {}
+  }
+
   v.innerHTML = `
-    <div class="card" style="box-shadow:none; padding:16px;">
-      <h2>财务对账中心</h2>
+    <div class="card" style="box-shadow:none; padding:16px; margin-bottom:16px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h2 style="margin:0;">财务对账中心</h2>
+        <button class="secondary small" id="btn-toggle-rate-cfg" style="background:#f6ffed; border-color:#b7eb8f; color:#389e0d;">⚙️ 展开/收起费率与税率配置</button>
+      </div>
+
+      <div id="rate-config-box" style="display:none; background:#fafafa; padding:16px; border-radius:8px; border:1px solid #eee; margin-bottom:16px;">
+        <h3 style="font-size:15px; margin-bottom:12px; color:#1677ff;">基础计费标准（元）</h3>
+        <div class="row" style="margin-bottom:16px;">
+          <div><label>DSP省内(箱)</label><input type="number" id="rate-east" value="${currentCfg.rates.dsp_east}" step="0.1" /></div>
+          <div><label>DSP省外(箱)</label><input type="number" id="rate-west" value="${currentCfg.rates.dsp_west}" step="0.1" /></div>
+          <div><label>内蒙古(箱)</label><input type="number" id="rate-nm" value="${currentCfg.rates.dsp_nm}" step="0.1" /></div>
+          <div><label>干线代送(箱)</label><input type="number" id="rate-transit" value="${currentCfg.rates.transit}" step="0.1" /></div>
+        </div>
+        <div class="row" style="margin-bottom:16px;">
+          <div><label>仓储费(板/天)</label><input type="number" id="rate-storage" value="${currentCfg.rates.storage}" step="0.1" /></div>
+          <div><label>操作费(箱)</label><input type="number" id="rate-operation" value="${currentCfg.rates.operation}" step="0.1" /></div>
+          <div><label>装卸费(箱)</label><input type="number" id="rate-unloading" value="${currentCfg.rates.unloading}" step="0.1" /></div>
+        </div>
+
+        <h3 style="font-size:15px; margin-bottom:12px; color:#1677ff;">各项税率（小数，如 0.09 代表 9%）</h3>
+        <div class="row" style="margin-bottom:16px;">
+          <div><label>运输类税率</label><input type="number" id="tax-transport" value="${currentCfg.taxes.transport}" step="0.01" /></div>
+          <div><label>储存类税率</label><input type="number" id="tax-storage" value="${currentCfg.taxes.storage}" step="0.01" /></div>
+          <div><label>装卸类税率</label><input type="number" id="tax-unloading" value="${currentCfg.taxes.unloading}" step="0.01" /></div>
+        </div>
+        <button id="btn-save-rates" style="width:150px; background:#1677ff; color:#fff;">保存配置</button>
+        <span id="rate-save-msg" style="margin-left:12px; font-size:13px; color:#389e0d;"></span>
+      </div>
+
       <div style="background:#f8f9fa; padding:20px; border-radius:8px; border:1px solid #eee; margin-bottom:16px;">
         <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center; flex-wrap:wrap;">
           <select id="bill-wh" style="padding:8px; border-radius:4px; border:1px solid #d9d9d9;">
@@ -832,7 +871,7 @@ async function renderBillingAdmin(v) {
         </div>
         <div style="border: 2px dashed #91caff; background: #f0f7ff; padding: 20px; text-align: center; border-radius: 8px;">
           <input type="file" id="bill-file" accept=".xlsx, .xls" style="display:none;" multiple onchange="window.handleBillingUpload(event)" />
-          <label for="bill-file" style="cursor:pointer; color:#1677ff; font-weight:bold; font-size:16px;">📁 点击上传《总表数据源.xlsx》（支持多选）</label>
+          <label for="bill-file" style="cursor:pointer; color:#1677ff; font-weight:bold; font-size:16px;">📁 点击上传《总表数据源.xlsx》（支持按住 Ctrl 多选）</label>
         </div>
         <div id="billing-msg" style="margin-top:12px; color:#1677ff; font-size:13px; line-height: 1.8;"></div>
       </div>
@@ -854,6 +893,49 @@ async function renderBillingAdmin(v) {
       </div>
     </div>
   `
+
+  // 配置面板交互
+  document.getElementById('btn-toggle-rate-cfg').onclick = () => {
+    const box = document.getElementById('rate-config-box')
+    box.style.display = box.style.display === 'none' ? 'block' : 'none'
+  }
+
+  document.getElementById('btn-save-rates').onclick = async () => {
+    const msg = document.getElementById('rate-save-msg')
+    msg.innerText = '保存中...'
+    msg.style.color = '#1677ff'
+    const newCfg = {
+      rates: {
+        dsp_east: Number(document.getElementById('rate-east').value),
+        dsp_west: Number(document.getElementById('rate-west').value),
+        dsp_nm: Number(document.getElementById('rate-nm').value),
+        transit: Number(document.getElementById('rate-transit').value),
+        storage: Number(document.getElementById('rate-storage').value),
+        operation: Number(document.getElementById('rate-operation').value),
+        unloading: Number(document.getElementById('rate-unloading').value)
+      },
+      taxes: {
+        transport: Number(document.getElementById('tax-transport').value),
+        storage: Number(document.getElementById('tax-storage').value),
+        unloading: Number(document.getElementById('tax-unloading').value)
+      }
+    }
+    
+    const { error } = await ctx.supabase.from('system_config').upsert({
+      config_key: 'billing_rates_config',
+      config_value: JSON.stringify(newCfg),
+      updated_by: ctx.operatorName
+    }, { onConflict: 'config_key' })
+
+    if (error) {
+      msg.innerText = '保存失败：' + error.message
+      msg.style.color = '#cf1322'
+    } else {
+      msg.innerText = '✅ 保存成功，前端展示已同步更新'
+      msg.style.color = '#389e0d'
+      setTimeout(() => msg.innerText = '', 3000)
+    }
+  }
 
   window.handleBillingUpload = async (e) => {
     const files = Array.from(e.target.files)
@@ -877,93 +959,71 @@ async function renderBillingAdmin(v) {
       try {
         const buf = await file.arrayBuffer()
         const wb = XLSX.read(buf)
-
-        let targetWs = null, headerRowIndex = -1, codeColIndex = -1
-
-        // 全表扫描找厂编
+        
+        let targetWs = null
         for (let sheetName of wb.SheetNames) {
-          const ws = wb.Sheets[sheetName]
-          const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-          for (let r = 0; r < Math.min(30, rawRows.length); r++) {
-            const row = rawRows[r]
-            for (let c = 0; c < row.length; c++) {
-              const cell = String(row[c] || '').trim()
-              if (cell === '厂编' || cell === '厂商编码' || cell === '供应商代码' || cell === '厂商代码') {
-                targetWs = ws; headerRowIndex = r; codeColIndex = c; break
-              }
-            }
-            if (targetWs) break
+          if (sheetName.includes('总表') || sheetName.includes('汇总')) {
+            targetWs = wb.Sheets[sheetName]; break
           }
-          if (targetWs) break
         }
-
-        if (!targetWs) throw new Error('未找到包含「厂编」的表头，请检查文件')
+        if (!targetWs) throw new Error('未找到包含「总表」或「汇总」的表格')
 
         const rawRows = XLSX.utils.sheet_to_json(targetWs, { header: 1, defval: '' })
-        let amountColIndex = -1
-        const headerRow = rawRows[headerRowIndex] || []
-        for (let c = 0; c < headerRow.length; c++) {
-          const cell = String(headerRow[c] || '')
-          if (cell.includes('含税') && (cell.includes('金额') || cell.includes('合计'))) {
-            amountColIndex = c; break
-          }
-        }
-        if (amountColIndex === -1) amountColIndex = 25
-
+        
         const vendorMap = new Map()
-        for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
+        for (let r = 5; r < rawRows.length; r++) {
           const row = rawRows[r]
-          const codeRaw = row[codeColIndex]
+          const codeRaw = row[1]
           if (!codeRaw) continue
           const code = String(codeRaw).trim()
-          if (!/^\d+$/.test(code)) continue
+          if (!/^\d+$/.test(code)) continue 
+
+          const getVal = (idx) => idx >= 0 && row[idx] ? Number(row[idx]) || 0 : 0
 
           vendorMap.set(code, {
             bill_month: month,
             warehouse_code: currentWh,
             vendor_code: code,
-            vendor_name: row[codeColIndex + 1] || '',
-            total_amount_tax: Number(row[amountColIndex] || 0) || 0,
+            vendor_name: String(row[2] || ''),
+            total_amount_tax: getVal(25),
             summary_data: {
-              unloading: row[8], storage: row[10], operation: row[11],
-              transit: row[15], dsp_east: row[16], dsp_west: row[17], dsp_nm: row[18]
+              unloading: getVal(8),
+              storage: getVal(10),
+              operation: getVal(11),
+              transit: getVal(15),
+              dsp_east: getVal(16),
+              dsp_west: getVal(17),
+              dsp_nm: getVal(18)
             },
             details_data: { unloading: [], operation: [], dsp: [] },
             status: 'pending'
           })
         }
 
-        if (vendorMap.size === 0) throw new Error('提取不到有效厂编数据')
+        if (vendorMap.size === 0) throw new Error('未提取到有效数据')
         allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
         msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家</span>`
+        
       } catch (err) {
         msgEl.innerHTML += ` <span style="color:#cf1322;">失败：${err.message}</span>`
       }
     }
 
-    if (allPayloads.length === 0) {
-      msgEl.innerHTML += `<br><br><span style="color:#cf1322; font-size:14px;">❌ 全部文件均未解析到有效数据。</span>`
-      return
-    }
+    if (allPayloads.length === 0) return msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 全部文件解析失败。</span>`
 
     msgEl.innerHTML += `<br><span style="color:#1677ff;">正在写入数据库...</span>`
 
     try {
       const { error } = await ctx.supabase.from('vendor_billings').upsert(allPayloads, { onConflict: 'bill_month,warehouse_code,vendor_code' })
       if (error) throw error
-
-      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共更新了 ${allPayloads.length} 家厂商的对账数据。</span>`
-      e.target.value = ''
-      
-      // 刷新列表
+      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-weight:bold;">✅ 导入成功！共更新了 ${allPayloads.length} 家厂商。</span>`
+      e.target.value = '' 
       loadBillingList(month)
     } catch (err) {
-      console.error(err)
-      msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 写入数据库失败：${err.message}</span>`
+      msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 写入失败：${err.message}</span>`
     }
   }
 
-  // 加载列表方法
   window.loadBillingList = async (month) => {
     const box = document.getElementById('billing-list-box')
     const tbody = document.getElementById('billing-list-body')
@@ -973,31 +1033,22 @@ async function renderBillingAdmin(v) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">加载中...</td></tr>'
 
     const { data, error } = await ctx.supabase.from('vendor_billings')
-      .select('*')
-      .eq('bill_month', month)
-      .order('warehouse_code', { ascending: true })
-      .order('vendor_code', { ascending: true })
+      .select('*').eq('bill_month', month)
+      .order('warehouse_code', { ascending: true }).order('vendor_code', { ascending: true })
 
-    if (error) {
-      tbody.innerHTML = `<tr><td colspan="6" style="color:#cf1322;">加载失败：${error.message}</td></tr>`
-      return
-    }
+    if (error) return tbody.innerHTML = `<tr><td colspan="6" style="color:#cf1322;">加载失败：${error.message}</td></tr>`
 
     tbody.innerHTML = data.map(r => `<tr>
-      <td>${r.vendor_code}</td>
-      <td>${r.vendor_name || ''}</td>
-      <td>${r.warehouse_code}</td>
+      <td>${r.vendor_code}</td><td>${r.vendor_name || ''}</td><td>${r.warehouse_code}</td>
       <td style="color:#cf1322; font-weight:bold;">¥ ${Number(r.total_amount_tax || 0).toFixed(2)}</td>
       <td>${r.status === 'confirmed' ? '<span style="color:#389e0d;">✅ 已确认</span>' : '<span style="color:#d46b08;">⏳ 待确认</span>'}</td>
-      <td><button class="small secondary" onclick="alert('数据明细可在厂家端查看')">查看</button></td>
+      <td><button class="small secondary" onclick="alert('请在厂商端查看明细')">查看</button></td>
     </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">暂无数据</td></tr>'
   }
 
-  // 监听月份变化刷新列表
-  document.getElementById('bill-month').onchange = (e) => {
-    loadBillingList(e.target.value)
-  }
+  document.getElementById('bill-month').onchange = (e) => loadBillingList(e.target.value)
 }
+
 // ================= 3. 质检报告管理 =================
 async function renderQCAdmin(v) {
   const { data: vendors } = await ctx.supabase.from('vendor_profile').select('vendor_code, vendor_name')

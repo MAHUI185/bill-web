@@ -2162,7 +2162,7 @@ async function renderBilling(view) {
     vendorNameMap[vc] = currentProfile?.vendor_name || ''
   }
 
-  // 1. 拉取数据
+  // 1. 获取厂商数据
   const { data: bills, error } = await supabase
     .from('vendor_billings')
     .select('*')
@@ -2178,6 +2178,16 @@ async function renderBilling(view) {
   if (!bills || bills.length === 0) {
     view.innerHTML = '<div class="card"><h2>我的对账</h2><p style="color:#999;">暂无对账数据</p></div>'
     return
+  }
+
+  // 2. 获取费率配置
+  const { data: cfg } = await supabase.from('system_config').select('config_value').eq('config_key', 'billing_rates_config').maybeSingle()
+  let currentCfg = {
+    rates: { dsp_east: 10, dsp_west: 15, dsp_nm: 15, transit: 7, storage: 3.5, operation: 1.5, unloading: 0.3 },
+    taxes: { transport: 0.09, storage: 0.06, unloading: 0.06 }
+  }
+  if (cfg?.config_value) {
+    try { currentCfg = JSON.parse(cfg.config_value) } catch(e) {}
   }
 
   const codesWithBills = [...new Set(bills.map(b => b.vendor_code))]
@@ -2197,25 +2207,28 @@ async function renderBilling(view) {
     const currentBill = monthBills.find(b => b.bill_month === currentMonth) || monthBills[0]
     const canConfirm = currentBill?.status === 'pending'
 
-    // 费率配置字典（根据实际业务情况可调整）
-    const rates = { dsp_east: 10, dsp_west: 15, dsp_nm: 15, transit: 7, storage: 3.5, operation: 1.5, unloading: 0.3 }
-
-    // 计算各项费用明细
+    const rates = currentCfg.rates
+    const taxes = currentCfg.taxes
     const details = []
-    const sData = currentBill.summary_data || {}
     
-    const addDetail = (category, item, qty, rate, unit) => {
+    // 计算明细
+    const addDetail = (category, item, qty, rate, unit, taxRate) => {
       const q = Number(qty) || 0
-      if (q > 0) details.push({ category, item, qty: q, rate, unit, amount: q * rate })
+      if (q > 0) {
+        const untaxed = q * rate
+        const tax = untaxed * taxRate
+        details.push({ category, item, qty: q, rate, unit, untaxed, tax, total: untaxed + tax, taxRate })
+      }
     }
 
-    addDetail('运输', 'DSP省内(中/东区)', sData.dsp_east, rates.dsp_east, '箱')
-    addDetail('运输', 'DSP省外(西/西南)', sData.dsp_west, rates.dsp_west, '箱')
-    addDetail('运输', 'DSP省外(内蒙古)', sData.dsp_nm, rates.dsp_nm, '箱')
-    addDetail('运输', '干线代送', sData.transit, rates.transit, '箱')
-    addDetail('储存', '仓储费', sData.storage, rates.storage, '板/天')
-    addDetail('储存', '操作费', sData.operation, rates.operation, '箱')
-    addDetail('装卸', '装卸费', sData.unloading, rates.unloading, '箱')
+    const sData = currentBill.summary_data || {}
+    addDetail('运输', 'DSP省内(中/东区)', sData.dsp_east, rates.dsp_east, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(西/西南)', sData.dsp_west, rates.dsp_west, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(内蒙古)', sData.dsp_nm, rates.dsp_nm, '箱', taxes.transport)
+    addDetail('运输', '干线代送', sData.transit, rates.transit, '箱', taxes.transport)
+    addDetail('储存', '仓储费', sData.storage, rates.storage, '板/天', taxes.storage)
+    addDetail('储存', '操作费', sData.operation, rates.operation, '箱', taxes.storage)
+    addDetail('装卸', '装卸费', sData.unloading, rates.unloading, '箱', taxes.unloading)
 
     view.innerHTML = `
       <div class="card">
@@ -2266,18 +2279,24 @@ async function renderBilling(view) {
         <table style="margin-bottom:24px;">
           <thead style="background:#fafafa;">
             <tr>
-              <th style="color:#666;">大类</th><th style="color:#666;">项目</th><th style="color:#666;">发生量</th>
-              <th style="color:#666;">计费标准</th><th style="color:#666; text-align:right;">费用(元)</th>
+              <th>大类</th><th>项目</th><th>发生量</th>
+              <th>计费标准</th><th>税率</th>
+              <th style="text-align:right;">未税金额</th>
+              <th style="text-align:right;">税额</th>
+              <th style="text-align:right;">含税小计</th>
             </tr>
           </thead>
           <tbody>
-            ${details.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#999;">暂无明细发生量</td></tr>' : ''}
+            ${details.length === 0 ? '<tr><td colspan="8" style="text-align:center;color:#999;">暂无明细发生量</td></tr>' : ''}
             ${details.map(d => `<tr>
               <td>${d.category}</td>
               <td>${d.item}</td>
               <td>${d.qty} ${d.unit}</td>
               <td>${d.rate} 元/${d.unit}</td>
-              <td style="text-align:right;">${d.amount.toFixed(2)}</td>
+              <td>${(d.taxRate * 100).toFixed(0)}%</td>
+              <td style="text-align:right;">${d.untaxed.toFixed(2)}</td>
+              <td style="text-align:right;">${d.tax.toFixed(2)}</td>
+              <td style="text-align:right; color:#cf1322; font-weight:bold;">${d.total.toFixed(2)}</td>
             </tr>`).join('')}
           </tbody>
         </table>
@@ -2309,25 +2328,40 @@ async function renderBilling(view) {
       renderBilling(view)
     }
 
-    // 下载对账单 (生成简易结算单 Excel)
+    // 下载对账单
     window.downloadBillExcel = () => {
-      const wb = XLSX.utils.book_new()
-      const summaryData = [
-        ['厂商编号', currentVendor, '厂商名称', vendorNameMap[currentVendor]],
-        ['对账月份', currentBill.bill_month, '仓库', currentBill.warehouse_code],
-        ['含税总额(元)', currentBill.total_amount_tax, '状态', currentBill.status === 'confirmed' ? '已确认' : '待确认'],
+      const aoa = [
+        [`应收账款确认单 (${currentBill.warehouse_code})`],
+        [`厂编/厂名：`, currentVendor, vendorNameMap[currentVendor]],
+        [`结算日期：`, `${currentBill.bill_month} 月`],
         [],
-        ['大类', '项目', '发生量', '计费标准', '费用(元)']
+        ['大类', '项目', '发生量', '计费标准', '税率', '未税金额', '税额', '含税小计'],
       ]
+
+      let sumUntaxed = 0, sumTax = 0, sumTotal = 0
       details.forEach(d => {
-        summaryData.push([d.category, d.item, `${d.qty} ${d.unit}`, `${d.rate} 元/${d.unit}`, d.amount])
+        aoa.push([
+          d.category, d.item, `${d.qty} ${d.unit}`, d.rate, `${(d.taxRate * 100).toFixed(0)}%`,
+          d.untaxed.toFixed(2), d.tax.toFixed(2), d.total.toFixed(2)
+        ])
+        sumUntaxed += d.untaxed
+        sumTax += d.tax
+        sumTotal += d.total
       })
+
+      aoa.push([])
+      aoa.push(['合计', '', '', '', '', sumUntaxed.toFixed(2), sumTax.toFixed(2), sumTotal.toFixed(2)])
+      aoa.push([])
+      aoa.push(['发票注意事项：', '请核对账单确认无误后，在系统中点击确认按钮。'])
+      aoa.push(['确认人：', '', '审核人：', ''])
       
-      const ws = XLSX.utils.aoa_to_sheet(summaryData)
-      // 设置列宽
-      ws['!cols'] = [{wch:12}, {wch:25}, {wch:15}, {wch:15}, {wch:15}]
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }]
+      ws['!cols'] = [{wch: 15}, {wch: 20}, {wch: 12}, {wch: 12}, {wch: 8}, {wch: 12}, {wch: 12}, {wch: 15}]
+
+      const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, '结算单')
-      XLSX.writeFile(wb, `${currentVendor}_${currentBill.bill_month}_对账单.xlsx`)
+      XLSX.writeFile(wb, `${currentVendor}_${vendorNameMap[currentVendor]}_${currentBill.bill_month}_对账单.xlsx`)
     }
   }
 
