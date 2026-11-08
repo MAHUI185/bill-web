@@ -1,4 +1,4 @@
-// admin.js — 管理后台（2026-11-05 终极完整版：济转西DSP货主修正、多选极速汇总导出）
+// admin.js — 管理后台（2026-11-07 终极完整版：含财务对账、网络降级、单据多选汇总）
 
 let ctx = null
 let operatorName = '未知'
@@ -15,7 +15,7 @@ async function safeFetch(path, options = {}) {
   const fallbackUrl = `https://gpjdzgakvqhnpykuqbfr.supabase.co${path}`
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), 5000) // 5秒超时强制降级
+  const timeoutId = setTimeout(() => controller.abort(), 5000)
 
   try {
     const res = await fetch(primaryUrl, { ...options, signal: controller.signal })
@@ -47,6 +47,7 @@ export async function renderAdmin(view, context) {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
       <button data-t="bills">单据管理</button>
+      <button data-t="billing">财务对账</button>
       <button data-t="qc">质检报告</button>
       <button data-t="vendors">厂商管理</button>
       <button data-t="logistics">物流商管理</button>
@@ -104,6 +105,7 @@ async function renderTab(key) {
   try {
     if (key === 'progress') return renderProgress(v)
     if (key === 'bills') return renderBills(v)
+    if (key === 'billing') return renderBillingAdmin(v) // ★ 新增财务对账
     if (key === 'qc') return renderQCAdmin(v)
     if (key === 'vendors') return renderVendors(v)
     if (key === 'logistics') return renderLogistics(v)
@@ -248,13 +250,11 @@ async function renderBills(v) {
             <input type="checkbox" id="exp-include" style="width:auto; margin:0;" /> 包含已导出
           </label>
 
-          <!-- 导出类型下拉框 -->
           <select id="exp-type" style="flex:0 0 140px; margin:0; font-weight:bold; color:#1677ff;" onchange="document.getElementById('multi-select-wrap').style.display = this.value === 'summary' ? 'inline-block' : 'none'">
             <option value="wms">WMS 标准模板</option>
             <option value="summary">出库配单汇总表</option>
           </select>
 
-          <!-- 多选配单类型面板 -->
           <div id="multi-select-wrap" style="position:relative; display:none; margin:0;">
             <button id="ms-btn" class="secondary" style="height:32px; padding:0 12px; background:#fff7e6; border-color:#ffd591; color:#d46b08; font-weight:bold;">
               <span id="ms-btn-text">全部出库类型</span> <span style="font-size:10px;">▼</span>
@@ -336,7 +336,6 @@ async function renderBills(v) {
     </div>
     <div id="admin-edit-bill-panel"></div>`
 
-  // --- 多选下拉面板的事件绑定 ---
   const msBtn = document.getElementById('ms-btn')
   const msDropdown = document.getElementById('ms-dropdown')
   
@@ -345,7 +344,6 @@ async function renderBills(v) {
       e.preventDefault()
       msDropdown.style.display = msDropdown.style.display === 'block' ? 'none' : 'block'
     }
-
     document.addEventListener('click', function closeDropdown(e) {
       if (!document.getElementById('multi-select-wrap')?.contains(e.target)) {
         if(msDropdown) msDropdown.style.display = 'none'
@@ -358,12 +356,10 @@ async function renderBills(v) {
     document.getElementById('chk-jzx').checked = checked
     updateMsBtnText()
   }
-
   window.toggleJzx = (checked) => {
     document.querySelectorAll('.jzx-chk').forEach(chk => chk.checked = checked)
     syncAllState()
   }
-
   document.querySelectorAll('.type-chk').forEach(chk => {
     chk.onchange = () => {
       const jzxChks = document.querySelectorAll('.jzx-chk')
@@ -371,13 +367,11 @@ async function renderBills(v) {
       syncAllState()
     }
   })
-
   function syncAllState() {
     const allChks = document.querySelectorAll('.type-chk')
     document.getElementById('chk-all').checked = Array.from(allChks).every(c => c.checked)
     updateMsBtnText()
   }
-
   function updateMsBtnText() {
     const checkedCount = document.querySelectorAll('.type-chk:checked').length
     const totalCount = document.querySelectorAll('.type-chk').length
@@ -386,7 +380,6 @@ async function renderBills(v) {
     else textEl.innerText = `已选 ${checkedCount} 项`
   }
 
-  // --- 原有标准导出逻辑 ---
   const doExport = async (submitterType = null, isDelegate = false) => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
@@ -457,12 +450,10 @@ async function renderBills(v) {
       ])
 
       const outRows = outBills.map(b => {
-        // ★ 核心规则：济转西系列，导出门店强制写死为 8205
         let storeCode = b.store_code || ''
         if (b.bill_type.includes('济转西')) {
           storeCode = '8205'
         }
-
         return [
           b.bill_type || '', b.owner_code || '', storeCode,
           b.logistics_mode || '', b.location_code || '',
@@ -481,7 +472,6 @@ async function renderBills(v) {
       const batchNo = `EXP${Date.now()}`
       XLSX.writeFile(wb, `${isDelegate ? '代报导出' : 'export'}_${batchNo}.xlsx`)
 
-      // ================= 终极修复：调用 RPC 更新状态 =================
       msgEl.innerHTML = `<span style="color:#1677ff;font-size:13px;">Excel已下载，正在更新数据库状态（请勿关闭页面）...</span>`
 
       const ids = allBills.map(b => b.id)
@@ -516,14 +506,12 @@ async function renderBills(v) {
     }
   }
 
-  // --- 新增：出库配单汇总导出逻辑 (数据库聚合版) ---
   const doExportSummary = async () => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
     const end_date = document.getElementById('exp-end').value
     if (!start_date || !end_date) return alert('请选择完整的开始和结束日期')
 
-    // 获取勾选的类型
     const checkedChks = document.querySelectorAll('.type-chk:checked')
     const selectedTypes = Array.from(checkedChks).map(c => c.value)
 
@@ -535,7 +523,6 @@ async function renderBills(v) {
     msgEl.innerHTML = '<span style="color:#389e0d;font-size:13px;">正在让数据库极速汇总，请稍候...</span>'
 
     try {
-      // ★ 核心修改：直接调用数据库 RPC，一次性拿汇总结果
       const { data, error } = await ctx.supabase.rpc('get_outbound_summary', {
         p_warehouse_code: warehouse_code,
         p_start_date: start_date,
@@ -546,26 +533,16 @@ async function renderBills(v) {
       if (error) throw error
       if (!data || data.length === 0) throw new Error('该时间段没有符合条件的数据')
 
-      // 组装 Excel 数据
       const headers = ['配单类型', '货主代码', '商品代码', '品名', '箱数']
       const rows = data.map(r => [r.bill_type, r.owner_code, r.product_code, r.product_name, r.total_boxes])
       
       let totalBoxes = 0
       data.forEach(r => totalBoxes += Number(r.total_boxes))
       
-      // 加上合计行
       rows.push(['合计', '', '', '', totalBoxes])
 
       const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-      
-      // 设置列宽
-      ws['!cols'] = [
-        { wch: 20 }, // 配单类型
-        { wch: 15 }, // 货主代码
-        { wch: 15 }, // 商品代码
-        { wch: 40 }, // 品名
-        { wch: 10 }  // 箱数
-      ]
+      ws['!cols'] = [{ wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 40 }, { wch: 10 }]
 
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, ws, '出库配单汇总')
@@ -581,7 +558,6 @@ async function renderBills(v) {
     }
   }
 
-  // --- 绑定按钮事件 ---
   document.getElementById('btn-export').onclick = () => {
     const type = document.getElementById('exp-type').value
     if (type === 'summary') {
@@ -838,7 +814,186 @@ async function renderBills(v) {
   search(0)
 }
 
-// ================= 2.5 质检报告管理 =================
+// ================= 2.5 财务对账 =================
+async function renderBillingAdmin(v) {
+  if (!isSuper()) return v.innerHTML = ctx.msg('仅超级管理员可操作财务对账', false)
+
+  // ★ 版本印记：控制台会打印，用来验证你的新代码是否生效
+  console.log('★★★ 财务对账智能解析版 V2.0 已加载，支持多文件上传 ★★★')
+
+  v.innerHTML = `
+    <div class="card" style="box-shadow:none; padding:16px;">
+      <h2>财务对账中心</h2>
+      <div style="background:#f8f9fa; padding:20px; border-radius:8px; border:1px solid #eee; margin-bottom:16px;">
+        <div style="display:flex; gap:12px; margin-bottom:12px; align-items:center; flex-wrap:wrap;">
+          <select id="bill-wh" style="padding:8px; border-radius:4px; border:1px solid #d9d9d9;">
+            <option value="济南冻仓">济南冻仓 (默认)</option>
+            <option value="西安冻仓">西安冻仓 (默认)</option>
+          </select>
+          <span style="font-size:12px; color:#999;">* 若文件名包含“济南”或“西安”，系统会优先按文件名自动分仓。</span>
+          <input type="month" id="bill-month" style="padding:6px; border-radius:4px; border:1px solid #d9d9d9; margin-left:auto;" />
+        </div>
+        <div style="border: 2px dashed #91caff; background: #f0f7ff; padding: 20px; text-align: center; border-radius: 8px;">
+          <!-- ★ 这里加了 multiple 属性，允许一次选多个文件 ★ -->
+          <input type="file" id="bill-file" accept=".xlsx, .xls" style="display:none;" multiple onchange="window.handleBillingUpload(event)" />
+          <label for="bill-file" style="cursor:pointer; color:#1677ff; font-weight:bold; font-size:16px;">📁 点击上传《数据源.xlsx》（支持按住 Ctrl/Shift 多选文件）</label>
+        </div>
+        <div id="billing-msg" style="margin-top:12px; color:#1677ff; font-size:13px; line-height: 1.8;"></div>
+      </div>
+    </div>
+  `
+
+  window.handleBillingUpload = async (e) => {
+    const files = Array.from(e.target.files)
+    const month = document.getElementById('bill-month').value
+    const defaultWh = document.getElementById('bill-wh').value
+    const msgEl = document.getElementById('billing-msg')
+    
+    if (files.length === 0 || !month) {
+      alert('请选择文件并填写月份')
+      return
+    }
+
+    msgEl.innerHTML = `<span style="color:#1677ff;">开始处理 ${files.length} 个文件，请稍候...</span>`
+    let allPayloads = []
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      let currentWh = defaultWh
+      
+      // 智能根据文件名推断仓库
+      if (file.name.includes('济南')) currentWh = '济南冻仓'
+      else if (file.name.includes('西安')) currentWh = '西安冻仓'
+
+      msgEl.innerHTML += `<br><span style="color:#666;">正在解析 (${i+1}/${files.length})：${file.name} [归属：${currentWh}]...</span>`
+
+      try {
+        const buf = await file.arrayBuffer()
+        const wb = XLSX.read(buf)
+
+        // 1. 智能寻找“总表”
+        let totalSheetName = wb.SheetNames.find(n => n.includes('总表') || n.includes('汇总'))
+        if (!totalSheetName) throw new Error(`文件中未找到包含「总表」或「汇总」的 Sheet`)
+
+        const totalSheet = wb.Sheets[totalSheetName]
+        const rawRows = XLSX.utils.sheet_to_json(totalSheet, { header: 1, defval: '' })
+
+        // 2. 智能寻找表头（前20行内寻找“厂编”）
+        let headerRowIndex = -1
+        let codeColIndex = -1
+        let amountColIndex = -1
+
+        for (let r = 0; r < Math.min(20, rawRows.length); r++) {
+          const row = rawRows[r]
+          for (let c = 0; c < row.length; c++) {
+            const cell = String(row[c] || '').trim()
+            if (cell === '厂编' || cell === '供应商代码' || cell === '编码') {
+              headerRowIndex = r
+              codeColIndex = c
+              break
+            }
+          }
+          if (headerRowIndex !== -1) break
+        }
+
+        // 兜底：如果没找到“厂编”二字，默认按第6行、B列处理
+        if (headerRowIndex === -1) {
+          headerRowIndex = 4
+          codeColIndex = 1 
+        }
+
+        // 智能寻找“含税金额”列
+        const headerRow = rawRows[headerRowIndex] || []
+        for (let c = 0; c < headerRow.length; c++) {
+          const cell = String(headerRow[c] || '')
+          if (cell.includes('含税') && cell.includes('金额')) {
+            amountColIndex = c
+            break
+          }
+        }
+        if (amountColIndex === -1) amountColIndex = 25 // 兜底Z列
+
+        const vendorMap = new Map()
+
+        // 3. 从表头下一行开始读取数据
+        for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
+          const row = rawRows[r]
+          const code = String(row[codeColIndex] || '').trim()
+          
+          if (!code || !/^\d+$/.test(code)) continue // 必须是纯数字厂编
+
+          vendorMap.set(code, {
+            bill_month: month,
+            warehouse_code: currentWh,
+            vendor_code: code,
+            vendor_name: row[codeColIndex + 1] || '', // 厂编右边一般是厂名
+            total_amount_tax: Number(row[amountColIndex] || 0),
+            summary_data: {
+              unloading: row[8], storage: row[10], operation: row[11],
+              transit: row[15], dsp_east: row[16], dsp_west: row[17], dsp_nm: row[18]
+            },
+            details_data: { unloading: [], operation: [], dsp: [] },
+            status: 'pending'
+          })
+        }
+
+        if (vendorMap.size === 0) {
+          throw new Error('未找到有效的厂编数据，请检查厂编列是否为纯数字')
+        }
+
+        // 4. 解析明细页
+        const mapDetail = (keyword, type) => {
+          let sheetName = wb.SheetNames.find(n => n.includes(keyword))
+          if (!sheetName) return
+          const ws = wb.Sheets[sheetName]
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+          
+          rows.forEach(r => {
+            let foundCode = null
+            for (let c = 0; c < r.length; c++) {
+              const val = String(r[c] || '').trim()
+              if (vendorMap.has(val)) { foundCode = val; break; }
+            }
+            if (foundCode) {
+              vendorMap.get(foundCode).details_data[type].push(r)
+            }
+          })
+        }
+        
+        mapDetail('装卸', 'unloading')
+        mapDetail('操作费', 'operation')
+        mapDetail('DSP', 'dsp')
+
+        allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
+        msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家厂商</span>`
+
+      } catch (err) {
+        console.error(`解析文件 ${file.name} 失败:`, err)
+        msgEl.innerHTML += ` <span style="color:#cf1322;">失败：${err.message}</span>`
+      }
+    }
+
+    if (allPayloads.length === 0) {
+      msgEl.innerHTML += `<br><br><span style="color:#cf1322; font-size:14px;">❌ 全部文件均未解析到有效数据。请检查文件是否包含名为「总表」的Sheet，且存在写着「厂编」的列。</span>`
+      return
+    }
+
+    msgEl.innerHTML += `<br><span style="color:#1677ff;">一共提取 ${allPayloads.length} 条厂商数据，正在写入数据库（请勿关闭页面）...</span>`
+
+    try {
+      const { error } = await ctx.supabase.from('vendor_billings').upsert(allPayloads, { onConflict: 'bill_month,warehouse_code,vendor_code' })
+      if (error) throw error
+
+      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共处理 ${files.length} 个文件，更新了 ${allPayloads.length} 家厂商的对账数据。</span>`
+      e.target.value = '' // 清空 input 支持再次上传
+    } catch (err) {
+      console.error(err)
+      msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 写入数据库失败：${err.message}</span>`
+    }
+  }
+}
+
+// ================= 3. 质检报告管理 =================
 async function renderQCAdmin(v) {
   const { data: vendors } = await ctx.supabase.from('vendor_profile').select('vendor_code, vendor_name')
   const vMap = {}
@@ -966,7 +1121,6 @@ async function renderQCAdmin(v) {
 
         try {
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          // ★ 使用 safeFetch
           const res = await safeFetch(`/functions/v1/delete-qc`, {
             method: 'POST',
             headers: {
@@ -1064,7 +1218,7 @@ async function renderQCAdmin(v) {
   loadData(0)
 }
 
-// ================= 3. 厂商管理 =================
+// ================= 4. 厂商管理 =================
 async function renderVendors(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data: vpsRaw } = await ctx.supabase.from('vendor_profile')
@@ -1240,7 +1394,6 @@ async function renderVendors(v) {
           const p = vps.find(x => x.id === id)
           if (!confirm(`确定${action}该厂商？`)) return
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          // ★ 使用 safeFetch
           const res = await safeFetch(`/functions/v1/toggle-user-status`, {
             method: 'POST',
             headers: {
@@ -1267,7 +1420,6 @@ async function renderVendors(v) {
           if (input === null) return
           const codes = input.split(',').map(s => s.trim()).filter(Boolean)
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          // ★ 使用 safeFetch
           const res = await safeFetch(`/functions/v1/grant-warehouse`, {
             method: 'POST',
             headers: {
@@ -1291,7 +1443,6 @@ async function renderVendors(v) {
           const pwd = prompt('输入新密码（至少 6 位）')
           if (!pwd || pwd.length < 6) return alert('密码太短')
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          // ★ 使用 safeFetch
           const res = await safeFetch(`/functions/v1/reset-password`, {
             method: 'POST',
             headers: {
@@ -1314,7 +1465,6 @@ async function renderVendors(v) {
           if (!confirm(`确定删除厂商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 厂商档案\n- 仓库授权\n\n此操作不可撤销！`)) return
 
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          // ★ 使用 safeFetch
           const res = await safeFetch(`/functions/v1/delete-vendor`, {
             method: 'POST',
             headers: {
@@ -1370,7 +1520,6 @@ async function renderVendors(v) {
       return document.getElementById('vendor-msg').innerHTML = ctx.msg('厂编、名称、联系人、手机号、密码为必填', false)
     }
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/create-vendor`, {
       method: 'POST',
       headers: {
@@ -1459,7 +1608,6 @@ async function renderVendors(v) {
           const item = list[i]
           msgEl.innerHTML = ctx.msg(`导入中（${i+1} / ${list.length}）：${item.vendor_code} ${item.vendor_name}...`, true)
           try {
-            // ★ 使用 safeFetch
             const res = await safeFetch(`/functions/v1/create-vendor`, {
               method: 'POST',
               headers: {
@@ -1524,7 +1672,7 @@ async function renderVendors(v) {
   }
 }
 
-// ================= 3.5 物流商管理 =================
+// ================= 4.5 物流商管理 =================
 function buildVendorPicker(rootId, allVendors, initialSelected = []) {
   const root = document.getElementById(rootId)
   if (!root) return { getSelected: () => [] }
@@ -1687,7 +1835,6 @@ async function renderLogistics(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/create-logistics`, {
       method: 'POST',
       headers: {
@@ -1741,7 +1888,6 @@ async function renderLogistics(v) {
         document.getElementById('btn-modal-save').onclick = async () => {
           const finalCodes = mvPicker.getSelected()
           const { data: { session } } = await ctx.supabase.auth.getSession()
-          // ★ 使用 safeFetch
           const res = await safeFetch(`/functions/v1/grant-logistics-vendors`, {
             method: 'POST',
             headers: {
@@ -1768,7 +1914,6 @@ async function renderLogistics(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
@@ -1790,7 +1935,6 @@ async function renderLogistics(v) {
         if (!confirm(`确定删除物流商「${code}」？\n\n会同时删除：\n- Auth 用户\n- 物流商档案\n- 负责厂商关联\n\n此操作不可撤销！`)) return
 
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/delete-logistics`, {
           method: 'POST',
           headers: {
@@ -1813,7 +1957,7 @@ async function renderLogistics(v) {
   })
 }
 
-// ================= 4. 管理员管理 =================
+// ================= 5. 管理员管理 =================
 async function renderAdmins(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data: admins } = await ctx.supabase.from('admin_users').select('*').order('created_at', { ascending: false })
@@ -1890,7 +2034,6 @@ async function renderAdmins(v) {
     msgEl.innerHTML = ctx.msg('创建中...', true)
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/create-admin`, {
       method: 'POST',
       headers: {
@@ -1967,7 +2110,6 @@ async function renderAdmins(v) {
         if (id === ctx.currentUser.id) return alert('不能禁用自己的账号')
         if (!confirm(`确定${action}该管理员？`)) return
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/toggle-user-status`, {
           method: 'POST',
           headers: {
@@ -1991,7 +2133,6 @@ async function renderAdmins(v) {
         const pwd = prompt('输入新密码（至少 6 位）')
         if (!pwd || pwd.length < 6) return alert('密码太短')
         const { data: { session } } = await ctx.supabase.auth.getSession()
-        // ★ 使用 safeFetch
         const res = await safeFetch(`/functions/v1/reset-password`, {
           method: 'POST',
           headers: {
@@ -2023,7 +2164,7 @@ async function renderAdmins(v) {
   })
 }
 
-// ================= 5. 基础数据 =================
+// ================= 6. 基础数据 =================
 async function renderBase(v) {
   v.innerHTML = `
     <div class="tabs" id="base-tabs">
@@ -2056,7 +2197,7 @@ async function renderBaseSub(key) {
   if (key === 'bypass') return renderBypass(v)
 }
 
-// ===== 5.1 仓库 =====
+// ===== 6.1 仓库 =====
 async function renderWh(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').order('warehouse_code')
   const list = whs || []
@@ -2188,7 +2329,7 @@ async function renderWh(v) {
   renderAll()
 }
 
-// ===== 5.2 门店 =====
+// ===== 6.2 门店 =====
 async function renderStore(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data } = await ctx.supabase.from('store_config_detail').select('*')
@@ -2305,7 +2446,7 @@ async function renderStore(v) {
   loadData()
 }
 
-// ===== 5.3 商品主数据 =====
+// ===== 6.3 商品主数据 =====
 async function renderProduct(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
 
@@ -2610,7 +2751,6 @@ async function renderProduct(v) {
     }
 
     const { data: { session } } = await ctx.supabase.auth.getSession()
-    // ★ 使用 safeFetch
     const res = await safeFetch(`/functions/v1/import-products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -2635,7 +2775,7 @@ async function renderProduct(v) {
   loadProducts(0)
 }
 
-// ===== 5.4 提报时间段 =====
+// ===== 6.4 提报时间段 =====
 async function renderDeadline(v) {
   const { data } = await ctx.supabase.from('deadline_config').select('*').order('id')
   v.innerHTML = `
@@ -2682,7 +2822,7 @@ async function renderDeadline(v) {
   })
 }
 
-// ===== 5.5 节假日 =====
+// ===== 6.5 节假日 =====
 async function renderHoliday(v) {
   const { data } = await ctx.supabase.from('holiday_config').select('*').order('holiday_date')
   v.innerHTML = `
@@ -2723,7 +2863,7 @@ async function renderHoliday(v) {
   })
 }
 
-// ===== 5.6 强制放行 =====
+// ===== 6.6 强制放行 =====
 async function renderBypass(v) {
   const { data } = await ctx.supabase.from('bypass_list').select('*').order('bypass_date', { ascending: false })
   v.innerHTML = `
@@ -2771,7 +2911,7 @@ async function renderBypass(v) {
   })
 }
 
-// ================= 6. 日志 =================
+// ================= 7. 日志 =================
 async function renderLogs(v) {
   const { data: ops } = await ctx.supabase.from('operation_log').select('*').order('id', { ascending: false }).limit(200)
   const { data: edits } = await ctx.supabase.from('vendor_edit_log').select('*').order('id', { ascending: false }).limit(200)
@@ -2961,7 +3101,7 @@ async function renderLogs(v) {
   renderOp()
 }
 
-// ================= 7. 系统配置 =================
+// ================= 8. 系统配置 =================
 const CONFIG_CN = {
   app_version: '系统版本',
   app_name: '系统名称',
@@ -3305,7 +3445,7 @@ async function renderSys(v) {
   })
 }
 
-// ================= 8. 公告管理 =================
+// ================= 9. 公告管理 =================
 async function renderAnnouncements(v) {
   if (!isSuper()) return v.innerHTML = ctx.msg('仅超级管理员可查看公告管理', false)
 
