@@ -818,9 +818,6 @@ async function renderBills(v) {
 async function renderBillingAdmin(v) {
   if (!isSuper()) return v.innerHTML = ctx.msg('仅超级管理员可操作财务对账', false)
 
-  // ★ 版本印记：控制台会打印，用来验证你的新代码是否生效
-  console.log('★★★ 财务对账智能解析版 V2.0 已加载，支持多文件上传 ★★★')
-
   v.innerHTML = `
     <div class="card" style="box-shadow:none; padding:16px;">
       <h2>财务对账中心</h2>
@@ -830,15 +827,30 @@ async function renderBillingAdmin(v) {
             <option value="济南冻仓">济南冻仓 (默认)</option>
             <option value="西安冻仓">西安冻仓 (默认)</option>
           </select>
-          <span style="font-size:12px; color:#999;">* 若文件名包含“济南”或“西安”，系统会优先按文件名自动分仓。</span>
+          <span style="font-size:12px; color:#999;">* 文件名包含“济南”或“西安”将自动匹配仓库。</span>
           <input type="month" id="bill-month" style="padding:6px; border-radius:4px; border:1px solid #d9d9d9; margin-left:auto;" />
         </div>
         <div style="border: 2px dashed #91caff; background: #f0f7ff; padding: 20px; text-align: center; border-radius: 8px;">
-          <!-- ★ 这里加了 multiple 属性，允许一次选多个文件 ★ -->
           <input type="file" id="bill-file" accept=".xlsx, .xls" style="display:none;" multiple onchange="window.handleBillingUpload(event)" />
-          <label for="bill-file" style="cursor:pointer; color:#1677ff; font-weight:bold; font-size:16px;">📁 点击上传《数据源.xlsx》（支持按住 Ctrl/Shift 多选文件）</label>
+          <label for="bill-file" style="cursor:pointer; color:#1677ff; font-weight:bold; font-size:16px;">📁 点击上传《总表数据源.xlsx》（支持多选）</label>
         </div>
         <div id="billing-msg" style="margin-top:12px; color:#1677ff; font-size:13px; line-height: 1.8;"></div>
+      </div>
+      
+      <div id="billing-list-box" style="display:none;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h3 style="font-size:16px; margin:0;">已导入账单列表</h3>
+        </div>
+        <div class="scroll" style="max-height: 400px;">
+          <table>
+            <thead>
+              <tr>
+                <th>厂编</th><th>厂商名称</th><th>仓别</th><th>含税总额(元)</th><th>状态</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="billing-list-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
   `
@@ -849,10 +861,7 @@ async function renderBillingAdmin(v) {
     const defaultWh = document.getElementById('bill-wh').value
     const msgEl = document.getElementById('billing-msg')
     
-    if (files.length === 0 || !month) {
-      alert('请选择文件并填写月份')
-      return
-    }
+    if (files.length === 0 || !month) return alert('请选择文件并填写月份')
 
     msgEl.innerHTML = `<span style="color:#1677ff;">开始处理 ${files.length} 个文件，请稍候...</span>`
     let allPayloads = []
@@ -860,74 +869,61 @@ async function renderBillingAdmin(v) {
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       let currentWh = defaultWh
-      
-      // 智能根据文件名推断仓库
       if (file.name.includes('济南')) currentWh = '济南冻仓'
       else if (file.name.includes('西安')) currentWh = '西安冻仓'
 
-      msgEl.innerHTML += `<br><span style="color:#666;">正在解析 (${i+1}/${files.length})：${file.name} [归属：${currentWh}]...</span>`
+      msgEl.innerHTML += `<br><span style="color:#666;">正在解析：${file.name}...</span>`
 
       try {
         const buf = await file.arrayBuffer()
         const wb = XLSX.read(buf)
 
-        // 1. 智能寻找“总表”
-        let totalSheetName = wb.SheetNames.find(n => n.includes('总表') || n.includes('汇总'))
-        if (!totalSheetName) throw new Error(`文件中未找到包含「总表」或「汇总」的 Sheet`)
+        let targetWs = null, headerRowIndex = -1, codeColIndex = -1
 
-        const totalSheet = wb.Sheets[totalSheetName]
-        const rawRows = XLSX.utils.sheet_to_json(totalSheet, { header: 1, defval: '' })
-
-        // 2. 智能寻找表头（前20行内寻找“厂编”）
-        let headerRowIndex = -1
-        let codeColIndex = -1
-        let amountColIndex = -1
-
-        for (let r = 0; r < Math.min(20, rawRows.length); r++) {
-          const row = rawRows[r]
-          for (let c = 0; c < row.length; c++) {
-            const cell = String(row[c] || '').trim()
-            if (cell === '厂编' || cell === '供应商代码' || cell === '编码') {
-              headerRowIndex = r
-              codeColIndex = c
-              break
+        // 全表扫描找厂编
+        for (let sheetName of wb.SheetNames) {
+          const ws = wb.Sheets[sheetName]
+          const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+          for (let r = 0; r < Math.min(30, rawRows.length); r++) {
+            const row = rawRows[r]
+            for (let c = 0; c < row.length; c++) {
+              const cell = String(row[c] || '').trim()
+              if (cell === '厂编' || cell === '厂商编码' || cell === '供应商代码' || cell === '厂商代码') {
+                targetWs = ws; headerRowIndex = r; codeColIndex = c; break
+              }
             }
+            if (targetWs) break
           }
-          if (headerRowIndex !== -1) break
+          if (targetWs) break
         }
 
-        // 兜底：如果没找到“厂编”二字，默认按第6行、B列处理
-        if (headerRowIndex === -1) {
-          headerRowIndex = 4
-          codeColIndex = 1 
-        }
+        if (!targetWs) throw new Error('未找到包含「厂编」的表头，请检查文件')
 
-        // 智能寻找“含税金额”列
+        const rawRows = XLSX.utils.sheet_to_json(targetWs, { header: 1, defval: '' })
+        let amountColIndex = -1
         const headerRow = rawRows[headerRowIndex] || []
         for (let c = 0; c < headerRow.length; c++) {
           const cell = String(headerRow[c] || '')
-          if (cell.includes('含税') && cell.includes('金额')) {
-            amountColIndex = c
-            break
+          if (cell.includes('含税') && (cell.includes('金额') || cell.includes('合计'))) {
+            amountColIndex = c; break
           }
         }
-        if (amountColIndex === -1) amountColIndex = 25 // 兜底Z列
+        if (amountColIndex === -1) amountColIndex = 25
 
         const vendorMap = new Map()
-
-        // 3. 从表头下一行开始读取数据
         for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
           const row = rawRows[r]
-          const code = String(row[codeColIndex] || '').trim()
-          
-          if (!code || !/^\d+$/.test(code)) continue // 必须是纯数字厂编
+          const codeRaw = row[codeColIndex]
+          if (!codeRaw) continue
+          const code = String(codeRaw).trim()
+          if (!/^\d+$/.test(code)) continue
 
           vendorMap.set(code, {
             bill_month: month,
             warehouse_code: currentWh,
             vendor_code: code,
-            vendor_name: row[codeColIndex + 1] || '', // 厂编右边一般是厂名
-            total_amount_tax: Number(row[amountColIndex] || 0),
+            vendor_name: row[codeColIndex + 1] || '',
+            total_amount_tax: Number(row[amountColIndex] || 0) || 0,
             summary_data: {
               unloading: row[8], storage: row[10], operation: row[11],
               transit: row[15], dsp_east: row[16], dsp_west: row[17], dsp_nm: row[18]
@@ -937,62 +933,71 @@ async function renderBillingAdmin(v) {
           })
         }
 
-        if (vendorMap.size === 0) {
-          throw new Error('未找到有效的厂编数据，请检查厂编列是否为纯数字')
-        }
-
-        // 4. 解析明细页
-        const mapDetail = (keyword, type) => {
-          let sheetName = wb.SheetNames.find(n => n.includes(keyword))
-          if (!sheetName) return
-          const ws = wb.Sheets[sheetName]
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-          
-          rows.forEach(r => {
-            let foundCode = null
-            for (let c = 0; c < r.length; c++) {
-              const val = String(r[c] || '').trim()
-              if (vendorMap.has(val)) { foundCode = val; break; }
-            }
-            if (foundCode) {
-              vendorMap.get(foundCode).details_data[type].push(r)
-            }
-          })
-        }
-        
-        mapDetail('装卸', 'unloading')
-        mapDetail('操作费', 'operation')
-        mapDetail('DSP', 'dsp')
-
+        if (vendorMap.size === 0) throw new Error('提取不到有效厂编数据')
         allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
-        msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家厂商</span>`
-
+        msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家</span>`
       } catch (err) {
-        console.error(`解析文件 ${file.name} 失败:`, err)
         msgEl.innerHTML += ` <span style="color:#cf1322;">失败：${err.message}</span>`
       }
     }
 
     if (allPayloads.length === 0) {
-      msgEl.innerHTML += `<br><br><span style="color:#cf1322; font-size:14px;">❌ 全部文件均未解析到有效数据。请检查文件是否包含名为「总表」的Sheet，且存在写着「厂编」的列。</span>`
+      msgEl.innerHTML += `<br><br><span style="color:#cf1322; font-size:14px;">❌ 全部文件均未解析到有效数据。</span>`
       return
     }
 
-    msgEl.innerHTML += `<br><span style="color:#1677ff;">一共提取 ${allPayloads.length} 条厂商数据，正在写入数据库（请勿关闭页面）...</span>`
+    msgEl.innerHTML += `<br><span style="color:#1677ff;">正在写入数据库...</span>`
 
     try {
       const { error } = await ctx.supabase.from('vendor_billings').upsert(allPayloads, { onConflict: 'bill_month,warehouse_code,vendor_code' })
       if (error) throw error
 
-      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共处理 ${files.length} 个文件，更新了 ${allPayloads.length} 家厂商的对账数据。</span>`
-      e.target.value = '' // 清空 input 支持再次上传
+      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共更新了 ${allPayloads.length} 家厂商的对账数据。</span>`
+      e.target.value = ''
+      
+      // 刷新列表
+      loadBillingList(month)
     } catch (err) {
       console.error(err)
       msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 写入数据库失败：${err.message}</span>`
     }
   }
-}
 
+  // 加载列表方法
+  window.loadBillingList = async (month) => {
+    const box = document.getElementById('billing-list-box')
+    const tbody = document.getElementById('billing-list-body')
+    if (!month) { box.style.display = 'none'; return }
+
+    box.style.display = 'block'
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">加载中...</td></tr>'
+
+    const { data, error } = await ctx.supabase.from('vendor_billings')
+      .select('*')
+      .eq('bill_month', month)
+      .order('warehouse_code', { ascending: true })
+      .order('vendor_code', { ascending: true })
+
+    if (error) {
+      tbody.innerHTML = `<tr><td colspan="6" style="color:#cf1322;">加载失败：${error.message}</td></tr>`
+      return
+    }
+
+    tbody.innerHTML = data.map(r => `<tr>
+      <td>${r.vendor_code}</td>
+      <td>${r.vendor_name || ''}</td>
+      <td>${r.warehouse_code}</td>
+      <td style="color:#cf1322; font-weight:bold;">¥ ${Number(r.total_amount_tax || 0).toFixed(2)}</td>
+      <td>${r.status === 'confirmed' ? '<span style="color:#389e0d;">✅ 已确认</span>' : '<span style="color:#d46b08;">⏳ 待确认</span>'}</td>
+      <td><button class="small secondary" onclick="alert('数据明细可在厂家端查看')">查看</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">暂无数据</td></tr>'
+  }
+
+  // 监听月份变化刷新列表
+  document.getElementById('bill-month').onchange = (e) => {
+    loadBillingList(e.target.value)
+  }
+}
 // ================= 3. 质检报告管理 =================
 async function renderQCAdmin(v) {
   const { data: vendors } = await ctx.supabase.from('vendor_profile').select('vendor_code, vendor_name')
