@@ -2318,7 +2318,6 @@ async function renderBilling(view) {
     const selM = document.getElementById('bill-month-select')
     if (selM) selM.onchange = (e) => { currentMonth = e.target.value; renderUI() }
 
-    // 确认账单
     window.confirmBill = async (id) => {
       if (!confirm('确认本月账单金额及明细无误吗？确认后将无法修改。')) return
       const { error, count } = await supabase.from('vendor_billings').update({ status: 'confirmed' }).eq('id', id).select('id', { count: 'exact' })
@@ -2328,7 +2327,6 @@ async function renderBilling(view) {
       renderBilling(view)
     }
 
-    // 下载对账单
     window.downloadBillExcel = () => {
       const aoa = [
         [`应收账款确认单 (${currentBill.warehouse_code})`],
