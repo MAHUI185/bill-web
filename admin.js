@@ -818,7 +818,7 @@ async function renderBills(v) {
 async function renderBillingAdmin(v) {
   if (!isSuper()) return v.innerHTML = ctx.msg('仅超级管理员可操作财务对账', false)
 
-  // 1. 读取已有的费率配置，若无则用默认值
+  // 1. 读取已有的费率配置
   const { data: cfg } = await ctx.supabase.from('system_config').select('config_value').eq('config_key', 'billing_rates_config').maybeSingle()
   
   let currentCfg = {
@@ -937,7 +937,7 @@ async function renderBillingAdmin(v) {
     }
   }
 
-  // ================= 智能解析引擎（核心逻辑） =================
+  // ================= 全量明细智能解析引擎 =================
   window.handleBillingUpload = async (e) => {
     const files = Array.from(e.target.files)
     const month = document.getElementById('bill-month').value
@@ -961,12 +961,11 @@ async function renderBillingAdmin(v) {
         const buf = await file.arrayBuffer()
         const wb = XLSX.read(buf)
         
-        // 1. 寻找目标 Sheet (优先找总表/汇总，其次找包含厂编的)
+        // 1. 寻找目标总表
         let targetWs = null
         for (let sheetName of wb.SheetNames) {
           if (sheetName.includes('总表') || sheetName.includes('汇总')) {
-            targetWs = wb.Sheets[sheetName]
-            break
+            targetWs = wb.Sheets[sheetName]; break
           }
         }
         if (!targetWs) {
@@ -974,8 +973,7 @@ async function renderBillingAdmin(v) {
               const testWs = wb.Sheets[sheetName]
               const testRows = XLSX.utils.sheet_to_json(testWs, { header: 1, defval: '' })
               if (testRows.length > 5 && testRows.some(r => r.includes('厂编'))) {
-                 targetWs = testWs
-                 break
+                 targetWs = testWs; break
               }
            }
         }
@@ -983,37 +981,44 @@ async function renderBillingAdmin(v) {
 
         const rawRows = XLSX.utils.sheet_to_json(targetWs, { header: 1, defval: '' })
         
-        // 2. 定位表头行（通常在第5或第6行，我们自动寻找包含“厂编”的那一行）
-        let headerRowIndex = -1
+        // 2. 定位表头及数据起始行
+        let headerRowIndex = -1, dataStartIndex = -1
         for (let r = 0; r < Math.min(15, rawRows.length); r++) {
           if (rawRows[r] && rawRows[r].some(cell => String(cell).trim() === '厂编')) {
-            headerRowIndex = r
-            break
+            headerRowIndex = r; break
           }
         }
-        // 兜底：按之前 VBA 的逻辑，如果找不到，默认第 5 行（索引 4）是表头
-        if (headerRowIndex === -1) headerRowIndex = 4
+        if (headerRowIndex === -1) throw new Error('未找到「厂编」表头')
 
-        // 3. 智能寻找“含税金额”列，防止写死 Z 列导致为 0
-        let amountColIndex = 25 // 默认兜底 Z 列
-        const headerRow = rawRows[headerRowIndex] || []
-        for (let c = 0; c < headerRow.length; c++) {
-          const text = String(headerRow[c] || '')
-          if (text.includes('含税') && (text.includes('金额') || text.includes('合计'))) {
-            amountColIndex = c
-            break
-          }
-        }
-
-        // 4. 提取数据 (从表头行的下一行开始)
-        const vendorMap = new Map()
         for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
+          const val = rawRows[r] && rawRows[r][1]
+          if (val && /^\d+$/.test(String(val).trim())) { dataStartIndex = r; break }
+        }
+        if (dataStartIndex === -1) throw new Error('未找到有效数据行')
+
+        // 3. 智能寻找“含税金额”列
+        let amountColIndex = 25 // 默认 Z 列
+        const headerRow = rawRows[headerRowIndex] || []
+        const mergeHeaderRow = rawRows[headerRowIndex + 1] || []
+        for (let c = 0; c < Math.max(headerRow.length, mergeHeaderRow.length); c++) {
+          const text = String(headerRow[c] || '') + String(mergeHeaderRow[c] || '')
+          if (text.includes('含税') && (text.includes('金额') || text.includes('合计') || text.includes('总'))) {
+            amountColIndex = c; break
+          }
+        }
+
+        const vendorMap = new Map()
+        // 初始化全量明细结构
+        const initDetails = () => ({ 
+          unloading: [], operation: [], storage: [], transit: [], dsp: [], gift: [], return: [] 
+        })
+
+        // 4. 提取总表汇总数据
+        for (let r = dataStartIndex; r < rawRows.length; r++) {
           const row = rawRows[r]
           const codeRaw = row[1] // B列 厂编
-          
           if (!codeRaw) continue
           const code = String(codeRaw).trim()
-          // 必须纯数字，且不能是“合计”等文字
           if (!/^\d+$/.test(code)) continue 
 
           const getVal = (idx) => idx >= 0 && row[idx] ? Number(row[idx]) || 0 : 0
@@ -1023,7 +1028,7 @@ async function renderBillingAdmin(v) {
             warehouse_code: currentWh,
             vendor_code: code,
             vendor_name: String(row[2] || ''), // C列 厂名
-            total_amount_tax: getVal(amountColIndex), // 智能匹配的金额列
+            total_amount_tax: getVal(amountColIndex),
             summary_data: {
               unloading: getVal(8),   // I列: 装卸
               storage: getVal(10),    // K列: 仓储
@@ -1033,14 +1038,50 @@ async function renderBillingAdmin(v) {
               dsp_west: getVal(17),   // R列: DSP西/西南区
               dsp_nm: getVal(18)      // S列: DSP内蒙古
             },
-            details_data: { unloading: [], operation: [], dsp: [] },
+            details_data: initDetails(),
             status: 'pending'
           })
         }
 
-        if (vendorMap.size === 0) throw new Error('未提取到有效数据，请检查厂编是否为纯数字')
+        if (vendorMap.size === 0) throw new Error('未提取到有效总表数据')
+
+        // 5. 提取所有明细流水（全表扫描匹配厂编）
+        const processDetailSheet = (sheetKeyword, dataKey) => {
+          const sheetName = wb.SheetNames.find(n => n.includes(sheetKeyword))
+          if (!sheetName) return
+          
+          const ws = wb.Sheets[sheetName]
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+          
+          for (let r = 0; r < rows.length; r++) {
+            const row = rows[r]
+            if (!row || row.length === 0) continue
+            
+            let foundCode = null
+            for (let c = 0; c < row.length; c++) {
+              const val = String(row[c] || '').trim()
+              if (vendorMap.has(val)) { 
+                foundCode = val; 
+                break 
+              }
+            }
+            if (foundCode) {
+              vendorMap.get(foundCode).details_data[dataKey].push(row)
+            }
+          }
+        }
+
+        processDetailSheet('装卸', 'unloading')
+        processDetailSheet('操作费', 'operation')
+        processDetailSheet('储存清单', 'storage')
+        processDetailSheet('储存板数', 'storage') // 兼容别名
+        processDetailSheet('西安干线', 'transit')
+        processDetailSheet('DSP', 'dsp')
+        processDetailSheet('赠品', 'gift')
+        processDetailSheet('退货', 'return')
+
         allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
-        msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家</span>`
+        msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家数据及全量明细</span>`
         
       } catch (err) {
         console.error(`解析文件 ${file.name} 失败:`, err)
@@ -1053,12 +1094,13 @@ async function renderBillingAdmin(v) {
       return
     }
 
-    msgEl.innerHTML += `<br><span style="color:#1677ff;">正在写入数据库...</span>`
+    msgEl.innerHTML += `<br><span style="color:#1677ff;">正在写入数据库（包含大量明细数据，请稍候）...</span>`
 
     try {
       const { error } = await ctx.supabase.from('vendor_billings').upsert(allPayloads, { onConflict: 'bill_month,warehouse_code,vendor_code' })
       if (error) throw error
-      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共更新了 ${allPayloads.length} 家厂商的对账数据。</span>`
+      
+      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共更新了 ${allPayloads.length} 家厂商的账单与明细。</span>`
       e.target.value = '' 
       loadBillingList(month)
     } catch (err) {
@@ -1067,7 +1109,7 @@ async function renderBillingAdmin(v) {
     }
   }
 
-  // ================= 加载列表 =================
+  // ================= 加载已导入账单列表 =================
   window.loadBillingList = async (month) => {
     const box = document.getElementById('billing-list-box')
     const tbody = document.getElementById('billing-list-body')
@@ -1077,13 +1119,17 @@ async function renderBillingAdmin(v) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">加载中...</td></tr>'
 
     const { data, error } = await ctx.supabase.from('vendor_billings')
-      .select('*').eq('bill_month', month)
-      .order('warehouse_code', { ascending: true }).order('vendor_code', { ascending: true })
+      .select('id, vendor_code, vendor_name, warehouse_code, total_amount_tax, status')
+      .eq('bill_month', month)
+      .order('warehouse_code', { ascending: true })
+      .order('vendor_code', { ascending: true })
 
     if (error) return tbody.innerHTML = `<tr><td colspan="6" style="color:#cf1322;">加载失败：${error.message}</td></tr>`
 
     tbody.innerHTML = data.map(r => `<tr>
-      <td>${r.vendor_code}</td><td>${r.vendor_name || ''}</td><td>${r.warehouse_code}</td>
+      <td>${r.vendor_code}</td>
+      <td>${r.vendor_name || ''}</td>
+      <td>${r.warehouse_code}</td>
       <td style="color:#cf1322; font-weight:bold;">¥ ${Number(r.total_amount_tax || 0).toFixed(2)}</td>
       <td>${r.status === 'confirmed' ? '<span style="color:#389e0d;">✅ 已确认</span>' : '<span style="color:#d46b08;">⏳ 待确认</span>'}</td>
       <td><button class="small secondary" onclick="alert('请在厂家端查看明细')">查看</button></td>

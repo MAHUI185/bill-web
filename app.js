@@ -2141,10 +2141,9 @@ function showAnnouncementModal(ann) {
 // ================= 「我的对账」（厂商 + 物流商共用） =================
 async function renderBilling(view) {
   const isLg = isLogistics
+  let vendorCodes = [], vendorNameMap = {}
 
-  let vendorCodes = []
-  let vendorNameMap = {}
-
+  // 1. 获取当前角色可查看的厂编范围
   if (isLg) {
     if (!myVendors || !myVendors.length) {
       view.innerHTML = `<div class="card"><h2>我的对账</h2><p style="color:#cf1322;">当前物流商未配置负责厂商，请联系管理员。</p></div>`
@@ -2162,7 +2161,7 @@ async function renderBilling(view) {
     vendorNameMap[vc] = currentProfile?.vendor_name || ''
   }
 
-  // 1. 获取厂商数据
+  // 2. 拉取账单数据（含刚刚存入的 details_data 全量明细）
   const { data: bills, error } = await supabase
     .from('vendor_billings')
     .select('*')
@@ -2174,13 +2173,12 @@ async function renderBilling(view) {
     view.innerHTML = `<div class="card"><h2>我的对账</h2>${msg(translateError(error.message), false)}</div>`
     return
   }
-
   if (!bills || bills.length === 0) {
     view.innerHTML = '<div class="card"><h2>我的对账</h2><p style="color:#999;">暂无对账数据</p></div>'
     return
   }
 
-  // 2. 获取费率配置
+  // 3. 获取后台配置的费率与税率
   const { data: cfg } = await supabase.from('system_config').select('config_value').eq('config_key', 'billing_rates_config').maybeSingle()
   let currentCfg = {
     rates: { dsp_east: 10, dsp_west: 15, dsp_nm: 15, transit: 7, storage: 3.5, operation: 1.5, unloading: 0.3 },
@@ -2195,6 +2193,7 @@ async function renderBilling(view) {
   let currentWh = null
   let currentMonth = null
 
+  // 4. 渲染 UI
   const renderUI = () => {
     const vendorBills = bills.filter(b => b.vendor_code === currentVendor)
     const warehouses = [...new Set(vendorBills.map(b => b.warehouse_code))]
@@ -2211,14 +2210,12 @@ async function renderBilling(view) {
     const taxes = currentCfg.taxes
     const details = []
     
-    // 计算明细
+    // 计算各明细项（未税、税额、含税）
     const addDetail = (category, item, qty, rate, unit, taxRate) => {
       const q = Number(qty) || 0
-      if (q > 0) {
-        const untaxed = q * rate
-        const tax = untaxed * taxRate
-        details.push({ category, item, qty: q, rate, unit, untaxed, tax, total: untaxed + tax, taxRate })
-      }
+      const untaxed = q * rate
+      const tax = untaxed * taxRate
+      details.push({ category, item, qty: q, rate, unit, untaxed, tax, total: untaxed + tax, taxRate })
     }
 
     const sData = currentBill.summary_data || {}
@@ -2287,11 +2284,10 @@ async function renderBilling(view) {
             </tr>
           </thead>
           <tbody>
-            ${details.length === 0 ? '<tr><td colspan="8" style="text-align:center;color:#999;">暂无明细发生量</td></tr>' : ''}
             ${details.map(d => `<tr>
               <td>${d.category}</td>
               <td>${d.item}</td>
-              <td>${d.qty} ${d.unit}</td>
+              <td style="${d.qty === 0 ? 'color:#999;' : ''}">${d.qty} ${d.unit}</td>
               <td>${d.rate} 元/${d.unit}</td>
               <td>${(d.taxRate * 100).toFixed(0)}%</td>
               <td style="text-align:right;">${d.untaxed.toFixed(2)}</td>
@@ -2302,7 +2298,7 @@ async function renderBilling(view) {
         </table>
 
         <div style="text-align:right; margin-top:20px; display:flex; justify-content:flex-end; gap:12px;">
-          <button class="secondary" onclick="downloadBillExcel()">📥 下载对账单</button>
+          <button class="secondary" onclick="downloadBillExcel()">📥 下载完整对账单</button>
           ${canConfirm ? `<button style="background:#52c41a; color:#fff;" onclick="confirmBill(${currentBill.id})">✅ 确认账单无误</button>` : ''}
         </div>
       </div>
@@ -2311,13 +2307,12 @@ async function renderBilling(view) {
     // 事件绑定
     const selV = document.getElementById('bill-vendor-select')
     if (selV) selV.onchange = (e) => { currentVendor = e.target.value; currentWh = null; currentMonth = null; renderUI() }
-    
     const selW = document.getElementById('bill-wh-select')
     if (selW) selW.onchange = (e) => { currentWh = e.target.value; currentMonth = null; renderUI() }
-    
     const selM = document.getElementById('bill-month-select')
     if (selM) selM.onchange = (e) => { currentMonth = e.target.value; renderUI() }
 
+    // 确认账单
     window.confirmBill = async (id) => {
       if (!confirm('确认本月账单金额及明细无误吗？确认后将无法修改。')) return
       const { error, count } = await supabase.from('vendor_billings').update({ status: 'confirmed' }).eq('id', id).select('id', { count: 'exact' })
@@ -2327,38 +2322,81 @@ async function renderBilling(view) {
       renderBilling(view)
     }
 
+    // ================= 🌟 全量生成：复刻原版模板的 8 个 Sheet =================
     window.downloadBillExcel = () => {
+      const wb = XLSX.utils.book_new()
+
+      // Sheet 1: 结算单 (保持精美排版)
       const aoa = [
         [`应收账款确认单 (${currentBill.warehouse_code})`],
-        [`厂编/厂名：`, currentVendor, vendorNameMap[currentVendor]],
-        [`结算日期：`, `${currentBill.bill_month} 月`],
+        [`厂编/厂名：`, currentVendor, vendorNameMap[currentVendor], '', '', '', '', ''],
+        [`结算日期：`, `${currentBill.bill_month} 月`, '', '', '', '', '', ''],
         [],
-        ['大类', '项目', '发生量', '计费标准', '税率', '未税金额', '税额', '含税小计'],
+        ['名称', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '未税费用']
       ]
-
-      let sumUntaxed = 0, sumTax = 0, sumTotal = 0
+      let sumUntaxed = 0
       details.forEach(d => {
-        aoa.push([
-          d.category, d.item, `${d.qty} ${d.unit}`, d.rate, `${(d.taxRate * 100).toFixed(0)}%`,
-          d.untaxed.toFixed(2), d.tax.toFixed(2), d.total.toFixed(2)
-        ])
+        aoa.push([d.item, currentBill.warehouse_code, d.category, d.unit, d.rate, d.qty, d.qty, d.untaxed.toFixed(2)])
         sumUntaxed += d.untaxed
-        sumTax += d.tax
-        sumTotal += d.total
       })
+      aoa.push([])
+      aoa.push(['小计', '', '', '', '', '', '', sumUntaxed.toFixed(2)])
+      aoa.push([])
+      aoa.push(['发票注意事项：', '备注', '', '', '', '', '', ''])
+      aoa.push([])
+      aoa.push(['分类', '', '税率', '未税', '税额', '含税', '', ''])
 
-      aoa.push([])
-      aoa.push(['合计', '', '', '', '', sumUntaxed.toFixed(2), sumTax.toFixed(2), sumTotal.toFixed(2)])
-      aoa.push([])
-      aoa.push(['发票注意事项：', '请核对账单确认无误后，在系统中点击确认按钮。'])
-      aoa.push(['确认人：', '', '审核人：', ''])
+      const transportUntaxed = details.filter(d => d.category === '运输').reduce((sum, d) => sum + d.untaxed, 0)
+      const storageUntaxed = details.filter(d => d.category === '储存').reduce((sum, d) => sum + d.untaxed, 0)
+      const unloadingUntaxed = details.filter(d => d.category === '装卸').reduce((sum, d) => sum + d.untaxed, 0)
+
+      const tRate = taxes.transport, sRate = taxes.storage, uRate = taxes.unloading
+      aoa.push(['运费', '', tRate, transportUntaxed.toFixed(2), (transportUntaxed * tRate).toFixed(2), (transportUntaxed * (1 + tRate)).toFixed(2), '确认人：', ''])
+      aoa.push(['储存', '', sRate, storageUntaxed.toFixed(2), (storageUntaxed * sRate).toFixed(2), (storageUntaxed * (1 + sRate)).toFixed(2), '审核人：', ''])
+      aoa.push(['装卸', '', uRate, unloadingUntaxed.toFixed(2), (unloadingUntaxed * uRate).toFixed(2), (unloadingUntaxed * (1 + uRate)).toFixed(2), '', ''])
       
-      const ws = XLSX.utils.aoa_to_sheet(aoa)
-      ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }]
-      ws['!cols'] = [{wch: 15}, {wch: 20}, {wch: 12}, {wch: 12}, {wch: 8}, {wch: 12}, {wch: 12}, {wch: 15}]
+      const totalUntaxed = transportUntaxed + storageUntaxed + unloadingUntaxed
+      const totalTax = (transportUntaxed * tRate) + (storageUntaxed * sRate) + (unloadingUntaxed * uRate)
+      const totalTaxed = totalUntaxed + totalTax
+      aoa.push(['合计', '', '', totalUntaxed.toFixed(2), totalTax.toFixed(2), totalTaxed.toFixed(2), '', ''])
+      
+      aoa.push([])
+      aoa.push(['', `您好，${currentBill.bill_month}月份的`, `${currentBill.warehouse_code}对账单，请核对确认完成后本月15日前回复，谢谢`])
 
-      const wb = XLSX.utils.book_new()
+      const ws = XLSX.utils.aoa_to_sheet(aoa)
+      ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }, { wch: 15 }]
+      ws['!merges'] = [
+        { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } },
+        { s: { r: 1, c: 2 }, e: { r: 1, c: 7 } },
+        { s: { r: 2, c: 2 }, e: { r: 2, c: 7 } },
+        { s: { r: aoa.length - 1, c: 1 }, e: { r: aoa.length - 1, c: 7 } }
+      ]
       XLSX.utils.book_append_sheet(wb, ws, '结算单')
+
+      // 辅助函数：生成明细 Sheet
+      const addDetailSheet = (sheetName, dataArray, defaultHeaders) => {
+        let sheetData = []
+        if (dataArray && dataArray.length > 0) {
+          sheetData = dataArray
+        } else {
+          sheetData = [defaultHeaders]
+        }
+        const wsDetail = XLSX.utils.aoa_to_sheet(sheetData)
+        XLSX.utils.book_append_sheet(wb, wsDetail, sheetName)
+      }
+
+      const dData = currentBill.details_data || {}
+
+      // Sheet 2-8: 各明细表
+      addDetailSheet('装卸', dData.unloading, ['项目', '细项', '状态', '单号', '日期', '厂商编码', '厂商名称', '店编码', '店别', '商品编码', '商品名称', '规格', '单位', '件数', '数量'])
+      addDetailSheet('操作费', dData.operation, ['序号', '单号', '领用类型', '行号', '单头备注', '领用日期', '商品代码', '商品名称', '包装规格', '单位', '货位', '容器', '件数', '数量', '生产日期', '批次', '供应商', '厂商名称', '仓位', '货主', '领用对象', '领用人', '状态'])
+      addDetailSheet('储存清单', dData.storage, ['序号', '日期', '仓位', '货位', '货位用途', '温层', '容器条码', '商品代码', '商品名称', '包装规格', '库存状态', '单位', '库存件数', '库存数量', '生产日期', '批号', '到效期', '批次', '入库时间', '来源单号', '所属供应商', '厂商名称', '所属对象', '所属货主'])
+      addDetailSheet('西安干线', dData.transit, ['序号', '收货单号', '订单号', '订单来源单号', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '结算单位', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '温层', '总重(kg)'])
+      addDetailSheet('DSP', dData.dsp, ['序号', '收货单号', '订单号', '订单来源单号', '店号', '区域', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '总重(kg)'])
+      addDetailSheet('赠品&专柜', dData.gift, ['类别', '到货时间', '门店号', '要货方', '厂编', '厂商名称', '件数', '备注'])
+      addDetailSheet('退货', dData.return, ['录单时间', '退货单时间', 'NT订单号', '货号', '商品', '规格', '店号', '店名', '厂编', '厂商', '退货数量（个）', '退货数量（个）2', '差异数量', '件数', '存储板数', '天数', '收费天数>7天', '收费板数', '通知厂商取退货时间', '提货日期', '存储库位', '备注'])
+
+      // 触发下载
       XLSX.writeFile(wb, `${currentVendor}_${vendorNameMap[currentVendor]}_${currentBill.bill_month}_对账单.xlsx`)
     }
   }
