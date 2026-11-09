@@ -2161,7 +2161,7 @@ async function renderBilling(view) {
     vendorNameMap[vc] = currentProfile?.vendor_name || ''
   }
 
-  // 2. 拉取账单数据（含刚刚存入的 details_data 全量明细）
+  // 2. 拉取账单数据
   const { data: bills, error } = await supabase
     .from('vendor_billings')
     .select('*')
@@ -2193,7 +2193,6 @@ async function renderBilling(view) {
   let currentWh = null
   let currentMonth = null
 
-  // 4. 渲染 UI
   const renderUI = () => {
     const vendorBills = bills.filter(b => b.vendor_code === currentVendor)
     const warehouses = [...new Set(vendorBills.map(b => b.warehouse_code))]
@@ -2210,12 +2209,12 @@ async function renderBilling(view) {
     const taxes = currentCfg.taxes
     const details = []
     
-    // 计算各明细项（未税、税额、含税）
-    const addDetail = (category, item, qty, rate, unit, taxRate) => {
+    // 计算各项明细 (区分发生量单位和计费标准单位)
+    const addDetail = (category, item, qty, rate, unit, taxRate, qtyUnit = unit) => {
       const q = Number(qty) || 0
       const untaxed = q * rate
       const tax = untaxed * taxRate
-      details.push({ category, item, qty: q, rate, unit, untaxed, tax, total: untaxed + tax, taxRate })
+      details.push({ category, item, qty: q, rate, unit, qtyUnit, untaxed, tax, total: untaxed + tax, taxRate })
     }
 
     const sData = currentBill.summary_data || {}
@@ -2223,9 +2222,17 @@ async function renderBilling(view) {
     addDetail('运输', 'DSP省外(西/西南)', sData.dsp_west, rates.dsp_west, '箱', taxes.transport)
     addDetail('运输', 'DSP省外(内蒙古)', sData.dsp_nm, rates.dsp_nm, '箱', taxes.transport)
     addDetail('运输', '干线代送', sData.transit, rates.transit, '箱', taxes.transport)
-    addDetail('储存', '仓储费', sData.storage, rates.storage, '板/天', taxes.storage)
+    
+    // ★ 修复：发生量单位传 '板'，计费标准单位传 '板/天'
+    addDetail('储存', '仓储费', sData.storage, rates.storage, '板/天', taxes.storage, '板')
     addDetail('储存', '操作费', sData.operation, rates.operation, '箱', taxes.storage)
     addDetail('装卸', '装卸费', sData.unloading, rates.unloading, '箱', taxes.unloading)
+
+    // ★ 计算兜底总金额：如果数据库抓取的总额为0，则使用明细算出来的总和
+    const calcTotalTaxed = details.reduce((sum, d) => sum + d.total, 0)
+    const displayTotal = Number(currentBill.total_amount_tax) > 0 
+      ? Number(currentBill.total_amount_tax) 
+      : calcTotalTaxed
 
     view.innerHTML = `
       <div class="card">
@@ -2262,7 +2269,7 @@ async function renderBilling(view) {
           </div>
           <div style="flex:1; background:#f8f9fa; padding:16px; border-radius:8px; border:1px solid #eee;">
             <div style="font-size:13px; color:#666; margin-bottom:8px;">含税总金额</div>
-            <div style="font-size:24px; font-weight:bold; color:#cf1322;">¥ ${Number(currentBill.total_amount_tax || 0).toFixed(2)}</div>
+            <div style="font-size:24px; font-weight:bold; color:#cf1322;">¥ ${displayTotal.toFixed(2)}</div>
           </div>
           <div style="flex:1; background:${currentBill.status === 'confirmed' ? '#f6ffed' : '#fff1f0'}; padding:16px; border-radius:8px; border:1px solid ${currentBill.status === 'confirmed' ? '#b7eb8f' : '#ffccc7'};">
             <div style="font-size:13px; color:#666; margin-bottom:8px;">状态</div>
@@ -2287,7 +2294,7 @@ async function renderBilling(view) {
             ${details.map(d => `<tr>
               <td>${d.category}</td>
               <td>${d.item}</td>
-              <td style="${d.qty === 0 ? 'color:#999;' : ''}">${d.qty} ${d.unit}</td>
+              <td style="${d.qty === 0 ? 'color:#999;' : ''}">${d.qty} ${d.qtyUnit}</td>  <!-- 这里用 qtyUnit -->
               <td>${d.rate} 元/${d.unit}</td>
               <td>${(d.taxRate * 100).toFixed(0)}%</td>
               <td style="text-align:right;">${d.untaxed.toFixed(2)}</td>
@@ -2312,7 +2319,6 @@ async function renderBilling(view) {
     const selM = document.getElementById('bill-month-select')
     if (selM) selM.onchange = (e) => { currentMonth = e.target.value; renderUI() }
 
-    // 确认账单
     window.confirmBill = async (id) => {
       if (!confirm('确认本月账单金额及明细无误吗？确认后将无法修改。')) return
       const { error, count } = await supabase.from('vendor_billings').update({ status: 'confirmed' }).eq('id', id).select('id', { count: 'exact' })
@@ -2326,7 +2332,7 @@ async function renderBilling(view) {
     window.downloadBillExcel = () => {
       const wb = XLSX.utils.book_new()
 
-      // Sheet 1: 结算单 (保持精美排版)
+      // Sheet 1: 结算单
       const aoa = [
         [`应收账款确认单 (${currentBill.warehouse_code})`],
         [`厂编/厂名：`, currentVendor, vendorNameMap[currentVendor], '', '', '', '', ''],
@@ -2336,7 +2342,7 @@ async function renderBilling(view) {
       ]
       let sumUntaxed = 0
       details.forEach(d => {
-        aoa.push([d.item, currentBill.warehouse_code, d.category, d.unit, d.rate, d.qty, d.qty, d.untaxed.toFixed(2)])
+        aoa.push([d.item, currentBill.warehouse_code, d.category, d.qtyUnit, d.rate, d.qty, d.qty, d.untaxed.toFixed(2)])
         sumUntaxed += d.untaxed
       })
       aoa.push([])
@@ -2373,21 +2379,16 @@ async function renderBilling(view) {
       ]
       XLSX.utils.book_append_sheet(wb, ws, '结算单')
 
-      // 辅助函数：生成明细 Sheet
       const addDetailSheet = (sheetName, dataArray, defaultHeaders) => {
         let sheetData = []
-        if (dataArray && dataArray.length > 0) {
-          sheetData = dataArray
-        } else {
-          sheetData = [defaultHeaders]
-        }
+        if (dataArray && dataArray.length > 0) sheetData = dataArray
+        else sheetData = [defaultHeaders]
         const wsDetail = XLSX.utils.aoa_to_sheet(sheetData)
         XLSX.utils.book_append_sheet(wb, wsDetail, sheetName)
       }
 
       const dData = currentBill.details_data || {}
 
-      // Sheet 2-8: 各明细表
       addDetailSheet('装卸', dData.unloading, ['项目', '细项', '状态', '单号', '日期', '厂商编码', '厂商名称', '店编码', '店别', '商品编码', '商品名称', '规格', '单位', '件数', '数量'])
       addDetailSheet('操作费', dData.operation, ['序号', '单号', '领用类型', '行号', '单头备注', '领用日期', '商品代码', '商品名称', '包装规格', '单位', '货位', '容器', '件数', '数量', '生产日期', '批次', '供应商', '厂商名称', '仓位', '货主', '领用对象', '领用人', '状态'])
       addDetailSheet('储存清单', dData.storage, ['序号', '日期', '仓位', '货位', '货位用途', '温层', '容器条码', '商品代码', '商品名称', '包装规格', '库存状态', '单位', '库存件数', '库存数量', '生产日期', '批号', '到效期', '批次', '入库时间', '来源单号', '所属供应商', '厂商名称', '所属对象', '所属货主'])
@@ -2396,7 +2397,6 @@ async function renderBilling(view) {
       addDetailSheet('赠品&专柜', dData.gift, ['类别', '到货时间', '门店号', '要货方', '厂编', '厂商名称', '件数', '备注'])
       addDetailSheet('退货', dData.return, ['录单时间', '退货单时间', 'NT订单号', '货号', '商品', '规格', '店号', '店名', '厂编', '厂商', '退货数量（个）', '退货数量（个）2', '差异数量', '件数', '存储板数', '天数', '收费天数>7天', '收费板数', '通知厂商取退货时间', '提货日期', '存储库位', '备注'])
 
-      // 触发下载
       XLSX.writeFile(wb, `${currentVendor}_${vendorNameMap[currentVendor]}_${currentBill.bill_month}_对账单.xlsx`)
     }
   }
