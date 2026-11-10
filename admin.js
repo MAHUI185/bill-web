@@ -1157,13 +1157,140 @@ async function renderBillingAdmin(v) {
 
   document.getElementById('btn-close-preview').onclick = () => { document.getElementById('admin-billing-preview').style.display = 'none' }
 
+  // 🌟 完整下载逻辑，与客户端完全相同
   window.downloadAdminBillExcel = (vendorCode) => {
     const bill = globalBillingData.find(b => b.vendor_code === vendorCode)
     if (!bill) return
-    // 这里直接复用 app.js 里的复杂生成逻辑，为了节省篇幅，请把 app.js 里 window.downloadBillExcel 的内部代码搬过来，
-    // 只需要把 currentBill 替换为 bill，currentVendor 替换为 bill.vendor_code，vendorNameMap[currentVendor] 替换为 bill.vendor_name 即可。
-    // （因为逻辑完全一样，这里不再重复粘贴几百行代码）
-    alert('请在客户端测试完美版，此功能与客户端下载逻辑完全一致。')
+
+    const rates = currentCfg.rates, taxes = currentCfg.taxes
+    const details = []
+    const addDetail = (c, i, q, r, u, t, qu = u) => { const qq=Number(q)||0; details.push({ category: c, item: i, qty: qq, rate: r, unit: u, qtyUnit: qu, untaxed: qq*r, tax: qq*r*t, total: qq*r*(1+t), taxRate: t }) }
+
+    const sData = bill.summary_data || {}
+    addDetail('运输', 'DSP省内(中/东区)', sData.dsp_east, rates.dsp_east, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(西/西南)', sData.dsp_west, rates.dsp_west, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(内蒙古)', sData.dsp_nm, rates.dsp_nm, '箱', taxes.transport)
+    addDetail('运输', '干线代送', sData.transit, rates.transit, '箱', taxes.transport)
+    addDetail('储存', '仓储费', sData.storage, rates.storage, '板/天', taxes.storage, '板')
+    addDetail('储存', '操作费', sData.operation, rates.operation, '箱', taxes.storage)
+    addDetail('装卸', '装卸费', sData.unloading, rates.unloading, '箱', taxes.unloading)
+
+    const wb = XLSX.utils.book_new()
+    const aoa = [
+      [`应收账款确认单 (${bill.warehouse_code})`],
+      [`厂编/厂名：`, bill.vendor_code, bill.vendor_name, '', '', '', '', ''],
+      [`结算日期：`, `${bill.bill_month} 月`, '', '', '', '', '', ''],
+      [],
+      ['名称', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '未税费用']
+    ]
+    let sumUntaxed = 0
+    details.forEach(d => {
+      aoa.push([d.item, bill.warehouse_code, d.category, d.qtyUnit, d.rate, d.qty, d.qty, d.untaxed.toFixed(2)])
+      sumUntaxed += d.untaxed
+    })
+    aoa.push([])
+    aoa.push(['小计', '', '', '', '', '', '', sumUntaxed.toFixed(2)])
+    aoa.push([])
+    aoa.push(['发票注意事项：', '备注', '', '', '', '', '', ''])
+    aoa.push([])
+    aoa.push(['分类', '', '税率', '未税', '税额', '含税', '', ''])
+
+    const transportUntaxed = details.filter(d => d.category === '运输').reduce((sum, d) => sum + d.untaxed, 0)
+    const storageUntaxed = details.filter(d => d.category === '储存').reduce((sum, d) => sum + d.untaxed, 0)
+    const unloadingUntaxed = details.filter(d => d.category === '装卸').reduce((sum, d) => sum + d.untaxed, 0)
+
+    const tRate = taxes.transport, sRate = taxes.storage, uRate = taxes.unloading
+    aoa.push(['运费', '', tRate, transportUntaxed.toFixed(2), (transportUntaxed * tRate).toFixed(2), (transportUntaxed * (1 + tRate)).toFixed(2), '确认人：', ''])
+    aoa.push(['储存', '', sRate, storageUntaxed.toFixed(2), (storageUntaxed * sRate).toFixed(2), (storageUntaxed * (1 + sRate)).toFixed(2), '审核人：', ''])
+    aoa.push(['装卸', '', uRate, unloadingUntaxed.toFixed(2), (unloadingUntaxed * uRate).toFixed(2), (unloadingUntaxed * (1 + uRate)).toFixed(2), '', ''])
+    
+    const totalUntaxed = transportUntaxed + storageUntaxed + unloadingUntaxed
+    const totalTax = (transportUntaxed * tRate) + (storageUntaxed * sRate) + (unloadingUntaxed * uRate)
+    const totalTaxed = totalUntaxed + totalTax
+    aoa.push(['合计', '', '', totalUntaxed.toFixed(2), totalTax.toFixed(2), totalTaxed.toFixed(2), '', ''])
+    aoa.push([])
+    aoa.push(['', `您好，${bill.bill_month}月份的`, `${bill.warehouse_code}对账单，请核对确认完成后本月15日前回复，谢谢`])
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    
+    // 结算单样式
+    const range = XLSX.utils.decode_range(ws['!ref'])
+    const borderStyle = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }
+    const styleTitle = { font: { bold: true, sz: 16 }, alignment: { horizontal: 'center', vertical: 'center' } }
+    const styleHeader = { font: { bold: true, sz: 11 }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+    const styleCellText = { alignment: { horizontal: 'left', vertical: 'center' }, border: borderStyle }
+    const styleCellNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
+    const styleTotal = { font: { bold: true }, fill: { fgColor: { rgb: "F4F4F4" } }, alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
+    const styleTotalText = { font: { bold: true }, fill: { fgColor: { rgb: "F4F4F4" } }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+      for (let C = range.s.c; C <= range.e.c; ++C) {
+        const cellRef = XLSX.utils.encode_cell({ c: C, r: R })
+        if (!ws[cellRef]) continue
+        if (R === 4) ws[cellRef].s = styleHeader
+        else if (R > 4 && R < aoa.length - 8) ws[cellRef].s = (C >= 4 && C <= 7) ? styleCellNum : styleCellText
+        else if ((R === 9 || R === aoa.length - 5) && C > 0) ws[cellRef].s = (C >= 3) ? styleTotal : styleTotalText
+        else if (R >= aoa.length - 7 && R <= aoa.length - 5) ws[cellRef].s = (C >= 2) ? styleCellNum : styleCellText
+        else ws[cellRef].s = { alignment: { vertical: 'center' } }
+      }
+    }
+    ws['A1'].s = styleTitle
+    ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }, { wch: 15 }]
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, { s: { r: 1, c: 2 }, e: { r: 1, c: 7 } },
+      { s: { r: 2, c: 2 }, e: { r: 2, c: 7 } }, { s: { r: aoa.length - 1, c: 1 }, e: { r: aoa.length - 1, c: 7 } }
+    ]
+    XLSX.utils.book_append_sheet(wb, ws, '结算单')
+
+    const applyStyleToDetail = (wsDetail, headerRowCount) => {
+      if (!wsDetail || !wsDetail['!ref']) return
+      const dr = XLSX.utils.decode_range(wsDetail['!ref'])
+      const bStyle = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }
+      const sHeader = { font: { bold: true }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: bStyle }
+      const sText = { alignment: { vertical: 'center' }, border: bStyle }
+      const sNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: bStyle }
+
+      for (let R = dr.s.r; R <= dr.e.r; ++R) {
+        for (let C = dr.s.c; C <= dr.e.c; ++C) {
+          const cellRef = XLSX.utils.encode_cell({ c: C, r: R })
+          if (!wsDetail[cellRef]) continue
+          if (R < headerRowCount) wsDetail[cellRef].s = sHeader
+          else wsDetail[cellRef].s = (typeof wsDetail[cellRef].v === 'number') ? sNum : sText
+        }
+      }
+    }
+
+    const addDetailSheet = (sheetName, dataObj) => {
+      if (!dataObj || !dataObj.headers || dataObj.headers.length === 0) return
+      let sheetData = [...dataObj.headers]
+      if (dataObj.rows && dataObj.rows.length > 0) sheetData = sheetData.concat(dataObj.rows)
+      
+      const wsDetail = XLSX.utils.aoa_to_sheet(sheetData)
+      
+      const colWidths = []
+      sheetData.forEach(row => {
+        if (!row) return
+        row.forEach((cell, i) => {
+          const val = String(cell || '')
+          const len = val.replace(/[^\x00-\xff]/g, 'xx').length 
+          colWidths[i] = Math.max(colWidths[i] || 10, len + 2)
+        })
+      })
+      wsDetail['!cols'] = colWidths.map(w => ({ wch: Math.min(w, 50) })) 
+      applyStyleToDetail(wsDetail, dataObj.headers.length)
+      XLSX.utils.book_append_sheet(wb, wsDetail, sheetName)
+    }
+
+    const dData = bill.details_data || {}
+    addDetailSheet('装卸', dData.unloading)
+    addDetailSheet('操作费', dData.operation)
+    addDetailSheet('储存清单', dData.storage)
+    addDetailSheet('西安干线', dData.transit)
+    addDetailSheet('DSP', dData.dsp)
+    addDetailSheet('赠品&专柜', dData.gift)
+    addDetailSheet('退货', dData.return)
+
+    XLSX.writeFile(wb, `${bill.vendor_code}_${bill.vendor_name}_${bill.bill_month}_对账单.xlsx`)
   }
 
   document.getElementById('bill-month').onchange = (e) => loadBillingList(e.target.value)
