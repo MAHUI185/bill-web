@@ -1157,7 +1157,6 @@ async function renderBillingAdmin(v) {
 
   document.getElementById('btn-close-preview').onclick = () => { document.getElementById('admin-billing-preview').style.display = 'none' }
 
-  // 🌟 完整下载逻辑，与客户端完全相同
   window.downloadAdminBillExcel = (vendorCode) => {
     const bill = globalBillingData.find(b => b.vendor_code === vendorCode)
     if (!bill) return
@@ -1213,7 +1212,6 @@ async function renderBillingAdmin(v) {
 
     const ws = XLSX.utils.aoa_to_sheet(aoa)
     
-    // 结算单样式
     const range = XLSX.utils.decode_range(ws['!ref'])
     const borderStyle = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }
     const styleTitle = { font: { bold: true, sz: 16 }, alignment: { horizontal: 'center', vertical: 'center' } }
@@ -1260,10 +1258,14 @@ async function renderBillingAdmin(v) {
       }
     }
 
-    const addDetailSheet = (sheetName, dataObj) => {
-      if (!dataObj || !dataObj.headers || dataObj.headers.length === 0) return
-      let sheetData = [...dataObj.headers]
-      if (dataObj.rows && dataObj.rows.length > 0) sheetData = sheetData.concat(dataObj.rows)
+    const addDetailSheet = (sheetName, dataObj, defaultHeaders) => {
+      let sheetData = []
+      if (dataObj && dataObj.headers && dataObj.headers.length > 0) {
+        sheetData = [...dataObj.headers]
+        if (dataObj.rows && dataObj.rows.length > 0) sheetData = sheetData.concat(dataObj.rows)
+      } else {
+        sheetData = [defaultHeaders]
+      }
       
       const wsDetail = XLSX.utils.aoa_to_sheet(sheetData)
       
@@ -1277,18 +1279,29 @@ async function renderBillingAdmin(v) {
         })
       })
       wsDetail['!cols'] = colWidths.map(w => ({ wch: Math.min(w, 50) })) 
-      applyStyleToDetail(wsDetail, dataObj.headers.length)
+      const headerCount = (dataObj && dataObj.headers) ? dataObj.headers.length : 1
+      applyStyleToDetail(wsDetail, headerCount)
       XLSX.utils.book_append_sheet(wb, wsDetail, sheetName)
     }
 
+    const HEADERS = {
+      unloading: ['项目', '细项', '状态', '单号', '日期', '厂商编码', '厂商名称', '店编码', '店别', '商品编码', '商品名称', '规格', '单位', '件数', '数量'],
+      operation: ['序号', '单号', '领用类型', '行号', '单头备注', '领用日期', '商品代码', '商品名称', '包装规格', '单位', '货位', '容器', '件数', '数量', '生产日期', '批次', '供应商', '厂商名称', '仓位', '货主', '领用对象', '领用人', '状态'],
+      storage: ['序号', '日期', '仓位', '货位', '货位用途', '温层', '容器条码', '商品代码', '商品名称', '包装规格', '库存状态', '单位', '库存件数', '库存数量', '生产日期', '批号', '到效期', '批次', '入库时间', '来源单号', '所属供应商', '厂商名称', '所属对象', '所属货主'],
+      transit: ['序号', '收货单号', '订单号', '订单来源单号', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '结算单位', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '温层', '总重(kg)'],
+      dsp: ['序号', '收货单号', '订单号', '订单来源单号', '店号', '区域', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '总重(kg)'],
+      gift: ['类别', '到货时间', '门店号', '要货方', '厂编', '厂商名称', '件数', '备注'],
+      return: ['录单时间', '退货单时间', 'NT订单号', '货号', '商品', '规格', '店号', '店名', '厂编', '厂商', '退货数量（个）', '退货数量（个）2', '差异数量', '件数', '存储板数', '天数', '收费天数>7天', '收费板数', '通知厂商取退货时间', '提货日期', '存储库位', '备注']
+    }
+
     const dData = bill.details_data || {}
-    addDetailSheet('装卸', dData.unloading)
-    addDetailSheet('操作费', dData.operation)
-    addDetailSheet('储存清单', dData.storage)
-    addDetailSheet('西安干线', dData.transit)
-    addDetailSheet('DSP', dData.dsp)
-    addDetailSheet('赠品&专柜', dData.gift)
-    addDetailSheet('退货', dData.return)
+    addDetailSheet('装卸', dData.unloading, HEADERS.unloading)
+    addDetailSheet('操作费', dData.operation, HEADERS.operation)
+    addDetailSheet('储存清单', dData.storage, HEADERS.storage)
+    addDetailSheet('西安干线', dData.transit, HEADERS.transit)
+    addDetailSheet('DSP', dData.dsp, HEADERS.dsp)
+    addDetailSheet('赠品&专柜', dData.gift, HEADERS.gift)
+    addDetailSheet('退货', dData.return, HEADERS.return)
 
     XLSX.writeFile(wb, `${bill.vendor_code}_${bill.vendor_name}_${bill.bill_month}_对账单.xlsx`)
   }
