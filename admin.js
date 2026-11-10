@@ -820,7 +820,6 @@ async function renderBillingAdmin(v) {
 
   // 1. 读取已有的费率配置
   const { data: cfg } = await ctx.supabase.from('system_config').select('config_value').eq('config_key', 'billing_rates_config').maybeSingle()
-  
   let currentCfg = {
     rates: { dsp_east: 10, dsp_west: 15, dsp_nm: 15, transit: 7, storage: 3.5, operation: 1.5, unloading: 0.3 },
     taxes: { transport: 0.09, storage: 0.06, unloading: 0.06 }
@@ -849,12 +848,11 @@ async function renderBillingAdmin(v) {
           <div><label>操作费(箱)</label><input type="number" id="rate-operation" value="${currentCfg.rates.operation}" step="0.1" /></div>
           <div><label>装卸费(箱)</label><input type="number" id="rate-unloading" value="${currentCfg.rates.unloading}" step="0.1" /></div>
         </div>
-
-        <h3 style="font-size:15px; margin-bottom:12px; color:#1677ff;">各项税率（小数，如 0.09 代表 9%）</h3>
+        <h3 style="font-size:15px; margin-bottom:12px; color:#1677ff;">各项税率（小数）</h3>
         <div class="row" style="margin-bottom:16px;">
-          <div><label>运输类税率</label><input type="number" id="tax-transport" value="${currentCfg.taxes.transport}" step="0.01" /></div>
-          <div><label>储存类税率</label><input type="number" id="tax-storage" value="${currentCfg.taxes.storage}" step="0.01" /></div>
-          <div><label>装卸类税率</label><input type="number" id="tax-unloading" value="${currentCfg.taxes.unloading}" step="0.01" /></div>
+          <div><label>运输类</label><input type="number" id="tax-transport" value="${currentCfg.taxes.transport}" step="0.01" /></div>
+          <div><label>储存类</label><input type="number" id="tax-storage" value="${currentCfg.taxes.storage}" step="0.01" /></div>
+          <div><label>装卸类</label><input type="number" id="tax-unloading" value="${currentCfg.taxes.unloading}" step="0.01" /></div>
         </div>
         <button id="btn-save-rates" style="width:150px; background:#1677ff; color:#fff;">保存配置</button>
         <span id="rate-save-msg" style="margin-left:12px; font-size:13px; color:#389e0d;"></span>
@@ -879,9 +877,10 @@ async function renderBillingAdmin(v) {
       <div id="billing-list-box" style="display:none;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
           <h3 style="font-size:16px; margin:0;">已导入账单列表</h3>
+          <input id="bill-search" placeholder="搜索厂编/厂商名称" style="width:250px; margin:0; padding:6px 12px;" />
         </div>
-        <div class="scroll" style="max-height: 400px;">
-          <table>
+        <div class="scroll" style="max-height: 500px;">
+          <table id="billing-table">
             <thead>
               <tr>
                 <th>厂编</th><th>厂商名称</th><th>仓别</th><th>含税总额(元)</th><th>状态</th><th>操作</th>
@@ -891,10 +890,17 @@ async function renderBillingAdmin(v) {
           </table>
         </div>
       </div>
+      
+      <!-- 预览弹窗容器 -->
+      <div id="admin-billing-preview" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:9999; padding:40px; overflow-y:auto;">
+        <div style="background:#fff; border-radius:8px; max-width:1100px; margin:0 auto; padding:24px; position:relative;">
+          <button id="btn-close-preview" style="position:absolute; top:16px; right:16px; background:#ff4d4f; color:#fff; border:none; border-radius:4px; padding:4px 12px; cursor:pointer;">关闭</button>
+          <div id="admin-preview-content"></div>
+        </div>
+      </div>
     </div>
   `
 
-  // 配置面板交互
   document.getElementById('btn-toggle-rate-cfg').onclick = () => {
     const box = document.getElementById('rate-config-box')
     box.style.display = box.style.display === 'none' ? 'block' : 'none'
@@ -902,8 +908,7 @@ async function renderBillingAdmin(v) {
 
   document.getElementById('btn-save-rates').onclick = async () => {
     const msg = document.getElementById('rate-save-msg')
-    msg.innerText = '保存中...'
-    msg.style.color = '#1677ff'
+    msg.innerText = '保存中...'; msg.style.color = '#1677ff'
     const newCfg = {
       rates: {
         dsp_east: Number(document.getElementById('rate-east').value),
@@ -920,24 +925,18 @@ async function renderBillingAdmin(v) {
         unloading: Number(document.getElementById('tax-unloading').value)
       }
     }
-    
     const { error } = await ctx.supabase.from('system_config').upsert({
-      config_key: 'billing_rates_config',
-      config_value: JSON.stringify(newCfg),
-      updated_by: ctx.operatorName
+      config_key: 'billing_rates_config', config_value: JSON.stringify(newCfg), updated_by: ctx.operatorName
     }, { onConflict: 'config_key' })
-
     if (error) {
-      msg.innerText = '保存失败：' + error.message
-      msg.style.color = '#cf1322'
+      msg.innerText = '保存失败：' + error.message; msg.style.color = '#cf1322'
     } else {
-      msg.innerText = '✅ 保存成功，前端展示已同步更新'
-      msg.style.color = '#389e0d'
+      msg.innerText = '✅ 保存成功'; msg.style.color = '#389e0d'
       setTimeout(() => msg.innerText = '', 3000)
     }
   }
 
-  // ================= 全量明细智能解析引擎 =================
+  // ================= 上传与解析 (含金额兜底计算) =================
   window.handleBillingUpload = async (e) => {
     const files = Array.from(e.target.files)
     const month = document.getElementById('bill-month').value
@@ -961,7 +960,6 @@ async function renderBillingAdmin(v) {
         const buf = await file.arrayBuffer()
         const wb = XLSX.read(buf)
         
-        // 1. 寻找目标总表
         let targetWs = null
         for (let sheetName of wb.SheetNames) {
           if (sheetName.includes('总表') || sheetName.includes('汇总')) {
@@ -981,7 +979,6 @@ async function renderBillingAdmin(v) {
 
         const rawRows = XLSX.utils.sheet_to_json(targetWs, { header: 1, defval: '' })
         
-        // 2. 定位表头及数据起始行
         let headerRowIndex = -1, dataStartIndex = -1
         for (let r = 0; r < Math.min(15, rawRows.length); r++) {
           if (rawRows[r] && rawRows[r].some(cell => String(cell).trim() === '厂编')) {
@@ -996,8 +993,7 @@ async function renderBillingAdmin(v) {
         }
         if (dataStartIndex === -1) throw new Error('未找到有效数据行')
 
-        // 3. 智能寻找“含税金额”列
-        let amountColIndex = 25 // 默认 Z 列
+        let amountColIndex = 25
         const headerRow = rawRows[headerRowIndex] || []
         const mergeHeaderRow = rawRows[headerRowIndex + 1] || []
         for (let c = 0; c < Math.max(headerRow.length, mergeHeaderRow.length); c++) {
@@ -1008,65 +1004,69 @@ async function renderBillingAdmin(v) {
         }
 
         const vendorMap = new Map()
-        // 初始化全量明细结构
-        const initDetails = () => ({ 
-          unloading: [], operation: [], storage: [], transit: [], dsp: [], gift: [], return: [] 
-        })
+        const initDetails = () => ({ unloading: [], operation: [], storage: [], transit: [], dsp: [], gift: [], return: [] })
 
-        // 4. 提取总表汇总数据
         for (let r = dataStartIndex; r < rawRows.length; r++) {
           const row = rawRows[r]
-          const codeRaw = row[1] // B列 厂编
+          const codeRaw = row[1]
           if (!codeRaw) continue
           const code = String(codeRaw).trim()
           if (!/^\d+$/.test(code)) continue 
 
           const getVal = (idx) => idx >= 0 && row[idx] ? Number(row[idx]) || 0 : 0
+          
+          let dbTotal = getVal(amountColIndex)
+          
+          // 汇总发生量
+          const summary = {
+            unloading: getVal(8), storage: getVal(10), operation: getVal(11),
+            transit: getVal(15), dsp_east: getVal(16), dsp_west: getVal(17), dsp_nm: getVal(18)
+          }
+
+          // 🌟 金额兜底：如果抓取到的金额是 0，就根据费率自动算一个
+          if (dbTotal === 0) {
+            const r_rates = currentCfg.rates, r_taxes = currentCfg.taxes
+            const calc = (qty, rate, tax) => (Number(qty)||0) * rate * (1 + tax)
+            dbTotal = calc(summary.dsp_east, r_rates.dsp_east, r_taxes.transport) +
+                      calc(summary.dsp_west, r_rates.dsp_west, r_taxes.transport) +
+                      calc(summary.dsp_nm, r_rates.dsp_nm, r_taxes.transport) +
+                      calc(summary.transit, r_rates.transit, r_taxes.transport) +
+                      calc(summary.storage, r_rates.storage, r_taxes.storage) +
+                      calc(summary.operation, r_rates.operation, r_taxes.storage) +
+                      calc(summary.unloading, r_rates.unloading, r_taxes.unloading)
+            dbTotal = Number(dbTotal.toFixed(2))
+          }
 
           vendorMap.set(code, {
-            bill_month: month,
-            warehouse_code: currentWh,
-            vendor_code: code,
-            vendor_name: String(row[2] || ''), // C列 厂名
-            total_amount_tax: getVal(amountColIndex),
-            summary_data: {
-              unloading: getVal(8),   // I列: 装卸
-              storage: getVal(10),    // K列: 仓储
-              operation: getVal(11),  // L列: 操作
-              transit: getVal(15),    // P列: 西安干线
-              dsp_east: getVal(16),   // Q列: DSP中/东区
-              dsp_west: getVal(17),   // R列: DSP西/西南区
-              dsp_nm: getVal(18)      // S列: DSP内蒙古
-            },
-            details_data: initDetails(),
-            status: 'pending'
+            bill_month: month, warehouse_code: currentWh, vendor_code: code,
+            vendor_name: String(row[2] || ''), total_amount_tax: dbTotal,
+            summary_data: summary,
+            details_data: initDetails(), status: 'pending'
           })
         }
 
         if (vendorMap.size === 0) throw new Error('未提取到有效总表数据')
 
-        // 5. 提取所有明细流水（全表扫描匹配厂编）
         const processDetailSheet = (sheetKeyword, dataKey) => {
           const sheetName = wb.SheetNames.find(n => n.includes(sheetKeyword))
           if (!sheetName) return
-          
           const ws = wb.Sheets[sheetName]
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
           
           for (let r = 0; r < rows.length; r++) {
             const row = rows[r]
             if (!row || row.length === 0) continue
-            
             let foundCode = null
             for (let c = 0; c < row.length; c++) {
-              const val = String(row[c] || '').trim()
-              if (vendorMap.has(val)) { 
-                foundCode = val; 
-                break 
-              }
+              let val = row[c]
+              if (val && typeof val === 'object') val = val.v || val.w || ''
+              val = String(val).trim()
+              const numMatch = val.match(/\d{5,}/)
+              if (numMatch && vendorMap.has(numMatch[0])) { foundCode = numMatch[0]; break }
             }
             if (foundCode) {
-              vendorMap.get(foundCode).details_data[dataKey].push(row)
+              const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)
+              vendorMap.get(foundCode).details_data[dataKey].push(cleanRow)
             }
           }
         }
@@ -1074,66 +1074,193 @@ async function renderBillingAdmin(v) {
         processDetailSheet('装卸', 'unloading')
         processDetailSheet('操作费', 'operation')
         processDetailSheet('储存清单', 'storage')
-        processDetailSheet('储存板数', 'storage') // 兼容别名
+        processDetailSheet('储存板数', 'storage')
         processDetailSheet('西安干线', 'transit')
         processDetailSheet('DSP', 'dsp')
         processDetailSheet('赠品', 'gift')
         processDetailSheet('退货', 'return')
 
         allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
-        msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家数据及全量明细</span>`
-        
+        msgEl.innerHTML += ` <span style="color:#389e0d;">成功提取 ${vendorMap.size} 家</span>`
       } catch (err) {
         console.error(`解析文件 ${file.name} 失败:`, err)
         msgEl.innerHTML += ` <span style="color:#cf1322;">失败：${err.message}</span>`
       }
     }
 
-    if (allPayloads.length === 0) {
-      msgEl.innerHTML += `<br><br><span style="color:#cf1322; font-size:14px;">❌ 全部文件均未解析到有效数据。</span>`
-      return
-    }
+    if (allPayloads.length === 0) return msgEl.innerHTML += `<br><br><span style="color:#cf1322; font-size:14px;">❌ 全部文件均未解析到有效数据。</span>`
 
-    msgEl.innerHTML += `<br><span style="color:#1677ff;">正在写入数据库（包含大量明细数据，请稍候）...</span>`
-
+    msgEl.innerHTML += `<br><span style="color:#1677ff;">正在写入数据库...</span>`
     try {
       const { error } = await ctx.supabase.from('vendor_billings').upsert(allPayloads, { onConflict: 'bill_month,warehouse_code,vendor_code' })
       if (error) throw error
-      
-      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共更新了 ${allPayloads.length} 家厂商的账单与明细。</span>`
-      e.target.value = '' 
-      loadBillingList(month)
+      msgEl.innerHTML += `<br><br><span style="color:#389e0d; font-size:14px; font-weight:bold;">✅ 导入成功！共更新了 ${allPayloads.length} 家厂商。</span>`
+      e.target.value = ''; loadBillingList(month)
     } catch (err) {
-      console.error(err)
-      msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 写入数据库失败：${err.message}</span>`
+      msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 写入失败：${err.message}</span>`
     }
   }
 
-  // ================= 加载已导入账单列表 =================
+  // ================= 列表加载与搜索 =================
+  let globalBillingData = [] // 暂存数据用于搜索和预览
+
   window.loadBillingList = async (month) => {
     const box = document.getElementById('billing-list-box')
     const tbody = document.getElementById('billing-list-body')
     if (!month) { box.style.display = 'none'; return }
 
-    box.style.display = 'block'
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">加载中...</td></tr>'
-
+    box.style.display = 'block'; tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">加载中...</td></tr>'
+    
     const { data, error } = await ctx.supabase.from('vendor_billings')
-      .select('id, vendor_code, vendor_name, warehouse_code, total_amount_tax, status')
-      .eq('bill_month', month)
-      .order('warehouse_code', { ascending: true })
-      .order('vendor_code', { ascending: true })
-
+      .select('*').eq('bill_month', month).order('warehouse_code').order('vendor_code')
+      
     if (error) return tbody.innerHTML = `<tr><td colspan="6" style="color:#cf1322;">加载失败：${error.message}</td></tr>`
+    
+    globalBillingData = data || []
+    renderList(globalBillingData)
+  }
 
-    tbody.innerHTML = data.map(r => `<tr>
-      <td>${r.vendor_code}</td>
-      <td>${r.vendor_name || ''}</td>
-      <td>${r.warehouse_code}</td>
+  const renderList = (list) => {
+    const tbody = document.getElementById('billing-list-body')
+    tbody.innerHTML = list.map(r => `<tr>
+      <td>${r.vendor_code}</td><td>${r.vendor_name || ''}</td><td>${r.warehouse_code}</td>
       <td style="color:#cf1322; font-weight:bold;">¥ ${Number(r.total_amount_tax || 0).toFixed(2)}</td>
       <td>${r.status === 'confirmed' ? '<span style="color:#389e0d;">✅ 已确认</span>' : '<span style="color:#d46b08;">⏳ 待确认</span>'}</td>
-      <td><button class="small secondary" onclick="alert('请在厂家端查看明细')">查看</button></td>
-    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">暂无数据</td></tr>'
+      <td><button class="small secondary" onclick="window.previewAdminBilling('${r.vendor_code}')">查看</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">无匹配数据</td></tr>'
+  }
+
+  document.getElementById('bill-search').oninput = (e) => {
+    const kw = e.target.value.trim().toLowerCase()
+    const filtered = globalBillingData.filter(r => 
+      (r.vendor_code || '').includes(kw) || (r.vendor_name || '').toLowerCase().includes(kw)
+    )
+    renderList(filtered)
+  }
+
+  // ================= 管理端预览详情（与厂商端一模一样） =================
+  window.previewAdminBilling = (vendorCode) => {
+    const bill = globalBillingData.find(b => b.vendor_code === vendorCode)
+    if (!bill) return alert('未找到数据')
+
+    const previewBox = document.getElementById('admin-billing-preview')
+    const contentBox = document.getElementById('admin-preview-content')
+    
+    const rates = currentCfg.rates
+    const taxes = currentCfg.taxes
+    const details = []
+    
+    const addDetail = (category, item, qty, rate, unit, taxRate, qtyUnit = unit) => {
+      const q = Number(qty) || 0
+      const untaxed = q * rate
+      const tax = untaxed * taxRate
+      details.push({ category, item, qty: q, rate, unit, qtyUnit, untaxed, tax, total: untaxed + tax, taxRate })
+    }
+
+    const sData = bill.summary_data || {}
+    addDetail('运输', 'DSP省内(中/东区)', sData.dsp_east, rates.dsp_east, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(西/西南)', sData.dsp_west, rates.dsp_west, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(内蒙古)', sData.dsp_nm, rates.dsp_nm, '箱', taxes.transport)
+    addDetail('运输', '干线代送', sData.transit, rates.transit, '箱', taxes.transport)
+    addDetail('储存', '仓储费', sData.storage, rates.storage, '板/天', taxes.storage, '板')
+    addDetail('储存', '操作费', sData.operation, rates.operation, '箱', taxes.storage)
+    addDetail('装卸', '装卸费', sData.unloading, rates.unloading, '箱', taxes.unloading)
+
+    const calcTotalTaxed = details.reduce((sum, d) => sum + d.total, 0)
+    const displayTotal = Number(bill.total_amount_tax) > 0 ? Number(bill.total_amount_tax) : calcTotalTaxed
+
+    contentBox.innerHTML = `
+      <h2 style="margin-bottom:20px;">账单预览 - ${bill.vendor_name} (${bill.vendor_code})</h2>
+      <div style="display:flex; gap:16px; margin-bottom:20px;">
+        <div style="flex:1; background:#f8f9fa; padding:16px; border-radius:8px;"><div style="font-size:13px;color:#666;">月份</div><div style="font-size:16px;font-weight:bold;">${bill.bill_month}</div></div>
+        <div style="flex:1; background:#f8f9fa; padding:16px; border-radius:8px;"><div style="font-size:13px;color:#666;">仓库</div><div style="font-size:16px;font-weight:bold;">${bill.warehouse_code}</div></div>
+        <div style="flex:1; background:#f8f9fa; padding:16px; border-radius:8px;"><div style="font-size:13px;color:#666;">总金额</div><div style="font-size:20px;color:#cf1322;font-weight:bold;">¥ ${displayTotal.toFixed(2)}</div></div>
+        <div style="flex:1; background:${bill.status === 'confirmed' ? '#f6ffed' : '#fff1f0'}; padding:16px; border-radius:8px;"><div style="font-size:13px;color:#666;">状态</div><div style="font-size:16px;font-weight:bold;color:${bill.status === 'confirmed' ? '#389e0d' : '#cf1322'};">${bill.status === 'confirmed' ? '✅ 已确认' : '⏳ 待确认'}</div></div>
+      </div>
+      
+      <table style="margin-bottom:24px;">
+        <thead style="background:#fafafa;"><tr><th>大类</th><th>项目</th><th>发生量</th><th>计费标准</th><th>税率</th><th style="text-align:right;">未税金额</th><th style="text-align:right;">税额</th><th style="text-align:right;">含税小计</th></tr></thead>
+        <tbody>
+          ${details.map(d => `<tr>
+            <td>${d.category}</td><td>${d.item}</td><td>${d.qty} ${d.qtyUnit}</td><td>${d.rate} 元/${d.unit}</td><td>${(d.taxRate * 100).toFixed(0)}%</td>
+            <td style="text-align:right;">${d.untaxed.toFixed(2)}</td><td style="text-align:right;">${d.tax.toFixed(2)}</td><td style="text-align:right;color:#cf1322;font-weight:bold;">${d.total.toFixed(2)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      
+      <div style="text-align:right;">
+        <button class="secondary" onclick="window.downloadAdminBillExcel('${vendorCode}')">📥 下载完整对账单</button>
+      </div>
+    `
+    previewBox.style.display = 'block'
+  }
+
+  document.getElementById('btn-close-preview').onclick = () => {
+    document.getElementById('admin-billing-preview').style.display = 'none'
+  }
+
+  // ================= 管理端下载对账单（代码与厂商端相同） =================
+  window.downloadAdminBillExcel = (vendorCode) => {
+    const bill = globalBillingData.find(b => b.vendor_code === vendorCode)
+    if (!bill) return
+    
+    const rates = currentCfg.rates, taxes = currentCfg.taxes
+    const details = []
+    const sData = bill.summary_data || {}
+    const addDetail = (c, i, q, r, u, t, qu = u) => { const qq=Number(q)||0; details.push({c, i, q: qq, r, u, qu, untaxed: qq*r, tax: qq*r*t, total: qq*r*(1+t), t}) }
+    addDetail('运输', 'DSP省内(中/东区)', sData.dsp_east, rates.dsp_east, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(西/西南)', sData.dsp_west, rates.dsp_west, '箱', taxes.transport)
+    addDetail('运输', 'DSP省外(内蒙古)', sData.dsp_nm, rates.dsp_nm, '箱', taxes.transport)
+    addDetail('运输', '干线代送', sData.transit, rates.transit, '箱', taxes.transport)
+    addDetail('储存', '仓储费', sData.storage, rates.storage, '板/天', taxes.storage, '板')
+    addDetail('储存', '操作费', sData.operation, rates.operation, '箱', taxes.storage)
+    addDetail('装卸', '装卸费', sData.unloading, rates.unloading, '箱', taxes.unloading)
+
+    const wb = XLSX.utils.book_new()
+    const aoa = [
+      [`应收账款确认单 (${bill.warehouse_code})`],
+      [`厂编/厂名：`, bill.vendor_code, bill.vendor_name, '', '', '', '', ''],
+      [`结算日期：`, `${bill.bill_month} 月`, '', '', '', '', '', ''],
+      [],
+      ['名称', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '未税费用']
+    ]
+    let sumUntaxed = 0
+    details.forEach(d => {
+      aoa.push([d.i, bill.warehouse_code, d.c, d.qu, d.r, d.q, d.q, d.untaxed.toFixed(2)])
+      sumUntaxed += d.untaxed
+    })
+    aoa.push([], ['小计', '', '', '', '', '', '', sumUntaxed.toFixed(2)], [], ['发票注意事项：', '备注', '', '', '', '', '', ''], [], ['分类', '', '税率', '未税', '税额', '含税', '', ''])
+
+    const tU = details.filter(d=>d.c==='运输').reduce((s,d)=>s+d.untaxed,0)
+    const sU = details.filter(d=>d.c==='储存').reduce((s,d)=>s+d.untaxed,0)
+    const uU = details.filter(d=>d.c==='装卸').reduce((s,d)=>s+d.untaxed,0)
+    const tR = taxes.transport, sR = taxes.storage, uR = taxes.unloading
+    aoa.push(['运费', '', tR, tU.toFixed(2), (tU*tR).toFixed(2), (tU*(1+tR)).toFixed(2), '确认人：', ''])
+    aoa.push(['储存', '', sR, sU.toFixed(2), (sU*sR).toFixed(2), (sU*(1+sR)).toFixed(2), '审核人：', ''])
+    aoa.push(['装卸', '', uR, uU.toFixed(2), (uU*uR).toFixed(2), (uU*(1+uR)).toFixed(2), '', ''])
+    aoa.push(['合计', '', '', (tU+sU+uU).toFixed(2), (tU*tR+sU*sR+uU*uR).toFixed(2), (tU*(1+tR)+sU*(1+sR)+uU*(1+uR)).toFixed(2), '', ''])
+    aoa.push([], ['', `您好，${bill.bill_month}月份的`, `${bill.warehouse_code}对账单，请核对确认完成后本月15日前回复，谢谢`])
+    
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }, { wch: 15 }]
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, { s: { r: 1, c: 2 }, e: { r: 1, c: 7 } }, { s: { r: 2, c: 2 }, e: { r: 2, c: 7 } }, { s: { r: aoa.length - 1, c: 1 }, e: { r: aoa.length - 1, c: 7 } }]
+    XLSX.utils.book_append_sheet(wb, ws, '结算单')
+
+    const addDS = (name, arr, head) => {
+      let sd = [head]
+      if (arr && arr.length > 0) { const v = arr.filter(r => r && r.some(c => String(c).trim() !== '')); if (v.length > 0) sd = sd.concat(v) }
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sd), name)
+    }
+    const dD = bill.details_data || {}
+    addDS('装卸', dD.unloading, ['项目', '细项', '状态', '单号', '日期', '厂商编码', '厂商名称', '店编码', '店别', '商品编码', '商品名称', '规格', '单位', '件数', '数量'])
+    addDS('操作费', dD.operation, ['序号', '单号', '领用类型', '行号', '单头备注', '领用日期', '商品代码', '商品名称', '包装规格', '单位', '货位', '容器', '件数', '数量', '生产日期', '批次', '供应商', '厂商名称', '仓位', '货主', '领用对象', '领用人', '状态'])
+    addDS('储存清单', dD.storage, ['序号', '日期', '仓位', '货位', '货位用途', '温层', '容器条码', '商品代码', '商品名称', '包装规格', '库存状态', '单位', '库存件数', '库存数量', '生产日期', '批号', '到效期', '批次', '入库时间', '来源单号', '所属供应商', '厂商名称', '所属对象', '所属货主'])
+    addDS('西安干线', dD.transit, ['序号', '收货单号', '订单号', '订单来源单号', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '结算单位', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '温层', '总重(kg)'])
+    addDS('DSP', dD.dsp, ['序号', '收货单号', '订单号', '订单来源单号', '店号', '区域', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '总重(kg)'])
+    addDS('赠品&专柜', dD.gift, ['类别', '到货时间', '门店号', '要货方', '厂编', '厂商名称', '件数', '备注'])
+    addDS('退货', dD.return, ['录单时间', '退货单时间', 'NT订单号', '货号', '商品', '规格', '店号', '店名', '厂编', '厂商', '退货数量（个）', '退货数量（个）2', '差异数量', '件数', '存储板数', '天数', '收费天数>7天', '收费板数', '通知厂商取退货时间', '提货日期', '存储库位', '备注'])
+
+    XLSX.writeFile(wb, `${bill.vendor_code}_${bill.vendor_name}_${bill.bill_month}_对账单.xlsx`)
   }
 
   document.getElementById('bill-month').onchange = (e) => loadBillingList(e.target.value)
