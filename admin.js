@@ -864,8 +864,20 @@ async function renderBillingAdmin(v) {
           <input type="month" id="bill-month" style="padding:6px; border-radius:4px; border:1px solid #d9d9d9; margin-left:auto;" />
         </div>
         <div style="border: 2px dashed #91caff; background: #f0f7ff; padding: 20px; text-align: center; border-radius: 8px;">
+          <div style="margin-bottom:12px; display:flex; justify-content:center; gap:12px; align-items:center;">
+             <select id="single-upload-type" style="padding:6px; border-radius:4px; border:1px solid #d9d9d9;">
+                <option value="">👉 默认：全量解析（传大表）</option>
+                <option value="unloading">📦 单独更新：装卸</option>
+                <option value="operation">📦 单独更新：操作费</option>
+                <option value="storage">📦 单独更新：储存清单</option>
+                <option value="transit">📦 单独更新：西安干线</option>
+                <option value="dsp">📦 单独更新：DSP</option>
+                <option value="gift">📦 单独更新：赠品专柜</option>
+                <option value="return">📦 单独更新：退货</option>
+             </select>
+          </div>
           <input type="file" id="bill-file" accept=".xlsx, .xls" style="display:none;" multiple onchange="window.handleBillingUpload(event)" />
-          <label for="bill-file" style="cursor:pointer; color:#1677ff; font-weight:bold; font-size:16px;">📁 点击上传《总表数据源.xlsx》</label>
+          <label for="bill-file" style="cursor:pointer; color:#1677ff; font-weight:bold; font-size:16px;">📁 点击上传 Excel（支持多选）</label>
         </div>
         <div id="billing-msg" style="margin-top:12px; color:#1677ff; font-size:13px; line-height: 1.8;"></div>
       </div>
@@ -932,6 +944,8 @@ async function renderBillingAdmin(v) {
     const month = document.getElementById('bill-month').value
     const defaultWh = document.getElementById('bill-wh').value
     const msgEl = document.getElementById('billing-msg')
+    
+    const singleType = document.getElementById('single-upload-type')?.value || ''
     if (files.length === 0 || !month) return alert('请选择文件并填写月份')
 
     msgEl.innerHTML = `<span style="color:#1677ff;">开始处理文件，请稍候...</span>`
@@ -947,106 +961,147 @@ async function renderBillingAdmin(v) {
         const buf = await file.arrayBuffer()
         const wb = XLSX.read(buf)
         
-        let targetWs = null
-        for (let sheetName of wb.SheetNames) {
-          if (sheetName.includes('总表') || sheetName.includes('汇总')) { targetWs = wb.Sheets[sheetName]; break; }
-        }
-        if (!targetWs) throw new Error('未找到总表')
-
-        const rawRows = XLSX.utils.sheet_to_json(targetWs, { header: 1, defval: '' })
-        let headerRowIndex = -1, dataStartIndex = -1
-        for (let r = 0; r < rawRows.length; r++) {
-          if (rawRows[r] && rawRows[r].some(cell => String(cell).trim() === '厂编')) { headerRowIndex = r; break; }
-        }
-        if (headerRowIndex === -1) throw new Error('总表未找到「厂编」表头')
-
-        for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
-          if (rawRows[r] && /^\d+$/.test(String(rawRows[r][1] || '').trim())) { dataStartIndex = r; break; }
-        }
-
-        const vendorMap = new Map()
-        const initDetails = () => ({ unloading: null, operation: null, storage: null, transit: null, dsp: null, gift: null, return: null })
-        
-        for (let r = dataStartIndex; r < rawRows.length; r++) {
-          const row = rawRows[r]
-          const codeRaw = row[1]
-          if (!codeRaw) continue
-          const code = String(codeRaw).trim()
-          if (!/^\d+$/.test(code)) continue 
-
-          const getVal = (idx) => idx >= 0 && row[idx] ? Number(row[idx]) || 0 : 0
-          const summary = {
-            unloading: getVal(8), storage: getVal(10), operation: getVal(11),
-            transit: getVal(15), dsp_east: getVal(16), dsp_west: getVal(17), dsp_nm: getVal(18)
-          }
-
-          const r_rates = currentCfg.rates, r_taxes = currentCfg.taxes
-          let untax = 0
-          untax += (summary.dsp_east * r_rates.dsp_east) + (summary.dsp_west * r_rates.dsp_west) + (summary.dsp_nm * r_rates.dsp_nm) + (summary.transit * r_rates.transit)
-          untax += (summary.storage * r_rates.storage) + (summary.operation * r_rates.operation)
-          untax += (summary.unloading * r_rates.unloading)
-          
-          let tax = (summary.dsp_east * r_rates.dsp_east * r_taxes.transport) + (summary.dsp_west * r_rates.dsp_west * r_taxes.transport) + (summary.dsp_nm * r_rates.dsp_nm * r_taxes.transport) + (summary.transit * r_rates.transit * r_taxes.transport)
-          tax += (summary.storage * r_rates.storage * r_taxes.storage) + (summary.operation * r_rates.operation * r_taxes.storage)
-          tax += (summary.unloading * r_rates.unloading * r_taxes.unloading)
-
-          vendorMap.set(code, {
-            bill_month: month, warehouse_code: currentWh, vendor_code: code,
-            vendor_name: String(row[2] || ''), 
-            total_amount_untax: Number(untax.toFixed(2)),
-            total_amount_tax: Number((untax + tax).toFixed(2)),
-            summary_data: summary, details_data: initDetails(), status: 'pending'
-          })
-        }
-
-        const processDetailSheet = (sheetKeyword, dataKey) => {
-          const sheetName = wb.SheetNames.find(n => n.includes(sheetKeyword))
-          if (!sheetName) return
-          
-          const ws = wb.Sheets[sheetName]
+        // --- 单表补充模式 ---
+        if (singleType) {
+          const targetSheet = wb.SheetNames[0]
+          const ws = wb.Sheets[targetSheet]
           const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
-          let codeColIdx = -1, headerRowIdx = -1
           
-          for (let r = 0; r < rows.length; r++) {
-             const row = rows[r]
-             if (!row) continue
-             for (let c = 0; c < row.length; c++) {
-               const cell = String(row[c] || '').trim()
-               if (cell === '厂编' || cell === '厂商编码' || cell === '供应商代码' || cell === '厂商代码' || cell === '所属供应商') {
-                 codeColIdx = c; headerRowIdx = r; break
-               }
-             }
-             if (codeColIdx !== -1) break
-          }
-          if (codeColIdx === -1) return 
+          const vendorCodes = new Set()
+          rows.forEach(row => {
+            row.forEach(cell => {
+              let val = (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell
+              val = String(val).trim().replace(/\s/g, '').replace(/^'/, '')
+              if (/^\d{5,}$/.test(val)) vendorCodes.add(val)
+            })
+          })
           
-          const headerData = []
-          for (let r = 0; r <= headerRowIdx; r++) {
-            const row = rows[r]
-            if (row && row.some(c => String(c).trim() !== '')) {
-              headerData.push(row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
+          if (vendorCodes.size === 0) throw new Error('未找到有效厂编')
+          
+          const { data: existData } = await ctx.supabase.from('vendor_billings')
+            .select('*').eq('bill_month', month).eq('warehouse_code', currentWh).in('vendor_code', Array.from(vendorCodes))
+            
+          const existMap = new Map((existData || []).map(d => [d.vendor_code, d]))
+          
+          vendorCodes.forEach(code => {
+            const dbRecord = existMap.get(code) || {
+              bill_month: month, warehouse_code: currentWh, vendor_code: code,
+              vendor_name: '', total_amount_untax: 0, total_amount_tax: 0,
+              summary_data: {}, details_data: { unloading: null, operation: null, storage: null, transit: null, dsp: null, gift: null, return: null }, status: 'pending'
             }
+            if (!dbRecord.details_data) dbRecord.details_data = { unloading: null, operation: null, storage: null, transit: null, dsp: null, gift: null, return: null }
+            
+            const headers = rows.slice(0, 3).map(r => r.map(c => (c && typeof c === 'object') ? (c.v || c.w || '') : c))
+            const dataRows = rows.filter(r => r.some(c => {
+              let val = (c && typeof c === 'object') ? (c.v || c.w || '') : c
+              return String(val).trim().replace(/\s/g, '').replace(/^'/, '') === code
+            }))
+            
+            dbRecord.details_data[singleType] = { headers, rows: dataRows.map(r => r.map(c => (c && typeof c === 'object') ? (c.v || c.w || '') : c)) }
+            allPayloads.push(dbRecord)
+          })
+        } else {
+          // --- 终极暴力盲扫大表模式 ---
+          let targetWs = null
+          for (let sheetName of wb.SheetNames) {
+            if (sheetName.includes('总表') || sheetName.includes('汇总')) { targetWs = wb.Sheets[sheetName]; break; }
+          }
+          if (!targetWs) throw new Error('未找到总表')
+
+          const rawRows = XLSX.utils.sheet_to_json(targetWs, { header: 1, defval: '' })
+          let headerRowIndex = -1, dataStartIndex = -1
+          for (let r = 0; r < rawRows.length; r++) {
+            if (rawRows[r] && rawRows[r].some(cell => String(cell).trim() === '厂编')) { headerRowIndex = r; break; }
+          }
+          if (headerRowIndex === -1) throw new Error('总表未找到「厂编」表头')
+
+          for (let r = headerRowIndex + 1; r < rawRows.length; r++) {
+            if (rawRows[r] && /^\d+$/.test(String(rawRows[r][1] || '').trim())) { dataStartIndex = r; break; }
           }
 
-          vendorMap.forEach(v => { v.details_data[dataKey] = { headers: headerData, rows: [] } })
+          const vendorMap = new Map()
+          const initDetails = () => ({ unloading: null, operation: null, storage: null, transit: null, dsp: null, gift: null, return: null })
+          
+          for (let r = dataStartIndex; r < rawRows.length; r++) {
+            const row = rawRows[r]
+            const codeRaw = row[1]
+            if (!codeRaw) continue
+            const code = String(codeRaw).trim()
+            if (!/^\d+$/.test(code)) continue 
 
-          for (let r = headerRowIdx + 1; r < rows.length; r++) {
-            const row = rows[r]
-            if (!row || row.length === 0) continue
-            let codeVal = String(row[codeColIdx] || '').trim().replace(/\s/g, '')
-            if (vendorMap.has(codeVal)) {
-              const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)
-              vendorMap.get(codeVal).details_data[dataKey].rows.push(cleanRow)
+            const getVal = (idx) => idx >= 0 && row[idx] ? Number(row[idx]) || 0 : 0
+            const summary = {
+              unloading: getVal(8), storage: getVal(10), operation: getVal(11),
+              transit: getVal(15), dsp_east: getVal(16), dsp_west: getVal(17), dsp_nm: getVal(18)
             }
+
+            const r_rates = currentCfg.rates, r_taxes = currentCfg.taxes
+            let untax = 0
+            untax += (summary.dsp_east * r_rates.dsp_east) + (summary.dsp_west * r_rates.dsp_west) + (summary.dsp_nm * r_rates.dsp_nm) + (summary.transit * r_rates.transit)
+            untax += (summary.storage * r_rates.storage) + (summary.operation * r_rates.operation)
+            untax += (summary.unloading * r_rates.unloading)
+            
+            let tax = (summary.dsp_east * r_rates.dsp_east * r_taxes.transport) + (summary.dsp_west * r_rates.dsp_west * r_taxes.transport) + (summary.dsp_nm * r_rates.dsp_nm * r_taxes.transport) + (summary.transit * r_rates.transit * r_taxes.transport)
+            tax += (summary.storage * r_rates.storage * r_taxes.storage) + (summary.operation * r_rates.operation * r_taxes.storage)
+            tax += (summary.unloading * r_rates.unloading * r_taxes.unloading)
+
+            vendorMap.set(code, {
+              bill_month: month, warehouse_code: currentWh, vendor_code: code,
+              vendor_name: String(row[2] || ''), 
+              total_amount_untax: Number(untax.toFixed(2)),
+              total_amount_tax: Number((untax + tax).toFixed(2)),
+              summary_data: summary, details_data: initDetails(), status: 'pending'
+            })
           }
+
+          wb.SheetNames.forEach(sheetName => {
+            if (sheetName.includes('总表') || sheetName.includes('汇总') || sheetName.includes('结算单')) return
+            
+            let dataKey = null
+            if (sheetName.includes('装卸')) dataKey = 'unloading'
+            else if (sheetName.includes('操作') || sheetName.includes('增值')) dataKey = 'operation'
+            else if (sheetName.includes('储存') || sheetName.includes('仓储')) dataKey = 'storage'
+            else if (sheetName.includes('干线')) dataKey = 'transit'
+            else if (sheetName.includes('DSP') || sheetName.includes('配送')) dataKey = 'dsp'
+            else if (sheetName.includes('赠品') || sheetName.includes('专柜')) dataKey = 'gift'
+            else if (sheetName.includes('退货')) dataKey = 'return'
+            else return
+
+            const ws = wb.Sheets[sheetName]
+            const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
+            if (rows.length === 0) return
+
+            const headers = rows.slice(0, 3).map(r => r.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
+
+            vendorMap.forEach(v => {
+              if (!v.details_data[dataKey]) v.details_data[dataKey] = { headers: headers, rows: [] }
+            })
+
+            rows.forEach(row => {
+              if (!row || row.length === 0) return
+              let foundCode = null
+              
+              for (let c = 0; c < row.length; c++) {
+                let val = row[c]
+                if (val && typeof val === 'object') val = val.v || val.w || ''
+                val = String(val).trim().replace(/\s/g, '').replace(/^'/, '')
+                
+                if (vendorMap.has(val)) { foundCode = val; break }
+              }
+
+              if (foundCode) {
+                const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)
+                vendorMap.get(foundCode).details_data[dataKey].rows.push(cleanRow)
+              }
+            })
+          })
+
+          allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
         }
-
-        processDetailSheet('装卸', 'unloading'); processDetailSheet('操作费', 'operation')
-        processDetailSheet('储存', 'storage'); processDetailSheet('西安干线', 'transit')
-        processDetailSheet('DSP', 'dsp'); processDetailSheet('赠品', 'gift'); processDetailSheet('退货', 'return')
-
-        allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
-      } catch (err) { console.error(err) }
+      } catch (err) { 
+        console.error(err)
+        msgEl.innerHTML += `<br><span style="color:#cf1322;">文件 ${file.name} 解析失败：${err.message}</span>`
+      }
     }
 
     if (allPayloads.length === 0) return msgEl.innerHTML += `<br><br><span style="color:#cf1322;">❌ 全部文件解析失败。</span>`
@@ -1175,78 +1230,133 @@ async function renderBillingAdmin(v) {
     addDetail('装卸', '装卸费', sData.unloading, rates.unloading, '箱', taxes.unloading)
 
     const wb = XLSX.utils.book_new()
-    const aoa = [
-      [`应收账款确认单 (${bill.warehouse_code})`],
-      [`厂编/厂名：`, bill.vendor_code, bill.vendor_name, '', '', '', '', ''],
-      [`结算日期：`, `${bill.bill_month} 月`, '', '', '', '', '', ''],
-      [],
-      ['名称', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '未税费用']
-    ]
-    let sumUntaxed = 0
-    details.forEach(d => {
-      aoa.push([d.item, bill.warehouse_code, d.category, d.qtyUnit, d.rate, d.qty, d.qty, d.untaxed.toFixed(2)])
-      sumUntaxed += d.untaxed
-    })
-    aoa.push([])
-    aoa.push(['小计', '', '', '', '', '', '', sumUntaxed.toFixed(2)])
-    aoa.push([])
-    aoa.push(['发票注意事项：', '备注', '', '', '', '', '', ''])
-    aoa.push([])
-    aoa.push(['分类', '', '税率', '未税', '税额', '含税', '', ''])
-
-    const transportUntaxed = details.filter(d => d.category === '运输').reduce((sum, d) => sum + d.untaxed, 0)
-    const storageUntaxed = details.filter(d => d.category === '储存').reduce((sum, d) => sum + d.untaxed, 0)
-    const unloadingUntaxed = details.filter(d => d.category === '装卸').reduce((sum, d) => sum + d.untaxed, 0)
-
-    const tRate = taxes.transport, sRate = taxes.storage, uRate = taxes.unloading
-    aoa.push(['运费', '', tRate, transportUntaxed.toFixed(2), (transportUntaxed * tRate).toFixed(2), (transportUntaxed * (1 + tRate)).toFixed(2), '确认人：', ''])
-    aoa.push(['储存', '', sRate, storageUntaxed.toFixed(2), (storageUntaxed * sRate).toFixed(2), (storageUntaxed * (1 + sRate)).toFixed(2), '审核人：', ''])
-    aoa.push(['装卸', '', uRate, unloadingUntaxed.toFixed(2), (unloadingUntaxed * uRate).toFixed(2), (unloadingUntaxed * (1 + uRate)).toFixed(2), '', ''])
     
-    const totalUntaxed = transportUntaxed + storageUntaxed + unloadingUntaxed
-    const totalTax = (transportUntaxed * tRate) + (storageUntaxed * sRate) + (unloadingUntaxed * uRate)
+    const dspEastQty = details.find(d => d.item.includes('DSP省内'))?.qty || 0
+    const dspWestQty = details.find(d => d.item.includes('DSP省外(西/西南)'))?.qty || 0
+    const dspNmQty = details.find(d => d.item.includes('DSP省外(内蒙古)'))?.qty || 0
+    const transitQty = details.find(d => d.item.includes('干线代送'))?.qty || 0
+    const storageQty = details.find(d => d.item === '仓储费')?.qty || 0
+    const operationQty = details.find(d => d.item === '操作费')?.qty || 0
+    const unloadingQty = details.find(d => d.item === '装卸费')?.qty || 0
+
+    const dspEastUntax = dspEastQty * rates.dsp_east
+    const dspWestUntax = dspWestQty * rates.dsp_west
+    const dspNmUntax = dspNmQty * rates.dsp_nm
+    const transitUntax = transitQty * rates.transit
+    const transportUntax = dspEastUntax + dspWestUntax + dspNmUntax + transitUntax
+
+    const storageUntax = storageQty * rates.storage
+    const operationUntax = operationQty * rates.operation
+    const storageTotalUntax = storageUntax + operationUntax
+
+    const unloadingUntax = unloadingQty * rates.unloading
+
+    const totalUntaxed = transportUntax + storageTotalUntax + unloadingUntax
+    const transportTax = transportUntax * taxes.transport
+    const storageTax = storageTotalUntax * taxes.storage
+    const unloadingTax = unloadingUntax * taxes.unloading
+    const totalTax = transportTax + storageTax + unloadingTax
     const totalTaxed = totalUntaxed + totalTax
-    aoa.push(['合计', '', '', totalUntaxed.toFixed(2), totalTax.toFixed(2), totalTaxed.toFixed(2), '', ''])
-    aoa.push([])
-    aoa.push(['', `您好，${bill.bill_month}月份的`, `${bill.warehouse_code}对账单，请核对确认完成后本月15日前回复，谢谢`])
+
+    const aoa = [
+      ['厂编/厂名', bill.vendor_code, bill.vendor_name, '', '', '', `应收账款确认单 (${bill.warehouse_code})`, '', ''],
+      ['大润发开户行：', '', '', '', '', '大润发账号：', '', '', ''],
+      ['结算日期：', `${bill.bill_month}`, '', '', '', '制表人：', '', '', ''],
+      [], 
+      ['', '运费', '', '', '', '', '', '', ''], 
+      ['名称', '', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '未税费用'],
+      ['运输', 'DSP省内', '中区、东区', '配送费', '元/箱', rates.dsp_east, dspEastQty || '-', dspEastQty || '-', dspEastUntax || '-'],
+      ['', 'DSP省外', '西区、西南区', '配送费', '元/箱', rates.dsp_west, dspWestQty || '-', dspWestQty || '-', dspWestUntax || '-'],
+      ['', 'DSP省外', '内蒙古', '配送费', '元/箱', rates.dsp_nm, dspNmQty || '-', dspNmQty || '-', dspNmUntax || '-'],
+      ['', '退货', '退货', '配送费', '元/箱', 10, '-', '-', '-'],
+      ['', '赠品', '赠品代送', '配送费', '元/箱', 10, '-', '-', '-'],
+      ['', '干线代送', '济南仓至西安仓', '配送费', '元/箱', rates.transit, transitQty || '-', transitQty || '-', transitUntax || '-'],
+      ['小计', '', '', '运费', '', '', '', '', transportUntax || '-'],
+      
+      ['', '储存', '', '', '', '', '', '', ''],
+      ['名称', '', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '费用'],
+      ['增值', '存储费', '济南冻仓', '仓储费', '元/板/天', rates.storage, storageQty || '-', storageQty || '-', storageUntax || '-'],
+      ['增值', '操作费', '济南冻仓', '操作费', '元/箱', rates.operation, operationQty || '-', operationQty || '-', operationUntax || '-'],
+      ['退货', '存储费', '济南冻仓', '退货仓储费', '元/板/天', 3.5, '-', '-', '-'],
+      ['小计', '', '', '仓储费', '', '', '', '', storageTotalUntax || '-'],
+
+      ['', '装卸', '', '', '', '', '', '', ''],
+      ['名称', '', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '费用'],
+      ['增值', '', '济南冻仓', '装卸', '装卸费用：箱/元', rates.unloading, unloadingQty || '-', unloadingQty || '-', unloadingUntax || '-'],
+      ['小计', '', '', '增值', '', '', '', '', unloadingUntax || '-'],
+      
+      [],
+      ['发票注意事项：', '备注', '', '', '', '', '', '', ''],
+      ['分类', '', '税额', '未税', '税额', '含税', '', '', ''],
+      ['运费', '', taxes.transport, transportUntax || '-', transportTax || '-', (transportUntax + transportTax) || '-', '', '确认人：', ''],
+      ['储存', '', taxes.storage, storageTotalUntax || '-', storageTax || '-', (storageTotalUntax + storageTax) || '-', '', '审核人：', ''],
+      ['装卸', '', taxes.unloading, unloadingUntax || '-', unloadingTax || '-', (unloadingUntax + unloadingTax) || '-', '', '', ''],
+      ['合计', '', '', totalUntaxed || '-', totalTax || '-', totalTaxed || '-', '', '', '']
+    ]
 
     const ws = XLSX.utils.aoa_to_sheet(aoa)
-    
     const range = XLSX.utils.decode_range(ws['!ref'])
-    const borderStyle = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }
-    const styleTitle = { font: { bold: true, sz: 16 }, alignment: { horizontal: 'center', vertical: 'center' } }
-    const styleHeader = { font: { bold: true, sz: 11 }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
-    const styleCellText = { alignment: { horizontal: 'left', vertical: 'center' }, border: borderStyle }
-    const styleCellNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
-    const styleTotal = { font: { bold: true }, fill: { fgColor: { rgb: "F4F4F4" } }, alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
-    const styleTotalText = { font: { bold: true }, fill: { fgColor: { rgb: "F4F4F4" } }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
-
+    
+    const borderStyle = { top: { style: "thin", color: { rgb: "000000" } }, bottom: { style: "thin", color: { rgb: "000000" } }, left: { style: "thin", color: { rgb: "000000" } }, right: { style: "thin", color: { rgb: "000000" } } }
+    const bStyle = { font: { bold: true }, border: borderStyle }
+    const centerStyle = { alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+    const leftStyle = { alignment: { horizontal: 'left', vertical: 'center' }, border: borderStyle }
+    const rightStyle = { alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
+    const boldRight = { font: { bold: true }, alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
+    
+    const titleStyle = { font: { bold: true, sz: 16 }, alignment: { horizontal: 'center', vertical: 'center' } }
+    const yellowBg = { fill: { fgColor: { rgb: "FFC000" } }, font: { bold: true }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+    const greyBg = { fill: { fgColor: { rgb: "EFEFEF" } }, font: { bold: true }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+    
     for (let R = range.s.r; R <= range.e.r; ++R) {
       for (let C = range.s.c; C <= range.e.c; ++C) {
         const cellRef = XLSX.utils.encode_cell({ c: C, r: R })
         if (!ws[cellRef]) continue
-        if (R === 4) ws[cellRef].s = styleHeader
-        else if (R > 4 && R < aoa.length - 8) ws[cellRef].s = (C >= 4 && C <= 7) ? styleCellNum : styleCellText
-        else if ((R === 9 || R === aoa.length - 5) && C > 0) ws[cellRef].s = (C >= 3) ? styleTotal : styleTotalText
-        else if (R >= aoa.length - 7 && R <= aoa.length - 5) ws[cellRef].s = (C >= 2) ? styleCellNum : styleCellText
-        else ws[cellRef].s = { alignment: { vertical: 'center' } }
+        
+        if (R === 0) { ws[cellRef].s = { font: { sz: 12 } }; continue; }
+        if (R === 4 || R === 13 || R === 19) { ws[cellRef].s = yellowBg; continue; }
+        if (R === 5 || R === 14 || R === 20 || R === 25) { ws[cellRef].s = greyBg; continue; }
+        
+        if (R === 12 || R === 18 || R === 22) {
+          ws[cellRef].s = (C >= 6) ? boldRight : bStyle
+          continue
+        }
+        
+        if (R === 29) {
+          ws[cellRef].s = (C >= 3) ? boldRight : bStyle
+          continue
+        }
+
+        if (R > 5 && R < 24 && R !== 12 && R !== 18 && R !== 13 && R !== 19) {
+           if (C >= 5) ws[cellRef].s = rightStyle
+           else ws[cellRef].s = centerStyle
+        } else {
+           ws[cellRef].s = leftStyle
+        }
       }
     }
-    ws['A1'].s = styleTitle
-    ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }, { wch: 15 }]
+
+    ws['A1'].s = { font: { bold: true } }
+    ws['G1'].s = titleStyle
+
     ws['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, { s: { r: 1, c: 2 }, e: { r: 1, c: 7 } },
-      { s: { r: 2, c: 2 }, e: { r: 2, c: 7 } }, { s: { r: aoa.length - 1, c: 1 }, e: { r: aoa.length - 1, c: 7 } }
+      { s: { r: 0, c: 6 }, e: { r: 0, c: 8 } }, { s: { r: 1, c: 1 }, e: { r: 1, c: 4 } }, { s: { r: 1, c: 6 }, e: { r: 1, c: 8 } },
+      { s: { r: 2, c: 1 }, e: { r: 2, c: 4 } }, { s: { r: 2, c: 6 }, e: { r: 2, c: 8 } }, { s: { r: 4, c: 1 }, e: { r: 4, c: 8 } },
+      { s: { r: 5, c: 0 }, e: { r: 5, c: 1 } }, { s: { r: 6, c: 0 }, e: { r: 11, c: 0 } }, { s: { r: 12, c: 0 }, e: { r: 12, c: 2 } }, { s: { r: 12, c: 3 }, e: { r: 12, c: 7 } },
+      { s: { r: 13, c: 1 }, e: { r: 13, c: 8 } }, { s: { r: 14, c: 0 }, e: { r: 14, c: 1 } }, { s: { r: 18, c: 0 }, e: { r: 18, c: 2 } }, { s: { r: 18, c: 3 }, e: { r: 18, c: 7 } },
+      { s: { r: 19, c: 1 }, e: { r: 19, c: 8 } }, { s: { r: 20, c: 0 }, e: { r: 20, c: 1 } }, { s: { r: 22, c: 0 }, e: { r: 22, c: 2 } }, { s: { r: 22, c: 3 }, e: { r: 22, c: 7 } },
+      { s: { r: 24, c: 2 }, e: { r: 24, c: 8 } }, { s: { r: 25, c: 1 }, e: { r: 25, c: 1 } }, { s: { r: 26, c: 6 }, e: { r: 28, c: 6 } }, { s: { r: 26, c: 7 }, e: { r: 28, c: 8 } }
     ]
+
+    ws['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 15 }]
     XLSX.utils.book_append_sheet(wb, ws, '结算单')
 
     const applyStyleToDetail = (wsDetail, headerRowCount) => {
       if (!wsDetail || !wsDetail['!ref']) return
       const dr = XLSX.utils.decode_range(wsDetail['!ref'])
-      const bStyle = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }
-      const sHeader = { font: { bold: true }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: bStyle }
-      const sText = { alignment: { vertical: 'center' }, border: bStyle }
-      const sNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: bStyle }
+      const sHeader = { font: { bold: true }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: borderStyle }
+      const sText = { alignment: { vertical: 'center' }, border: borderStyle }
+      const sNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
 
       for (let R = dr.s.r; R <= dr.e.r; ++R) {
         for (let C = dr.s.c; C <= dr.e.c; ++C) {
@@ -1268,7 +1378,6 @@ async function renderBillingAdmin(v) {
       }
       
       const wsDetail = XLSX.utils.aoa_to_sheet(sheetData)
-      
       const colWidths = []
       sheetData.forEach(row => {
         if (!row) return

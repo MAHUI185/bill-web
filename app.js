@@ -2287,74 +2287,135 @@ async function renderBilling(view) {
       alert('已确认！财务将收到您的确认状态。'); renderBilling(view)
     }
 
-    // 🌟 全量美化版导出：绝对保留所有 Sheet，没数据也生成空表头
     window.downloadBillExcel = () => {
       const wb = XLSX.utils.book_new()
-      const aoa = [
-        [`应收账款确认单 (${currentBill.warehouse_code})`],
-        [`厂编/厂名：`, currentVendor, vendorNameMap[currentVendor], '', '', '', '', ''],
-        [`结算日期：`, `${currentBill.bill_month} 月`, '', '', '', '', '', ''],
-        [],
-        ['名称', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '未税费用']
-      ]
-      let sumUntaxed = 0
-      details.forEach(d => {
-        aoa.push([d.item, currentBill.warehouse_code, d.category, d.qtyUnit, d.rate, d.qty, d.qty, d.untaxed.toFixed(2)])
-        sumUntaxed += d.untaxed
-      })
-      aoa.push([], ['小计', '', '', '', '', '', '', sumUntaxed.toFixed(2)], [], ['发票注意事项：', '备注', '', '', '', '', '', ''], [], ['分类', '', '税率', '未税', '税额', '含税', '', ''])
-
-      const transportUntaxed = details.filter(d => d.category === '运输').reduce((sum, d) => sum + d.untaxed, 0)
-      const storageUntaxed = details.filter(d => d.category === '储存').reduce((sum, d) => sum + d.untaxed, 0)
-      const unloadingUntaxed = details.filter(d => d.category === '装卸').reduce((sum, d) => sum + d.untaxed, 0)
-      const tRate = taxes.transport, sRate = taxes.storage, uRate = taxes.unloading
-
-      aoa.push(['运费', '', tRate, transportUntaxed.toFixed(2), (transportUntaxed * tRate).toFixed(2), (transportUntaxed * (1 + tRate)).toFixed(2), '确认人：', ''])
-      aoa.push(['储存', '', sRate, storageUntaxed.toFixed(2), (storageUntaxed * sRate).toFixed(2), (storageUntaxed * (1 + sRate)).toFixed(2), '审核人：', ''])
-      aoa.push(['装卸', '', uRate, unloadingUntaxed.toFixed(2), (unloadingUntaxed * uRate).toFixed(2), (unloadingUntaxed * (1 + uRate)).toFixed(2), '', ''])
       
-      const totalUntaxed = transportUntaxed + storageUntaxed + unloadingUntaxed
-      const totalTax = (transportUntaxed * tRate) + (storageUntaxed * sRate) + (unloadingUntaxed * uRate)
+      const dspEastQty = details.find(d => d.item.includes('DSP省内'))?.qty || 0
+      const dspWestQty = details.find(d => d.item.includes('DSP省外(西/西南)'))?.qty || 0
+      const dspNmQty = details.find(d => d.item.includes('DSP省外(内蒙古)'))?.qty || 0
+      const transitQty = details.find(d => d.item.includes('干线代送'))?.qty || 0
+      const storageQty = details.find(d => d.item === '仓储费')?.qty || 0
+      const operationQty = details.find(d => d.item === '操作费')?.qty || 0
+      const unloadingQty = details.find(d => d.item === '装卸费')?.qty || 0
+
+      const dspEastUntax = dspEastQty * rates.dsp_east
+      const dspWestUntax = dspWestQty * rates.dsp_west
+      const dspNmUntax = dspNmQty * rates.dsp_nm
+      const transitUntax = transitQty * rates.transit
+      const transportUntax = dspEastUntax + dspWestUntax + dspNmUntax + transitUntax
+
+      const storageUntax = storageQty * rates.storage
+      const operationUntax = operationQty * rates.operation
+      const storageTotalUntax = storageUntax + operationUntax
+
+      const unloadingUntax = unloadingQty * rates.unloading
+
+      const totalUntaxed = transportUntax + storageTotalUntax + unloadingUntax
+      const transportTax = transportUntax * taxes.transport
+      const storageTax = storageTotalUntax * taxes.storage
+      const unloadingTax = unloadingUntax * taxes.unloading
+      const totalTax = transportTax + storageTax + unloadingTax
       const totalTaxed = totalUntaxed + totalTax
-      aoa.push(['合计', '', '', totalUntaxed.toFixed(2), totalTax.toFixed(2), totalTaxed.toFixed(2), '', ''], [], ['', `您好，${currentBill.bill_month}月份的`, `${currentBill.warehouse_code}对账单，请核对确认完成后本月15日前回复，谢谢`])
+
+      const aoa = [
+        ['厂编/厂名', currentVendor, vendorNameMap[currentVendor], '', '', '', `应收账款确认单 (${currentBill.warehouse_code})`, '', ''],
+        ['大润发开户行：', '', '', '', '', '大润发账号：', '', '', ''],
+        ['结算日期：', `${currentBill.bill_month}`, '', '', '', '制表人：', '', '', ''],
+        [], 
+        ['', '运费', '', '', '', '', '', '', ''], 
+        ['名称', '', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '未税费用'],
+        ['运输', 'DSP省内', '中区、东区', '配送费', '元/箱', rates.dsp_east, dspEastQty || '-', dspEastQty || '-', dspEastUntax || '-'],
+        ['', 'DSP省外', '西区、西南区', '配送费', '元/箱', rates.dsp_west, dspWestQty || '-', dspWestQty || '-', dspWestUntax || '-'],
+        ['', 'DSP省外', '内蒙古', '配送费', '元/箱', rates.dsp_nm, dspNmQty || '-', dspNmQty || '-', dspNmUntax || '-'],
+        ['', '退货', '退货', '配送费', '元/箱', 10, '-', '-', '-'],
+        ['', '赠品', '赠品代送', '配送费', '元/箱', 10, '-', '-', '-'],
+        ['', '干线代送', '济南仓至西安仓', '配送费', '元/箱', rates.transit, transitQty || '-', transitQty || '-', transitUntax || '-'],
+        ['小计', '', '', '运费', '', '', '', '', transportUntax || '-'],
+        
+        ['', '储存', '', '', '', '', '', '', ''],
+        ['名称', '', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '费用'],
+        ['增值', '存储费', '济南冻仓', '仓储费', '元/板/天', rates.storage, storageQty || '-', storageQty || '-', storageUntax || '-'],
+        ['增值', '操作费', '济南冻仓', '操作费', '元/箱', rates.operation, operationQty || '-', operationQty || '-', operationUntax || '-'],
+        ['退货', '存储费', '济南冻仓', '退货仓储费', '元/板/天', 3.5, '-', '-', '-'],
+        ['小计', '', '', '仓储费', '', '', '', '', storageTotalUntax || '-'],
+
+        ['', '装卸', '', '', '', '', '', '', ''],
+        ['名称', '', '仓别', '计费科目', '单位', '计费标准', '发生量', '计费量', '费用'],
+        ['增值', '', '济南冻仓', '装卸', '装卸费用：箱/元', rates.unloading, unloadingQty || '-', unloadingQty || '-', unloadingUntax || '-'],
+        ['小计', '', '', '增值', '', '', '', '', unloadingUntax || '-'],
+        
+        [],
+        ['发票注意事项：', '备注', '', '', '', '', '', '', ''],
+        ['分类', '', '税额', '未税', '税额', '含税', '', '', ''],
+        ['运费', '', taxes.transport, transportUntax || '-', transportTax || '-', (transportUntax + transportTax) || '-', '', '确认人：', ''],
+        ['储存', '', taxes.storage, storageTotalUntax || '-', storageTax || '-', (storageTotalUntax + storageTax) || '-', '', '审核人：', ''],
+        ['装卸', '', taxes.unloading, unloadingUntax || '-', unloadingTax || '-', (unloadingUntax + unloadingTax) || '-', '', '', ''],
+        ['合计', '', '', totalUntaxed || '-', totalTax || '-', totalTaxed || '-', '', '', '']
+      ]
 
       const ws = XLSX.utils.aoa_to_sheet(aoa)
       const range = XLSX.utils.decode_range(ws['!ref'])
-      const borderStyle = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }
-      const styleTitle = { font: { bold: true, sz: 16 }, alignment: { horizontal: 'center', vertical: 'center' } }
-      const styleHeader = { font: { bold: true, sz: 11 }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
-      const styleCellText = { alignment: { horizontal: 'left', vertical: 'center' }, border: borderStyle }
-      const styleCellNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
-      const styleTotal = { font: { bold: true }, fill: { fgColor: { rgb: "F4F4F4" } }, alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
-      const styleTotalText = { font: { bold: true }, fill: { fgColor: { rgb: "F4F4F4" } }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
-
+      
+      const borderStyle = { top: { style: "thin", color: { rgb: "000000" } }, bottom: { style: "thin", color: { rgb: "000000" } }, left: { style: "thin", color: { rgb: "000000" } }, right: { style: "thin", color: { rgb: "000000" } } }
+      const bStyle = { font: { bold: true }, border: borderStyle }
+      const centerStyle = { alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+      const leftStyle = { alignment: { horizontal: 'left', vertical: 'center' }, border: borderStyle }
+      const rightStyle = { alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
+      const boldRight = { font: { bold: true }, alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
+      
+      const titleStyle = { font: { bold: true, sz: 16 }, alignment: { horizontal: 'center', vertical: 'center' } }
+      const yellowBg = { fill: { fgColor: { rgb: "FFC000" } }, font: { bold: true }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+      const greyBg = { fill: { fgColor: { rgb: "EFEFEF" } }, font: { bold: true }, alignment: { horizontal: 'center', vertical: 'center' }, border: borderStyle }
+      
       for (let R = range.s.r; R <= range.e.r; ++R) {
         for (let C = range.s.c; C <= range.e.c; ++C) {
           const cellRef = XLSX.utils.encode_cell({ c: C, r: R })
           if (!ws[cellRef]) continue
-          if (R === 4) ws[cellRef].s = styleHeader
-          else if (R > 4 && R < aoa.length - 8) ws[cellRef].s = (C >= 4 && C <= 7) ? styleCellNum : styleCellText
-          else if ((R === 9 || R === aoa.length - 5) && C > 0) ws[cellRef].s = (C >= 3) ? styleTotal : styleTotalText
-          else if (R >= aoa.length - 7 && R <= aoa.length - 5) ws[cellRef].s = (C >= 2) ? styleCellNum : styleCellText
-          else ws[cellRef].s = { alignment: { vertical: 'center' } }
+          
+          if (R === 0) { ws[cellRef].s = { font: { sz: 12 } }; continue; }
+          if (R === 4 || R === 13 || R === 19) { ws[cellRef].s = yellowBg; continue; }
+          if (R === 5 || R === 14 || R === 20 || R === 25) { ws[cellRef].s = greyBg; continue; }
+          
+          if (R === 12 || R === 18 || R === 22) {
+            ws[cellRef].s = (C >= 6) ? boldRight : bStyle
+            continue
+          }
+          
+          if (R === 29) {
+            ws[cellRef].s = (C >= 3) ? boldRight : bStyle
+            continue
+          }
+
+          if (R > 5 && R < 24 && R !== 12 && R !== 18 && R !== 13 && R !== 19) {
+             if (C >= 5) ws[cellRef].s = rightStyle
+             else ws[cellRef].s = centerStyle
+          } else {
+             ws[cellRef].s = leftStyle
+          }
         }
       }
-      ws['A1'].s = styleTitle
-      ws['!cols'] = [{ wch: 18 }, { wch: 12 }, { wch: 15 }, { wch: 8 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 10 }, { wch: 15 }]
+
+      ws['A1'].s = { font: { bold: true } }
+      ws['G1'].s = titleStyle
+
       ws['!merges'] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, { s: { r: 1, c: 2 }, e: { r: 1, c: 7 } },
-        { s: { r: 2, c: 2 }, e: { r: 2, c: 7 } }, { s: { r: aoa.length - 1, c: 1 }, e: { r: aoa.length - 1, c: 7 } }
+        { s: { r: 0, c: 6 }, e: { r: 0, c: 8 } }, { s: { r: 1, c: 1 }, e: { r: 1, c: 4 } }, { s: { r: 1, c: 6 }, e: { r: 1, c: 8 } },
+        { s: { r: 2, c: 1 }, e: { r: 2, c: 4 } }, { s: { r: 2, c: 6 }, e: { r: 2, c: 8 } }, { s: { r: 4, c: 1 }, e: { r: 4, c: 8 } },
+        { s: { r: 5, c: 0 }, e: { r: 5, c: 1 } }, { s: { r: 6, c: 0 }, e: { r: 11, c: 0 } }, { s: { r: 12, c: 0 }, e: { r: 12, c: 2 } }, { s: { r: 12, c: 3 }, e: { r: 12, c: 7 } },
+        { s: { r: 13, c: 1 }, e: { r: 13, c: 8 } }, { s: { r: 14, c: 0 }, e: { r: 14, c: 1 } }, { s: { r: 18, c: 0 }, e: { r: 18, c: 2 } }, { s: { r: 18, c: 3 }, e: { r: 18, c: 7 } },
+        { s: { r: 19, c: 1 }, e: { r: 19, c: 8 } }, { s: { r: 20, c: 0 }, e: { r: 20, c: 1 } }, { s: { r: 22, c: 0 }, e: { r: 22, c: 2 } }, { s: { r: 22, c: 3 }, e: { r: 22, c: 7 } },
+        { s: { r: 24, c: 2 }, e: { r: 24, c: 8 } }, { s: { r: 25, c: 1 }, e: { r: 25, c: 1 } }, { s: { r: 26, c: 6 }, e: { r: 28, c: 6 } }, { s: { r: 26, c: 7 }, e: { r: 28, c: 8 } }
       ]
+
+      ws['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 15 }, { wch: 12 }, { wch: 15 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 15 }]
       XLSX.utils.book_append_sheet(wb, ws, '结算单')
 
-      // ================= 2. 明细表生成引擎（兜底保证每一个 Sheet 都有） =================
       const applyStyleToDetail = (wsDetail, headerRowCount) => {
         if (!wsDetail || !wsDetail['!ref']) return
         const dr = XLSX.utils.decode_range(wsDetail['!ref'])
-        const bStyle = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } }
-        const sHeader = { font: { bold: true }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: bStyle }
-        const sText = { alignment: { vertical: 'center' }, border: bStyle }
-        const sNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: bStyle }
+        const sHeader = { font: { bold: true }, fill: { fgColor: { rgb: "EFEFEF" } }, alignment: { horizontal: 'center', vertical: 'center', wrapText: true }, border: borderStyle }
+        const sText = { alignment: { vertical: 'center' }, border: borderStyle }
+        const sNum = { alignment: { horizontal: 'right', vertical: 'center' }, border: borderStyle }
 
         for (let R = dr.s.r; R <= dr.e.r; ++R) {
           for (let C = dr.s.c; C <= dr.e.c; ++C) {
