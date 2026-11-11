@@ -1086,7 +1086,8 @@ async function renderBillingAdmin(v) {
                const row = rows[r]
                if (!row) continue
                for (let c = 0; c < row.length; c++) {
-                 if (String(row[c] || '').trim() === '厂商编码') {
+                 const cellStr = String(row[c] || '').trim()
+                 if (cellStr === '厂商编码' || cellStr === '厂编' || cellStr === '供应商代码' || cellStr === '供应商编码' || cellStr === '供应商') {
                    codeColIdx = c; headerRowIdx = r; break
                  }
                }
@@ -1096,7 +1097,7 @@ async function renderBillingAdmin(v) {
             if (codeColIdx !== -1) {
               for (let r = headerRowIdx + 1; r < rows.length; r++) {
                 const row = rows[r]
-                if (!row) continue
+                if (!row || row.length === 0) continue
                 let codeVal = String(row[codeColIdx] || '').trim().replace(/\s/g, '').replace(/^'/, '')
                 if (vendorMap.has(codeVal)) {
                   const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)

@@ -2287,6 +2287,7 @@ async function renderBilling(view) {
       alert('已确认！财务将收到您的确认状态。'); renderBilling(view)
     }
 
+    // 🌟 前端完美复刻结算单模板及全量明细
     window.downloadBillExcel = () => {
       const wb = XLSX.utils.book_new()
       
@@ -2446,7 +2447,7 @@ async function renderBilling(view) {
             colWidths[i] = Math.max(colWidths[i] || 10, len + 2)
           })
         })
-        wsDetail['!cols'] = colWidths.map(w => ({ wch: Math.min(w, 50) }))
+        wsDetail['!cols'] = colWidths.map(w => ({ wch: Math.min(w, 50) })) 
         const headerCount = (dataObj && dataObj.headers) ? dataObj.headers.length : 1
         applyStyleToDetail(wsDetail, headerCount)
         XLSX.utils.book_append_sheet(wb, wsDetail, sheetName)
