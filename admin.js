@@ -944,8 +944,8 @@ async function renderBillingAdmin(v) {
     const month = document.getElementById('bill-month').value
     const defaultWh = document.getElementById('bill-wh').value
     const msgEl = document.getElementById('billing-msg')
-    
     const singleType = document.getElementById('single-upload-type')?.value || ''
+
     if (files.length === 0 || !month) return alert('请选择文件并填写月份')
 
     msgEl.innerHTML = `<span style="color:#1677ff;">开始处理文件，请稍候...</span>`
@@ -1001,7 +1001,7 @@ async function renderBillingAdmin(v) {
             allPayloads.push(dbRecord)
           })
         } else {
-          // --- 终极暴力盲扫大表模式 ---
+          // --- 全量解析（精准狙击“厂商编码”列） ---
           let targetWs = null
           for (let sheetName of wb.SheetNames) {
             if (sheetName.includes('总表') || sheetName.includes('汇总')) { targetWs = wb.Sheets[sheetName]; break; }
@@ -1054,6 +1054,7 @@ async function renderBillingAdmin(v) {
             })
           }
 
+          // ★ 精准狙击“厂商编码”列
           wb.SheetNames.forEach(sheetName => {
             if (sheetName.includes('总表') || sheetName.includes('汇总') || sheetName.includes('结算单')) return
             
@@ -1072,28 +1073,37 @@ async function renderBillingAdmin(v) {
             if (rows.length === 0) return
 
             const headers = rows.slice(0, 3).map(r => r.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
-
+            
             vendorMap.forEach(v => {
               if (!v.details_data[dataKey]) v.details_data[dataKey] = { headers: headers, rows: [] }
             })
 
-            rows.forEach(row => {
-              if (!row || row.length === 0) return
-              let foundCode = null
-              
-              for (let c = 0; c < row.length; c++) {
-                let val = row[c]
-                if (val && typeof val === 'object') val = val.v || val.w || ''
-                val = String(val).trim().replace(/\s/g, '').replace(/^'/, '')
-                
-                if (vendorMap.has(val)) { foundCode = val; break }
-              }
+            // 寻找“厂商编码”列
+            let codeColIdx = -1
+            let headerRowIdx = -1
+            
+            for (let r = 0; r < Math.min(15, rows.length); r++) {
+               const row = rows[r]
+               if (!row) continue
+               for (let c = 0; c < row.length; c++) {
+                 if (String(row[c] || '').trim() === '厂商编码') {
+                   codeColIdx = c; headerRowIdx = r; break
+                 }
+               }
+               if (codeColIdx !== -1) break
+            }
 
-              if (foundCode) {
-                const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)
-                vendorMap.get(foundCode).details_data[dataKey].rows.push(cleanRow)
+            if (codeColIdx !== -1) {
+              for (let r = headerRowIdx + 1; r < rows.length; r++) {
+                const row = rows[r]
+                if (!row) continue
+                let codeVal = String(row[codeColIdx] || '').trim().replace(/\s/g, '').replace(/^'/, '')
+                if (vendorMap.has(codeVal)) {
+                  const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)
+                  vendorMap.get(codeVal).details_data[dataKey].rows.push(cleanRow)
+                }
               }
-            })
+            }
           })
 
           allPayloads = allPayloads.concat(Array.from(vendorMap.values()))
