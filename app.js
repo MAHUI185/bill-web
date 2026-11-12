@@ -735,7 +735,7 @@ async function renderFill(view) {
               <tr>
                 <th>类型</th><th>供应商代码</th><th>货主代码</th>
                 <th>仓位</th><th>商品代码</th><th>规格</th>
-                <th>箱数</th><th>到货日期</th><th>操作</th>
+                <th>箱数</th><th>到仓日期</th><th>操作</th>
               </tr>
             </thead>
             <tbody id="in-body"></tbody>
@@ -763,7 +763,7 @@ async function renderFill(view) {
             <thead>
               <tr>
                 <th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th>
-                <th>仓位</th><th>配货日期</th>
+                <th>仓位</th><th>到店日期</th>
                 <th>商品代码</th><th>规格</th><th>箱数</th><th>操作</th>
               </tr>
             </thead>
@@ -1062,7 +1062,7 @@ async function renderFill(view) {
         if (!r.spec) errors.push(`入库单 第 ${idx+1} 行：商品 [${r.product_code}] ${SPEC_EMPTY_MSG}`)
         else if (!isValidSpec(r.spec)) errors.push(`入库单 第 ${idx+1} 行：商品 [${r.product_code}] 规格格式错误`)
         if (!r.quantity) missing.push('箱数')
-        if (!r.arrival_date) missing.push('到货日期')
+        if (!r.arrival_date) missing.push('到仓日期')
         if (missing.length) errors.push(`入库单 第 ${idx+1} 行：${missing.join('、')} 未填`)
       })
 
@@ -1075,7 +1075,7 @@ async function renderFill(view) {
         if (!r.spec) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] ${SPEC_EMPTY_MSG}`)
         else if (!isValidSpec(r.spec)) errors.push(`出库单 第 ${idx+1} 行：商品 [${r.product_code}] 规格格式错误`)
         if (!r.quantity) missing.push('箱数')
-        if (!r.pick_date) missing.push('配货日期')
+        if (!r.pick_date) missing.push('到店日期')
         if (r.bill_type.includes('DSP')) {
           if (!r.store_code) missing.push('门店代码')
         }
@@ -1362,7 +1362,7 @@ async function renderFill(view) {
         <strong>入库 ${validIn.length} 条：</strong>
         ${validIn.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px; white-space:nowrap;">
-          <tr><th>类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>品名</th><th>规格</th><th>箱数</th><th>到货日期</th></tr>
+          <tr><th>类型</th><th>供应商代码</th><th>货主代码</th><th>仓位</th><th>商品</th><th>品名</th><th>规格</th><th>箱数</th><th>到仓日期</th></tr>
           ${validIn.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.vendor_code}</td><td>${r.owner_code}</td>
             <td>${r.location_code}</td><td>${r.product_code}</td><td>${r.product_name||''}</td><td>${r.spec}</td>
@@ -1374,7 +1374,7 @@ async function renderFill(view) {
         <strong>出库 ${validOut.length} 条：</strong>
         ${validOut.length === 0 ? '<span style="color:#999;">无</span>' : `
         <table style="margin-top:6px; white-space:nowrap;">
-          <tr><th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>配货日期</th><th>商品</th><th>品名</th><th>规格</th><th>箱数</th></tr>
+          <tr><th>类型</th><th>采购单号</th><th>货主代码</th><th>门店代码</th><th>仓位</th><th>到店日期</th><th>商品</th><th>品名</th><th>规格</th><th>箱数</th></tr>
           ${validOut.map(r => `<tr>
             <td>${r.bill_type}</td><td>${r.source_no || '-'}</td><td>${r.owner_code}</td><td>${r.store_code}</td>
             <td>${r.location_code}</td><td>${r.pick_date || '-'}</td>
