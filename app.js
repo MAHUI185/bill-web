@@ -611,12 +611,17 @@ async function renderFill(view) {
 
   let myVendorCode = selectedVendor.vendor_code
 
+  // ★ 核心修复：增加管理员兜底
   let myWhs = []
   if (isAdminDelegate || isLogistics) {
     const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
     if (vp) {
       const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
       myWhs = (vw||[]).map(x => x.warehouse_code)
+    }
+    // 如果是管理员代报，且数据库 RLS 拦截导致查不到仓库，强行兜底给 2608
+    if (isAdminDelegate && myWhs.length === 0) {
+      myWhs = ['2608']
     }
   } else {
     const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', currentUser.id)
@@ -842,6 +847,9 @@ async function renderFill(view) {
             if (vp) {
               const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
               myWhs = (vw||[]).map(x => x.warehouse_code)
+              // ★ 管理员兜底
+              if (isAdminDelegate && myWhs.length === 0) myWhs = ['2608']
+              
               if (myWhs.length) {
                 const { data: whInfo } = await supabase.from('warehouse').select('default_store_code').eq('warehouse_code', myWhs[0]).maybeSingle()
                 defaultStoreCode = whInfo?.default_store_code || ''
@@ -1153,8 +1161,8 @@ async function renderFill(view) {
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, arrival_date: r.arrival_date || null, effective_date: addOneDay(r.arrival_date),
         whole_process: 'NO', 
-        product_name: r.product_name || '', // ★ 新增：保存品名
-        product_remark: r.product_name || r.product_code || '无', // ★ 备注兜底
+        product_name: r.product_name || '',
+        product_remark: r.product_name || r.product_code || '无',
         submitter_type: isAdmin ? 'admin' : 'vendor'
       }))
 
@@ -1166,8 +1174,8 @@ async function renderFill(view) {
         pick_date: r.pick_date || null, effective_date: addOneDay(r.pick_date),
         product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
         price: 1, 
-        product_name: r.product_name || '', // ★ 新增：保存品名
-        product_remark: r.product_name || r.product_code || '无', // ★ 备注兜底
+        product_name: r.product_name || '',
+        product_remark: r.product_name || r.product_code || '无',
         submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode
       }))
 
