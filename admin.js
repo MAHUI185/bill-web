@@ -1001,7 +1001,7 @@ async function renderBillingAdmin(v) {
             allPayloads.push(dbRecord)
           })
         } else {
-          // --- 全量解析（精准狙击“厂商编码”列） ---
+          // --- 全量解析大表 ---
           let targetWs = null
           for (let sheetName of wb.SheetNames) {
             if (sheetName.includes('总表') || sheetName.includes('汇总')) { targetWs = wb.Sheets[sheetName]; break; }
@@ -1054,7 +1054,7 @@ async function renderBillingAdmin(v) {
             })
           }
 
-          // ★ 精准狙击“厂商编码”列
+          // ★ 终极铁律：绝对只认准“厂商编码”列
           wb.SheetNames.forEach(sheetName => {
             if (sheetName.includes('总表') || sheetName.includes('汇总') || sheetName.includes('结算单')) return
             
@@ -1078,7 +1078,7 @@ async function renderBillingAdmin(v) {
               if (!v.details_data[dataKey]) v.details_data[dataKey] = { headers: headers, rows: [] }
             })
 
-            // 寻找“厂商编码”列
+            // 严格寻找名为“厂商编码”的列
             let codeColIdx = -1
             let headerRowIdx = -1
             
@@ -1086,8 +1086,7 @@ async function renderBillingAdmin(v) {
                const row = rows[r]
                if (!row) continue
                for (let c = 0; c < row.length; c++) {
-                 const cellStr = String(row[c] || '').trim()
-                 if (cellStr === '厂商编码' || cellStr === '厂编' || cellStr === '供应商代码' || cellStr === '供应商编码' || cellStr === '供应商') {
+                 if (String(row[c] || '').trim() === '厂商编码') {
                    codeColIdx = c; headerRowIdx = r; break
                  }
                }
@@ -1095,15 +1094,22 @@ async function renderBillingAdmin(v) {
             }
 
             if (codeColIdx !== -1) {
+              let count = 0
               for (let r = headerRowIdx + 1; r < rows.length; r++) {
                 const row = rows[r]
                 if (!row || row.length === 0) continue
+                
                 let codeVal = String(row[codeColIdx] || '').trim().replace(/\s/g, '').replace(/^'/, '')
+                
                 if (vendorMap.has(codeVal)) {
                   const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)
                   vendorMap.get(codeVal).details_data[dataKey].rows.push(cleanRow)
+                  count++
                 }
               }
+              console.log(`[严格匹配] ${sheetName} 表，按“厂商编码”抓取 ${count} 行`)
+            } else {
+              console.warn(`[严格匹配] ${sheetName} 表未找到“厂商编码”列，跳过数据提取`)
             }
           })
 
