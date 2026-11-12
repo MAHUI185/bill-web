@@ -1774,6 +1774,9 @@ async function renderMy(view) {
 
 // ================= 质检报告 =================
 async function renderQC(view) {
+  // ★ 修复点 1：尝试获取上一次选中的厂编（如果存在的话）
+  const prevSelect = document.getElementById('qc-vendor-select')?.value
+
   let mySelectedVendorId = null
   let mySelectedVendorCode = null
   let mySelectedVendorName = null
@@ -1797,9 +1800,12 @@ async function renderQC(view) {
       view.innerHTML = `<div class="card"><h2>质检报告</h2><p style="color:#cf1322;">厂商档案异常，请联系管理员。</p></div>`
       return
     }
-    mySelectedVendorId = myVendors[0].id
-    mySelectedVendorCode = myVendors[0].vendor_code
-    mySelectedVendorName = myVendors[0].vendor_name
+    
+    // ★ 修复点 2：优先恢复上次选中的厂商，如果没有则取第一个
+    const matchedVendor = myVendors.find(v => v.vendor_code === prevSelect) || myVendors[0]
+    mySelectedVendorId = matchedVendor.id
+    mySelectedVendorCode = matchedVendor.vendor_code
+    mySelectedVendorName = matchedVendor.vendor_name
   } else {
     mySelectedVendorId = currentUser.id
     mySelectedVendorCode = currentProfile?.vendor_code || ''
@@ -1829,7 +1835,7 @@ async function renderQC(view) {
           <div style="flex:1;">
             <label>选择代传厂商 *</label>
             <select id="qc-vendor-select">
-              ${myVendors.map(v => `<option value="${v.vendor_code}" data-id="${v.id}" data-name="${v.vendor_name}">${v.vendor_code} - ${v.vendor_name}</option>`).join('')}
+              ${myVendors.map(v => `<option value="${v.vendor_code}" data-id="${v.id}" data-name="${v.vendor_name}" ${v.vendor_code === mySelectedVendorCode ? 'selected' : ''}>${v.vendor_code} - ${v.vendor_name}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -1867,7 +1873,7 @@ async function renderQC(view) {
       </div>
     </div>`
 
-  // 监听厂商下拉切换
+  // 监听厂商下拉切换（其实用不上了，因为上传时直接取，但保留以防万一）
   if (isLogistics) {
     const sel = document.getElementById('qc-vendor-select')
     sel.onchange = () => {
@@ -1903,14 +1909,25 @@ async function renderQC(view) {
     msgEl.innerHTML = msg('正在处理...', true)
 
     try {
-      // 获取最终确定的厂编和厂名
-      const targetCode = mySelectedVendorCode
-      const targetName = mySelectedVendorName.replace(/[\/\\:*?"<>|]/g, '')
-      const targetId = mySelectedVendorId
+      // ★ 修复点 3：极度重要！在上传瞬间，直接从下拉框 DOM 获取最新选中的厂商，避免状态滞后
+      let targetCode = mySelectedVendorCode
+      let targetName = mySelectedVendorName
+      let targetId = mySelectedVendorId
+
+      if (isLogistics) {
+        const sel = document.getElementById('qc-vendor-select')
+        if (sel && sel.options[sel.selectedIndex]) {
+          const opt = sel.options[sel.selectedIndex]
+          targetCode = opt.value
+          targetId = opt.dataset.id
+          targetName = opt.dataset.name
+        }
+      }
+
+      targetName = targetName.replace(/[\/\\:*?"<>|]/g, '')
 
       const fileInfos = files.map((file, index) => {
         const ext = file.name.split('.').pop()
-        // ★ 强力清洗：去除空格，并把全角括号替换为下划线
         let customName = file.name.replace(/\.[^/.]+$/, "")
           .replace(/[\/\\:*?"<>|]/g, '')
           .replace(/ /g, '') 
@@ -1925,7 +1942,6 @@ async function renderQC(view) {
       msgEl.innerHTML = msg('正在获取上传凭证...', true)
       const { data: { session } } = await supabase.auth.getSession()
       
-      // ★ 使用 safeFetch 替代直接 fetch
       const res = await safeFetch(`/functions/v1/upload-qc`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -1943,26 +1959,24 @@ async function renderQC(view) {
       await Promise.all(fileInfos.map(async (info, i) => {
         const uploadRes = await fetch(urls[i].uploadUrl, {
           method: 'PUT',
-          // 注意：这里绝对不能加 'Content-Type': 'application/pdf'，否则会导致 R2 签名不匹配
           body: info.file
         })
         if (!uploadRes.ok) throw new Error(`文件 [${info.originalName}] 上传失败`)
       }))
 
-      // 3. 覆盖逻辑（精确到目标厂商的 ID，而不是当前登录用户的 ID）
+      // 3. 覆盖逻辑
       msgEl.innerHTML = msg('正在清理该厂商今日的旧报告...', true)
       const todayStr = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).toISOString().slice(0, 10)
       const todayStartIso = new Date(todayStr + 'T00:00:00+08:00').toISOString()
       
       const { data: oldReports } = await supabase.from('qc_report')
         .select('id, file_path')
-        .eq('vendor_id', targetId)  // ★ 核心修复：只覆盖所选厂商的旧数据
+        .eq('vendor_id', targetId)  
         .gte('created_at', todayStartIso)
 
       if (oldReports && oldReports.length > 0) {
         await Promise.all(oldReports.map(async (old) => {
           try {
-            // ★ 使用 safeFetch 替代直接 fetch
             await safeFetch(`/functions/v1/delete-qc`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -1978,7 +1992,7 @@ async function renderQC(view) {
         const safeOriginalName = info.originalName.replace(/[\/\\:*?"<>|]/g, '')
         const finalDisplayName = `${targetCode}_${targetName}_${safeOriginalName}`
         return {
-          vendor_id: targetId, // ★ 核心修复：归属到所选厂商 ID
+          vendor_id: targetId,
           vendor_code: targetCode,
           report_name: finalDisplayName,
           file_path: info.fileName,
@@ -1991,7 +2005,14 @@ async function renderQC(view) {
       if (dbErr) throw dbErr
 
       msgEl.innerHTML = msg('上传并覆盖成功', true)
-      setTimeout(() => renderQC(view), 1000)
+      
+      // ★ 修复点 4：刷新时把刚才上传的厂商编号传给渲染函数，让它保持选中状态
+      setTimeout(() => {
+        // 临时把选中的值存入 DOM 的 data 属性，或者在渲染时读取
+        const tempSelect = document.getElementById('qc-vendor-select')
+        if (tempSelect) tempSelect.value = targetCode 
+        renderQC(view)
+      }, 1000)
 
     } catch (err) {
       console.error(err)
@@ -2013,7 +2034,6 @@ async function renderQC(view) {
       try {
         const { data: { session } } = await supabase.auth.getSession()
         
-        // ★ 使用 safeFetch 替代直接 fetch
         const res = await safeFetch(`/functions/v1/delete-qc`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
@@ -2022,7 +2042,6 @@ async function renderQC(view) {
         
         if (!res.ok) throw new Error('R2 文件删除失败')
 
-        // ★ 核心修复：带上 count: 'exact' 检查是否真的删除了数据，防止 RLS 拦截导致的假删除
         const { error, count } = await supabase.from('qc_report').delete({ count: 'exact' }).eq('id', id)
         
         if (error) throw error
@@ -2030,7 +2049,6 @@ async function renderQC(view) {
 
         alert('删除成功')
         
-        // ★ 优化：直接从前端 DOM 移除这一行，不再重新渲染整个页面，避免网络卡顿时卡死
         const tr = btn.closest('tr')
         if (tr) {
           tr.remove()
