@@ -1054,7 +1054,7 @@ async function renderBillingAdmin(v) {
             })
           }
 
-          // ★ 终极铁律：绝对只认准“厂商编码”列
+          // ★ 终极铁律：绝对只认准“厂商编码”列，并动态截取真实表头
           wb.SheetNames.forEach(sheetName => {
             if (sheetName.includes('总表') || sheetName.includes('汇总') || sheetName.includes('结算单')) return
             
@@ -1072,13 +1072,7 @@ async function renderBillingAdmin(v) {
             const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
             if (rows.length === 0) return
 
-            const headers = rows.slice(0, 3).map(r => r.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
-            
-            vendorMap.forEach(v => {
-              if (!v.details_data[dataKey]) v.details_data[dataKey] = { headers: headers, rows: [] }
-            })
-
-            // 严格寻找名为“厂商编码”的列
+            // 1. 先寻找“厂商编码”所在的表头行
             let codeColIdx = -1
             let headerRowIdx = -1
             
@@ -1093,8 +1087,17 @@ async function renderBillingAdmin(v) {
                if (codeColIdx !== -1) break
             }
 
+            // 2. 智能截取真正的表头（只截取到真正的表头行为止）
+            const actualHeaders = rows.slice(0, headerRowIdx + 1).map(r => r.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
+            
+            vendorMap.forEach(v => {
+              if (!v.details_data[dataKey]) v.details_data[dataKey] = { headers: actualHeaders, rows: [] }
+            })
+
+            // 3. 提取数据
             if (codeColIdx !== -1) {
               let count = 0
+              // ★ 核心修复：数据必须从表头行的下一行开始
               for (let r = headerRowIdx + 1; r < rows.length; r++) {
                 const row = rows[r]
                 if (!row || row.length === 0) continue
@@ -1107,9 +1110,14 @@ async function renderBillingAdmin(v) {
                   count++
                 }
               }
-              console.log(`[严格匹配] ${sheetName} 表，按“厂商编码”抓取 ${count} 行`)
+              console.log(`[精准表头] ${sheetName} 表，表头锁定在第 ${headerRowIdx + 1} 行，抓取数据 ${count} 行`)
             } else {
-              console.warn(`[严格匹配] ${sheetName} 表未找到“厂商编码”列，跳过数据提取`)
+              // 如果没找到“厂商编码”列，headers 默认取前 1 行，rows 留空
+              const fallbackHeaders = rows.slice(0, 1).map(r => r.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
+              vendorMap.forEach(v => {
+                if (!v.details_data[dataKey]) v.details_data[dataKey] = { headers: fallbackHeaders, rows: [] }
+              })
+              console.warn(`[精准表头] ${sheetName} 表未找到“厂商编码”列，已跳过`)
             }
           })
 
