@@ -1054,7 +1054,7 @@ async function renderBillingAdmin(v) {
             })
           }
 
-          // ★ 终极铁律：绝对只认准“厂商编码”列，并动态截取真实表头
+          // ★ 终极铁律：绝对只认准“厂商编码”列
           wb.SheetNames.forEach(sheetName => {
             if (sheetName.includes('总表') || sheetName.includes('汇总') || sheetName.includes('结算单')) return
             
@@ -1072,7 +1072,7 @@ async function renderBillingAdmin(v) {
             const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false })
             if (rows.length === 0) return
 
-            // 1. 先寻找“厂商编码”所在的表头行
+            // 1. 寻找“厂商编码”所在的表头行
             let codeColIdx = -1
             let headerRowIdx = -1
             
@@ -1087,7 +1087,7 @@ async function renderBillingAdmin(v) {
                if (codeColIdx !== -1) break
             }
 
-            // 2. 智能截取真正的表头（只截取到真正的表头行为止）
+            // 2. 智能截取表头（只截取到真正的表头行为止）
             const actualHeaders = rows.slice(0, headerRowIdx + 1).map(r => r.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
             
             vendorMap.forEach(v => {
@@ -1097,12 +1097,21 @@ async function renderBillingAdmin(v) {
             // 3. 提取数据
             if (codeColIdx !== -1) {
               let count = 0
-              // ★ 核心修复：数据必须从表头行的下一行开始
+              // 数据必须从表头行的下一行开始
               for (let r = headerRowIdx + 1; r < rows.length; r++) {
                 const row = rows[r]
                 if (!row || row.length === 0) continue
                 
-                let codeVal = String(row[codeColIdx] || '').trim().replace(/\s/g, '').replace(/^'/, '')
+                let rawCode = String(row[codeColIdx] || '').trim()
+                let codeVal = rawCode
+                
+                // 清洗带括号的厂编，如 "[213985]山东大汇..." 提取出 213985
+                const bracketMatch = rawCode.match(/^\[(\d+)\]/)
+                if (bracketMatch) {
+                  codeVal = bracketMatch[1]
+                } else {
+                  codeVal = rawCode.replace(/\s/g, '').replace(/^'/, '')
+                }
                 
                 if (vendorMap.has(codeVal)) {
                   const cleanRow = row.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell)
@@ -1112,7 +1121,6 @@ async function renderBillingAdmin(v) {
               }
               console.log(`[精准表头] ${sheetName} 表，表头锁定在第 ${headerRowIdx + 1} 行，抓取数据 ${count} 行`)
             } else {
-              // 如果没找到“厂商编码”列，headers 默认取前 1 行，rows 留空
               const fallbackHeaders = rows.slice(0, 1).map(r => r.map(cell => (cell && typeof cell === 'object') ? (cell.v || cell.w || '') : cell))
               vendorMap.forEach(v => {
                 if (!v.details_data[dataKey]) v.details_data[dataKey] = { headers: fallbackHeaders, rows: [] }
@@ -1420,12 +1428,12 @@ async function renderBillingAdmin(v) {
 
     const HEADERS = {
       unloading: ['项目', '细项', '状态', '单号', '日期', '厂商编码', '厂商名称', '店编码', '店别', '商品编码', '商品名称', '规格', '单位', '件数', '数量'],
-      operation: ['序号', '单号', '领用类型', '行号', '单头备注', '领用日期', '商品代码', '商品名称', '包装规格', '单位', '货位', '容器', '件数', '数量', '生产日期', '批次', '供应商', '厂商名称', '仓位', '货主', '领用对象', '领用人', '状态'],
-      storage: ['序号', '日期', '仓位', '货位', '货位用途', '温层', '容器条码', '商品代码', '商品名称', '包装规格', '库存状态', '单位', '库存件数', '库存数量', '生产日期', '批号', '到效期', '批次', '入库时间', '来源单号', '所属供应商', '厂商名称', '所属对象', '所属货主'],
-      transit: ['序号', '收货单号', '订单号', '订单来源单号', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '结算单位', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '温层', '总重(kg)'],
-      dsp: ['序号', '收货单号', '订单号', '订单来源单号', '店号', '区域', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期', '上传时间', '供应商', '厂商名称', '卸货方式', '课别', '总重(kg)'],
-      gift: ['类别', '到货时间', '门店号', '要货方', '厂编', '厂商名称', '件数', '备注'],
-      return: ['录单时间', '退货单时间', 'NT订单号', '货号', '商品', '规格', '店号', '店名', '厂编', '厂商', '退货数量（个）', '退货数量（个）2', '差异数量', '件数', '存储板数', '天数', '收费天数>7天', '收费板数', '通知厂商取退货时间', '提货日期', '存储库位', '备注']
+      operation: ['序号', '单号', '领用类型', '行号', '单头备注', '领用日期', '商品代码', '商品名称', '包装规格', '单位', '货位', '容器', '件数', '数量', '生产日期', '批次', '厂商编码', '厂商名称', '仓位', '货主', '领用对象', '领用人', '温层', '状态'],
+      storage: ['序号', '日期', '仓位', '货位', '货位用途', '温层', '容器条码', '商品代码', '商品名称', '包装规格', '库存状态', '单位', '库存件数', '库存数量', '生产日期', '批号', '到效期', '批次', '入库时间', '来源单号', '厂商编码', '厂商名称', '所属对象', '所属货主'],
+      transit: ['序号', '收货单号', '订单号', '订单来源单号', '订单类型', '整单加工', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '结算单位', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期(实时)', '上传时间', '厂商编码', '厂商名称', '卸货方式', '课别', '温层', '总重(kg)'],
+      dsp: ['序号', '收货单号', '订单号', '订单来源单号', '店号', '区域', '订单备注', '收货单状态', '收货人', '仓位', '商品代码', '商品名称', '包装规格', '结算单位', '单位', '收货件数', '收货数量', '金额', '容器', '收货时间', '生产日期', '到效期', '保质期(实时)', '上传时间', '厂商编码', '厂商名称', '卸货方式', '课别', '温层', '总重(kg)'],
+      gift: ['类别', '到货时间', '门店号', '要货方', '厂商编码', '厂商名称', '件数', '备注'],
+      return: ['录单时间', '退货单时间', 'NT订单号', '货号', '商品', '规格', '店号', '店名', '厂商编码', '厂商名称', '退货数量（个）', '退货数量（个）2', '差异数量', '件数', '存储板数', '天数', '收费天数>7天', '收费板数', '通知厂商取退货时间', '提货日期', '存储库位', '备注']
     }
 
     const dData = bill.details_data || {}
