@@ -1852,7 +1852,7 @@ async function renderQC(view) {
       <div id="qc-msg"></div>
       
       <p style="font-size:13px;color:#666;margin-bottom:12px;">
-        规则：1. 仅限 PDF 格式；2. 支持多选；3. 单次上传总大小不能超过 <strong>10MB</strong>。<br>
+        规则：1. 仅限 PDF 格式；2. 支持多选；3. 单次上传总大小不能超过 <strong>20MB</strong>。<br>
         <span style="color:#cf1322;">* 如果所选厂商今天已经传过，再次上传将自动覆盖该厂商今天之前上传的所有报告。</span>
       </p>
       <div class="row">
@@ -1907,8 +1907,8 @@ async function renderQC(view) {
       totalSize += file.size
     }
     
-    if (totalSize > 10 * 1024 * 1024) {
-      return msgEl.innerHTML = msg(`本次上传总大小为 ${(totalSize/1024/1024).toFixed(2)}MB，超过了 10MB 限制`, false)
+    if (totalSize > 20 * 1024 * 1024) {
+      return msgEl.innerHTML = msg(`本次上传总大小为 ${(totalSize/1024/1024).toFixed(2)}MB，超过了 20MB 限制`, false)
     }
 
     const btn = document.getElementById('btn-qc-upload')
