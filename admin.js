@@ -4145,6 +4145,20 @@ async function renderDockCapacity(v) {
 // ================= 收货排队叫号（物流商合车版） =================
 // 合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车。
 // 无物流商信息的厂商自送单按 appointment_code 独立成车，保持原行为。
+async function logQueueAction(action, key, code, dock) {
+  try {
+    await ctx.supabase.from('dock_queue_log').insert({
+      appointment_code: code || null,
+      vehicle_key: key || null,
+      action,
+      dock: dock || null,
+      operator: operatorName || '未知'
+    })
+  } catch (e) {
+    console.warn('排队日志写入失败', e)
+  }
+}
+
 async function renderDockQueue(v) {
   const keyOf = r => r.vehicle_key || ('AP|' + r.appointment_code)
 
@@ -4192,6 +4206,10 @@ async function renderDockQueue(v) {
         <div style="font-size:12px;color:#888;margin:-8px 0 12px;">
           合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车；签到 / 叫号 / 完成按整车联动，只占一个码头。
         </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
+          <button class="secondary small" id="btn-dock-board">码头看板</button>
+          <button class="secondary small" id="btn-queue-log">排队日志</button>
+        </div>
         <div class="row" style="margin-bottom:16px;">
           <input id="checkin-code" placeholder="扫描或输入司机提供的预约码，回车签到..." style="flex:1;" />
           <button id="btn-checkin" style="flex:0 0 100px;">确认签到</button>
@@ -4222,6 +4240,43 @@ async function renderDockQueue(v) {
       ? q.eq('appointment_code', code || key.slice(3))
       : q.eq('vehicle_key', key)
 
+    document.getElementById('btn-dock-board').onclick = () => {
+      window.open('./dock.html', '_blank')
+    }
+
+    document.getElementById('btn-queue-log').onclick = async () => {
+      const { data: logs, error } = await ctx.supabase.from('dock_queue_log')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100)
+      if (error) return alert('日志加载失败：' + error.message)
+
+      const box = document.createElement('div')
+      box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
+      box.innerHTML = `
+        <div style="background:#fff;border-radius:8px;max-width:780px;width:100%;max-height:80vh;display:flex;flex-direction:column;padding:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h2 style="margin:0;">收货排队日志（最近 100 条）</h2>
+            <button class="secondary small" id="btn-log-close">关闭</button>
+          </div>
+          <div style="overflow:auto;flex:1;">
+            <table>
+              <tr><th>时间</th><th>动作</th><th>预约码</th><th>码头</th><th>操作人</th></tr>
+              <tbody>${(logs || []).map(l => `<tr>
+                <td>${new Date(l.created_at).toLocaleString()}</td>
+                <td>${({ checkin: '签到', call: '叫号', done: '完成' })[l.action] || l.action}</td>
+                <td>${l.appointment_code || '-'}</td>
+                <td>${l.dock || '-'}</td>
+                <td>${l.operator || '-'}</td>
+              </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">暂无日志</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>`
+      document.body.appendChild(box)
+      box.querySelector('#btn-log-close').onclick = () => box.remove()
+      box.onclick = (e) => { if (e.target === box) box.remove() }
+    }
+
     document.getElementById('btn-checkin').onclick = async () => {
       const code = document.getElementById('checkin-code').value.trim().toUpperCase()
       if (!code) return
@@ -4246,6 +4301,7 @@ async function renderDockQueue(v) {
 
       if (error) return alert('签到失败：' + error.message)
       if (!updated || !updated.length) return alert('签到失败：车辆状态已变化，请刷新')
+      await logQueueAction('checkin', key, code, null)
       alert(`✅ 签到成功，本车 ${updated.length} 行已入队`)
       document.getElementById('checkin-code').value = ''
       loadList()
@@ -4267,6 +4323,7 @@ async function renderDockQueue(v) {
           ).select('id')
           if (error) return alert('操作失败：' + error.message)
           if (!updated || !updated.length) return alert('该车已被叫号或已不在排队中，请刷新')
+          await logQueueAction('call', key, code, dock.trim())
           loadList()
         } else if (b.dataset.act === 'finish') {
           if (!confirm('确认该车已完成卸货？')) return
@@ -4278,6 +4335,7 @@ async function renderDockQueue(v) {
           ).select('id')
           if (error) return alert('操作失败：' + error.message)
           if (!updated || !updated.length) return alert('状态已变化，请刷新')
+          await logQueueAction('done', key, code, null)
           loadList()
         }
       }

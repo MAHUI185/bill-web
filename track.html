@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta http-equiv="Cache-Control" content="no-store">
 <title>排队进度</title>
 <style>
   body { margin: 0; background: #0f172a; color: #fff; font-family: -apple-system, sans-serif; display: flex; flex-direction: column; height: 100vh; text-align: center; transition: background 0.3s; }
@@ -12,19 +13,22 @@
   .value { font-size: 32px; font-weight: bold; color: #38bdf8; }
   .status-box { font-size: 24px; font-weight: bold; margin-top: 20px; color: #fbbf24; }
   .btn-active { background: #1677ff; color: #fff; border: none; padding: 16px; border-radius: 8px; font-size: 18px; width: 100%; margin-top: 20px; }
-  
+  .footer { font-size: 12px; color: #64748b; margin-top: 16px; display: flex; justify-content: center; gap: 16px; }
+  .footer a { color: #38bdf8; text-decoration: none; }
+
   /* 叫号闪烁强提醒特效 */
   @keyframes flashBg { 0% { background: #dc2626; } 50% { background: #7f1d1d; } 100% { background: #dc2626; } }
   .calling-mode { animation: flashBg 0.8s infinite; display: flex; flex-direction: column; justify-content: center; height: 100vh; padding: 20px; }
   .calling-text { font-size: 40px; font-weight: bold; color: #fff; text-shadow: 0 4px 10px rgba(0,0,0,0.5); line-height: 1.5; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- 本地打包，避免手机网络加载 CDN 失败导致页面卡住 -->
+<script src="./supabase-js.js"></script>
 </head>
 <body>
 
 <div class="container" id="main-content">
   <h1 style="font-size: 28px; margin-bottom: 30px;">🚚 仓库排队进度</h1>
-  
+
   <div class="card">
     <div class="title">预约单号</div>
     <div class="value" id="disp-code">--</div>
@@ -42,6 +46,11 @@
   </div>
 
   <div class="status-box" id="disp-status">正在获取状态...</div>
+
+  <div class="footer">
+    <span id="disp-updated">--</span>
+    <a href="javascript:location.reload()">刷新页面</a>
+  </div>
 </div>
 
 <!-- 全屏叫号弹窗 -->
@@ -53,30 +62,43 @@
 </div>
 
 <script>
+(function () {
+  const statusEl = () => document.getElementById('disp-status');
+
+  if (!window.supabase || !window.supabase.createClient) {
+    statusEl().innerText = '❌ 排队组件加载失败，请检查网络后刷新页面';
+    statusEl().style.color = '#f87171';
+    return;
+  }
+
   const SUPABASE_URL = 'https://gpjdzgakvqhnpykuqbfr.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_vUAhYoF1D51WyWlPnLzSlA_JDBODtaW';
   const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
   const urlParams = new URLSearchParams(window.location.search);
-  const code = urlParams.get('code');
+  const code = (urlParams.get('code') || '').trim();
   let isVoiceEnabled = false;
   let isCalling = false;
   let isDone = false;
+  let timer = null;
 
   if (!code) {
-    document.getElementById('disp-status').innerText = "❌ 缺少预约码参数";
-  } else {
-    document.getElementById('disp-code').innerText = code;
-    
-    // 微信浏览器要求必须手动点击屏幕才能开启语音
-    if (!isVoiceEnabled && !isCalling) {
-      const btn = document.createElement('button');
-      btn.className = 'btn-active';
-      btn.innerText = '🔊 点击开启语音播报';
-      btn.onclick = () => { isVoiceEnabled = true; btn.remove(); speak('语音已激活，正在为您排队'); };
-      document.getElementById('main-content').appendChild(btn);
-    }
+    statusEl().innerText = '❌ 缺少预约码参数';
+    return;
   }
+
+  document.getElementById('disp-code').innerText = code;
+
+  // 微信/iOS 必须用户手势解锁音频
+  const btn = document.createElement('button');
+  btn.className = 'btn-active';
+  btn.innerText = '🔊 点击开启语音播报';
+  btn.onclick = () => {
+    isVoiceEnabled = true;
+    btn.remove();
+    speak('语音已激活，正在为您排队');
+  };
+  document.getElementById('main-content').appendChild(btn);
 
   function speak(text) {
     if (!('speechSynthesis' in window) || !isVoiceEnabled) return;
@@ -86,60 +108,71 @@
     window.speechSynthesis.speak(u);
   }
 
-  async function checkStatus() {
-    if (!code || isDone) return;
+  function markUpdated() {
+    const el = document.getElementById('disp-updated');
+    if (el) el.innerText = '更新于 ' + new Date().toLocaleTimeString();
+  }
 
-    const { data, error } = await supabase.rpc('get_queue_status', { p_code: code });
+  async function checkStatus() {
+    if (isDone) return;
+    let res;
+    try {
+      res = await supabase.rpc('get_queue_status', { p_code: code });
+    } catch (e) {
+      statusEl().innerText = '⚠️ 网络异常，正在重试...';
+      return;
+    }
+
+    const { data, error } = res;
     if (error) {
-      document.getElementById('disp-status').innerText = '⚠️ 网络异常，正在重试...';
+      statusEl().innerText = '⚠️ 连接失败：' + (error.message || '未知错误');
+      statusEl().style.color = '#f87171';
       return;
     }
     if (!data || data.length === 0) {
-      document.getElementById('disp-status').innerText = '❌ 预约码不存在或已失效';
+      statusEl().innerText = '❌ 预约码不存在或已失效';
+      statusEl().style.color = '#f87171';
       return;
     }
 
     const info = data[0];
     document.getElementById('disp-vendor').innerText = info.vendor_name || '--';
     document.getElementById('disp-boxes').innerText = `${info.total_boxes || 0} 箱（本车合计）`;
+    statusEl().style.color = '#fbbf24';
+    markUpdated();
 
     if (info.queue_status === 'pending') {
-      document.getElementById('disp-status').innerText = '⏳ 待签到';
+      statusEl().innerText = '⏳ 待签到';
       document.getElementById('disp-ahead').innerText = '-- 辆';
     } else if (info.queue_status === 'waiting') {
       const ahead = Number(info.cars_ahead || 0);
-      document.getElementById('disp-status').innerText = '🚚 已签到，排队中';
+      statusEl().innerText = '🚚 已签到，排队中';
       document.getElementById('disp-ahead').innerText = ahead > 0 ? `${ahead} 辆` : '即将轮到您';
     } else if (info.queue_status === 'calling') {
       document.getElementById('disp-dock').innerText = info.assigned_dock || '--';
       if (!isCalling) {
-        // ★ 只在首次叫号时触发强提醒
         isCalling = true;
         document.getElementById('main-content').style.display = 'none';
         document.getElementById('calling-screen').style.display = 'flex';
-        // 震动（部分手机支持）
         if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500, 1000]);
-        // 语音播报
-        speak(`请前往${info.assigned_dock}卸货`);
+        speak(`请前往${info.assigned_dock || ''}卸货`);
       }
     } else if (info.queue_status === 'done') {
-      // 叫号完成后仍继续轮询，收到 done 再提示离场
       isDone = true;
       isCalling = false;
+      if (timer) clearInterval(timer);
       document.getElementById('calling-screen').style.display = 'none';
       document.getElementById('main-content').style.display = 'flex';
-      document.getElementById('disp-status').innerText = '✅ 已完成卸货，请离场';
-      document.getElementById('disp-status').style.color = '#4ade80';
+      statusEl().innerText = '✅ 已完成卸货，请离场';
+      statusEl().style.color = '#4ade80';
       document.getElementById('disp-ahead').innerText = '-- 辆';
       speak('卸货已完成，请离场');
     }
   }
 
-  // 每 10 秒刷新一次
-  if (code) {
-    checkStatus();
-    setInterval(checkStatus, 10000);
-  }
+  checkStatus();
+  timer = setInterval(checkStatus, 5000);
+})();
 </script>
 </body>
 </html>

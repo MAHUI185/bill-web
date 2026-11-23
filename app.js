@@ -1287,7 +1287,7 @@ async function renderFill(view) {
         
         // 弹出二维码
         if (appointmentCode) {
-          const qrUrl = `https://bill.mahui.pw/track.html?code=${appointmentCode}`;
+          const qrUrl = `https://bill.mahui.pw/track.html?code=${appointmentCode}&v=20261123`;
           const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrUrl)}`;
           
           const modalQr = document.createElement('div');
@@ -1801,7 +1801,7 @@ async function renderMy(view) {
       <div id="my-msg"></div>
       <div class="scroll" style="max-height: 600px;">
         <table>
-          <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th><th>操作</th></tr>
+          <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>预约码</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           <tbody id="my-body"></tbody>
         </table>
       </div>
@@ -1812,14 +1812,14 @@ async function renderMy(view) {
     currentPage = page;
     const tbody = document.getElementById('my-body');
     if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;">加载中...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#999;">加载中...</td></tr>';
 
     let q = supabase.from('bill_order').select('*', { count: 'exact' });
     
     if (isLogistics) {
       const codes = myVendors.map(v => v.vendor_code);
       if (!codes.length) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>';
         return;
       }
       q = q.in('vendor_code', codes);
@@ -1838,20 +1838,22 @@ async function renderMy(view) {
     const { data, error, count } = await q;
 
     if (error) {
-      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#cf1322;">查询失败：${error.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:#cf1322;">查询失败：${error.message}</td></tr>`;
       return;
     }
 
     tbody.innerHTML = (data||[]).map(b => `<tr>
       <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
-      <td>${b.quantity}</td><td>${b.warehouse_code}</td><td>${b.exported ? '是' : '否'}</td>
+      <td>${b.quantity}</td><td>${b.warehouse_code}</td>
+      <td>${b.appointment_code ? `<b>${b.appointment_code}</b><br><span style="font-size:12px;color:#666;">${b.arrival_time_slot || ''} ${({ pending: '待签到', waiting: '排队中', calling: '叫号中', done: '已完成' })[b.queue_status] || ''}</span><br><a href="https://bill.mahui.pw/track.html?code=${b.appointment_code}&v=20261123" target="_blank" style="font-size:12px;">排队进度</a>` : '—'}</td>
+      <td>${b.exported ? '是' : '否'}</td>
       <td>${new Date(b.created_at).toLocaleString()}</td>
       <td>
         ${b.exported 
           ? `<button class="small secondary" disabled style="opacity:0.5; cursor:not-allowed;">已导出</button>` 
           : `<button class="small danger" data-del="${b.id}">删除</button>`}
       </td>
-    </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:#999;">暂无单据</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="10" style="text-align:center;color:#999;">暂无单据</td></tr>';
 
     const totalPages = Math.ceil((count || 0) / pageSize);
     const pageEl = document.getElementById('my-pagination');
