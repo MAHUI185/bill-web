@@ -1182,6 +1182,22 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
+      const buildWalkinRows = () => validIn.map(r => {
+        const mult = Number(String(r.spec || '').split('*').pop())
+        return {
+          bill_type: r.bill_type,
+          source_no: r.source_no || null,
+          owner_code: r.owner_code,
+          location_code: r.location_code,
+          product_code: r.product_code,
+          product_name: r.product_name || '',
+          spec: r.spec,
+          quantity: (Number(r.quantity) || 0) * (isNaN(mult) || mult === 0 ? 1 : mult),
+          price: 1,
+          box_qty: Number(r.quantity) || 0
+        }
+      })
+
       // ★ 无单预约补单：填写了已有预约码时，并入该预约码，不新生成
       const existingCode = (document.getElementById('existing-code')?.value || '').trim().toUpperCase()
       if (existingCode) {
@@ -1196,21 +1212,7 @@ async function renderFill(view) {
 
         if (phErr || !ph) return msgEl.innerHTML = msg('预约码不存在或已补单，请检查', false)
 
-        const rows = validIn.map(r => {
-          const mult = Number(String(r.spec || '').split('*').pop())
-          return {
-            bill_type: r.bill_type,
-            source_no: r.source_no || null,
-            owner_code: r.owner_code,
-            location_code: r.location_code,
-            product_code: r.product_code,
-            product_name: r.product_name || '',
-            spec: r.spec,
-            quantity: (Number(r.quantity) || 0) * (isNaN(mult) || mult === 0 ? 1 : mult),
-            price: 1,
-            box_qty: Number(r.quantity) || 0
-          }
-        })
+        const rows = buildWalkinRows()
 
         msgEl.innerHTML = msg('正在补单...', true)
         const { data: ret, error } = await supabase.rpc('submit_walkin_orders', {
@@ -1275,6 +1277,51 @@ async function renderFill(view) {
 
       const date = validIn[0]?.arrival_date;
       if (!date) return msgEl.innerHTML = msg('请先填写到仓日期', false);
+
+      // ★ 同一厂商 + 同一到仓日 + 同一仓库只保留一个预约码（物流商同规则）
+      let lookupVendorId = currentUser.id
+      if (isLogistics || isAdminDelegate) {
+        const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
+        if (vp) lookupVendorId = vp.id
+      }
+
+      const { data: existRows } = await supabase.from('bill_order')
+        .select('appointment_code, bill_type, arrival_time_slot, driver_name, driver_phone, queue_status, check_in_time, assigned_dock, call_time, vehicle_key, warehouse_code')
+        .eq('vendor_id', lookupVendorId)
+        .eq('warehouse_code', myWhs[0])
+        .eq('arrival_date', date)
+        .not('appointment_code', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+
+      const existingAppt = (existRows && existRows[0]) || null
+
+      if (existingAppt && existingAppt.bill_type === '无单预约') {
+        if (validOut.length) return msgEl.innerHTML = msg('该到仓日已有无单预约，请先清空出库行并补单入库', false)
+        const ok = confirm(`该到仓日已有无单预约 ${existingAppt.appointment_code}（时段 ${existingAppt.arrival_time_slot}），本次 ${totalBoxes} 箱将作为补单并入，是否继续？`)
+        if (!ok) return
+
+        msgEl.innerHTML = msg('正在补单...', true)
+        const { data: ret, error } = await supabase.rpc('submit_walkin_orders', {
+          p_code: existingAppt.appointment_code,
+          p_rows: buildWalkinRows()
+        })
+        if (error) return msgEl.innerHTML = msg('补单失败：' + error.message, false)
+        const res = Array.isArray(ret) ? ret[0] : ret
+        if (!res || !res.ok) return msgEl.innerHTML = msg((res && res.message) || '补单失败', false)
+        msgEl.innerHTML = msg(`${res.message}（时段 ${existingAppt.arrival_time_slot}）`, true)
+        inRows = [newInRowForVendor(myVendorCode)]
+        outRows = [newOutRowForVendor(myVendorCode)]
+        setTimeout(() => render(), 1200)
+        return
+      }
+
+      if (existingAppt) {
+        const ok = confirm(`该到仓日已有预约码 ${existingAppt.appointment_code}（时段 ${existingAppt.arrival_time_slot}），本次 ${totalBoxes} 箱将并入该预约，不再新生成预约码。是否继续？`)
+        if (!ok) return
+        await doFinalSubmit(existingAppt.arrival_time_slot, existingAppt.driver_name, existingAppt.driver_phone, existingAppt)
+        return
+      }
 
       msgEl.innerHTML = msg('正在加载预约看板...', true)
       
@@ -1344,7 +1391,7 @@ async function renderFill(view) {
       })
 
       // 6. 最终提交逻辑
-      async function doFinalSubmit(slotName, driverName, driverPhone) {
+      async function doFinalSubmit(slotName, driverName, driverPhone, existing) {
         msgEl.innerHTML = msg('正在校验并提交...', true)
 
         // 防超卖核心校验
@@ -1375,9 +1422,9 @@ async function renderFill(view) {
           return isNaN(multiplier) || multiplier === 0 ? Number(boxQty) : Number(boxQty) * multiplier
         }
 
-        // 生成预约码
-        let appointmentCode = null
-        if (slotName) {
+        // 生成预约码：已有当日预约则沿用，不重新生成
+        let appointmentCode = existing?.appointment_code || null
+        if (slotName && !appointmentCode) {
           const dateStr = date.replace(/-/g, '').slice(4); // 如 1122
           const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
           appointmentCode = `YD${dateStr}${randomStr}`;
@@ -1399,7 +1446,11 @@ async function renderFill(view) {
           driver_name: driverName,
           driver_phone: driverPhone,
           appointment_code: appointmentCode,
-          queue_status: 'pending'
+          vehicle_key: existing?.vehicle_key || null,
+          queue_status: existing && existing.queue_status ? existing.queue_status : 'pending',
+          check_in_time: existing && existing.queue_status !== 'done' ? existing.check_in_time : null,
+          assigned_dock: existing && existing.queue_status !== 'done' ? existing.assigned_dock : null,
+          call_time: existing && existing.queue_status !== 'done' ? existing.call_time : null
         }))
 
         const outPayloads = validOut.map(r => ({
@@ -1418,7 +1469,7 @@ async function renderFill(view) {
         const { error } = await supabase.from('bill_order').insert([...inPayloads, ...outPayloads])
         if (error) return msgEl.innerHTML = msg(translateError(error.message), false)
 
-        msgEl.innerHTML = msg(`预约成功！${appointmentCode ? '预约码：' + appointmentCode : ''}`, true)
+        msgEl.innerHTML = msg(existing ? `已并入预约 ${appointmentCode}` : `预约成功！${appointmentCode ? '预约码：' + appointmentCode : ''}`, true)
         
         // 弹出二维码
         if (appointmentCode) {
@@ -1429,7 +1480,7 @@ async function renderFill(view) {
           modalQr.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
           modalQr.innerHTML = `
             <div style="background:#fff;border-radius:12px;padding:24px;text-align:center;max-width:400px;width:100%;">
-              <h2 style="margin-bottom:12px;">✅ 预约成功</h2>
+              <h2 style="margin-bottom:12px;">${existing ? '✅ 已并入预约' : '✅ 预约成功'}</h2>
               <p style="font-size:14px;color:#666;margin-bottom:16px;">请让司机扫码进入排队进度页（或在微信中打开）</p>
               <div style="font-size:28px;font-weight:bold;color:#1677ff;margin-bottom:16px;">${appointmentCode}</div>
               <img src="${qrImg}" style="width:200px;height:200px;margin:0 auto;display:block;" />
