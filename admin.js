@@ -4142,57 +4142,111 @@ async function renderDockCapacity(v) {
   })
 }
 
-// ================= 收货排队叫号 =================
+// ================= 收货排队叫号（物流商合车版） =================
+// 合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车。
+// 无物流商信息的厂商自送单按 appointment_code 独立成车，保持原行为。
 async function renderDockQueue(v) {
+  const keyOf = r => r.vehicle_key || ('AP|' + r.appointment_code)
+
   const loadList = async () => {
     const { data, error } = await ctx.supabase.from('bill_order')
-      .select('appointment_code, vendor_name, vendor_code, box_qty, arrival_time_slot, check_in_time, queue_status, assigned_dock')
+      .select('appointment_code, vehicle_key, vendor_name, logistics_code, driver_name, driver_phone, box_qty, arrival_time_slot, check_in_time, queue_status, assigned_dock')
       .in('queue_status', ['waiting', 'calling'])
       .order('check_in_time', { ascending: true })
-      
-    if (error) return v.innerHTML = ctx.msg('加载失败', false)
+
+    if (error) return v.innerHTML = ctx.msg('加载失败：' + error.message, false)
+
+    // 按车组键聚合：一车多码只显示一行
+    const groups = new Map()
+    ;(data || []).forEach(r => {
+      const k = keyOf(r)
+      let g = groups.get(k)
+      if (!g) {
+        g = {
+          key: k, codes: [], vendors: new Set(), boxes: 0,
+          checkIn: r.check_in_time, slot: r.arrival_time_slot,
+          status: r.queue_status, dock: r.assigned_dock,
+          driver: r.driver_name, phone: r.driver_phone,
+          logistics: r.logistics_code
+        }
+        groups.set(k, g)
+      }
+      g.codes.push(r.appointment_code)
+      if (r.vendor_name) g.vendors.add(r.vendor_name)
+      g.boxes += Number(r.box_qty) || 0
+      if (r.check_in_time && (!g.checkIn || r.check_in_time < g.checkIn)) g.checkIn = r.check_in_time
+      if (r.queue_status === 'calling') {
+        g.status = 'calling'
+        if (r.assigned_dock) g.dock = r.assigned_dock
+      }
+      if (!g.driver && r.driver_name) g.driver = r.driver_name
+      if (!g.phone && r.driver_phone) g.phone = r.driver_phone
+    })
+
+    const list = Array.from(groups.values())
+      .sort((a, b) => new Date(a.checkIn || 0) - new Date(b.checkIn || 0))
 
     v.innerHTML = `
       <div class="card" style="padding:16px;">
         <h2>收货签到与叫号大厅</h2>
+        <div style="font-size:12px;color:#888;margin:-8px 0 12px;">
+          合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车；签到 / 叫号 / 完成按整车联动，只占一个码头。
+        </div>
         <div class="row" style="margin-bottom:16px;">
           <input id="checkin-code" placeholder="扫描或输入司机提供的预约码，回车签到..." style="flex:1;" />
           <button id="btn-checkin" style="flex:0 0 100px;">确认签到</button>
         </div>
         <table>
-          <tr><th>签到时间</th><th>预约码</th><th>厂商</th><th>货量</th><th>预约时段</th><th>状态/码头</th><th>操作</th></tr>
+          <tr><th>签到时间</th><th>车辆 / 预约码</th><th>物流商 / 厂商</th><th>司机</th><th>本车货量</th><th>预约时段</th><th>状态 / 码头</th><th>操作</th></tr>
           <tbody>
-            ${(data||[]).map(r => `<tr>
-              <td>${new Date(r.check_in_time).toLocaleTimeString()}</td>
-              <td><strong>${r.appointment_code}</strong></td>
-              <td>${r.vendor_name}</td>
-              <td><span style="color:#cf1322;font-weight:bold;">${r.box_qty}</span> 箱</td>
-              <td>${r.arrival_time_slot}</td>
-              <td>${r.queue_status === 'calling' ? `<span style="color:#cf1322;">📢 ${r.assigned_dock} 卸货中</span>` : '<span style="color:#389e0d;">🚚 排队中</span>'}</td>
+            ${list.map(g => `<tr>
+              <td>${g.checkIn ? new Date(g.checkIn).toLocaleTimeString() : '-'}</td>
+              <td><strong>${g.codes[0]}</strong>${g.codes.length > 1 ? `<br><span style="font-size:12px;color:#1677ff;">同车 ${g.codes.length} 个码</span>` : ''}</td>
+              <td>${g.logistics ? `<div style="color:#722ed1;font-size:12px;">物流商 ${g.logistics}</div>` : ''}${Array.from(g.vendors).join('、') || '-'}</td>
+              <td>${g.driver || '-'}<br><span style="font-size:12px;color:#999;">${g.phone || ''}</span></td>
+              <td><span style="color:#cf1322;font-weight:bold;">${g.boxes}</span> 箱</td>
+              <td>${g.slot || '-'}</td>
+              <td>${g.status === 'calling' ? `<span style="color:#cf1322;">📢 ${g.dock || ''} 卸货中</span>` : '<span style="color:#389e0d;">🚚 排队中</span>'}</td>
               <td>
-                ${r.queue_status === 'waiting' 
-                  ? `<button class="small" data-act="call" data-code="${r.appointment_code}">叫号分配码头</button>` 
-                  : `<button class="small secondary" data-act="finish" data-code="${r.appointment_code}">完成卸货</button>`}
+                ${g.status === 'waiting'
+                  ? `<button class="small" data-act="call" data-key="${g.key}" data-code="${g.codes[0]}">叫号分配码头</button>`
+                  : `<button class="small secondary" data-act="finish" data-key="${g.key}" data-code="${g.codes[0]}">完成卸货</button>`}
               </td>
-            </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:#999;">暂无排队车辆</td></tr>'}
+            </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无排队车辆</td></tr>'}
           </tbody>
         </table>
       </div>`
-      
+
+    // 有 vehicle_key 时按车更新，老数据（无键）按单码更新
+    const byKey = (q, key, code) => key.startsWith('AP|')
+      ? q.eq('appointment_code', code || key.slice(3))
+      : q.eq('vehicle_key', key)
+
     document.getElementById('btn-checkin').onclick = async () => {
       const code = document.getElementById('checkin-code').value.trim().toUpperCase()
       if (!code) return
-      // 校验并签到
-      const { data: check } = await ctx.supabase.from('bill_order').select('id, queue_status').eq('appointment_code', code).maybeSingle()
-      if (!check) return alert('预约码不存在')
-      if (check.queue_status !== 'pending') return alert('该预约码已签到或已过号')
 
-      const { error } = await ctx.supabase.from('bill_order')
-        .update({ queue_status: 'waiting', check_in_time: new Date().toISOString() })
+      const { data: rows, error: readErr } = await ctx.supabase.from('bill_order')
+        .select('id, appointment_code, vehicle_key, queue_status')
         .eq('appointment_code', code)
-        
+
+      if (readErr) return alert('查询失败：' + readErr.message)
+      if (!rows || !rows.length) return alert('预约码不存在')
+      if (!rows.some(r => r.queue_status === 'pending')) return alert('该预约码已签到或已过号')
+
+      const key = keyOf(rows[0])
+      const nowIso = new Date().toISOString()
+
+      const { data: updated, error } = await byKey(
+        ctx.supabase.from('bill_order')
+          .update({ queue_status: 'waiting', check_in_time: nowIso })
+          .eq('queue_status', 'pending'),
+        key, code
+      ).select('id')
+
       if (error) return alert('签到失败：' + error.message)
-      alert('✅ 签到成功，已加入排队序列')
+      if (!updated || !updated.length) return alert('签到失败：车辆状态已变化，请刷新')
+      alert(`✅ 签到成功，本车 ${updated.length} 行已入队`)
       document.getElementById('checkin-code').value = ''
       loadList()
     }
@@ -4200,20 +4254,30 @@ async function renderDockQueue(v) {
     v.querySelectorAll('button[data-act]').forEach(b => {
       b.onclick = async () => {
         const code = b.dataset.code
+        const key = b.dataset.key
+
         if (b.dataset.act === 'call') {
           const dock = prompt(`请为车辆 ${code} 分配码头：\n(例如：1号冷冻口、2号冷藏口)`)
           if (!dock) return
-          const { error } = await ctx.supabase.from('bill_order')
-            .update({ queue_status: 'calling', assigned_dock: dock })
-            .eq('appointment_code', code)
+          const { data: updated, error } = await byKey(
+            ctx.supabase.from('bill_order')
+              .update({ queue_status: 'calling', assigned_dock: dock.trim(), call_time: new Date().toISOString() })
+              .eq('queue_status', 'waiting'),
+            key, code
+          ).select('id')
           if (error) return alert('操作失败：' + error.message)
+          if (!updated || !updated.length) return alert('该车已被叫号或已不在排队中，请刷新')
           loadList()
         } else if (b.dataset.act === 'finish') {
           if (!confirm('确认该车已完成卸货？')) return
-          const { error } = await ctx.supabase.from('bill_order')
-            .update({ queue_status: 'done' })
-            .eq('appointment_code', code)
+          const { data: updated, error } = await byKey(
+            ctx.supabase.from('bill_order')
+              .update({ queue_status: 'done', done_time: new Date().toISOString() })
+              .eq('queue_status', 'calling'),
+            key, code
+          ).select('id')
           if (error) return alert('操作失败：' + error.message)
+          if (!updated || !updated.length) return alert('状态已变化，请刷新')
           loadList()
         }
       }

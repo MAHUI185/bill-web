@@ -1258,6 +1258,7 @@ async function renderFill(view) {
           whole_process: 'NO', 
           product_name: r.product_name || '', product_remark: r.product_name || r.product_code || '无',
           submitter_type: isAdmin ? 'admin' : 'vendor',
+          logistics_code: isLogistics ? (currentProfile?.vendor_code || null) : null,
           arrival_time_slot: slotName, 
           box_qty: Number(r.quantity),
           driver_name: driverName,

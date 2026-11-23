@@ -31,9 +31,9 @@
   </div>
 
   <div class="card">
-    <div class="title">厂商 / 货量</div>
+    <div class="title">厂商 / 本车货量</div>
     <div style="font-size: 18px; font-weight: bold;" id="disp-vendor">--</div>
-    <div style="font-size: 18px; margin-top: 5px;" id="disp-boxes">-- 箱</div>
+    <div style="font-size: 18px; margin-top: 5px;" id="disp-boxes">-- 箱（本车合计）</div>
   </div>
 
   <div class="card">
@@ -61,6 +61,7 @@
   const code = urlParams.get('code');
   let isVoiceEnabled = false;
   let isCalling = false;
+  let isDone = false;
 
   if (!code) {
     document.getElementById('disp-status').innerText = "❌ 缺少预约码参数";
@@ -86,32 +87,51 @@
   }
 
   async function checkStatus() {
-    if (!code || isCalling) return;
+    if (!code || isDone) return;
 
     const { data, error } = await supabase.rpc('get_queue_status', { p_code: code });
-    if (error || !data || data.length === 0) return;
+    if (error) {
+      document.getElementById('disp-status').innerText = '⚠️ 网络异常，正在重试...';
+      return;
+    }
+    if (!data || data.length === 0) {
+      document.getElementById('disp-status').innerText = '❌ 预约码不存在或已失效';
+      return;
+    }
 
     const info = data[0];
-    document.getElementById('disp-vendor').innerText = info.vendor_name;
-    document.getElementById('disp-boxes').innerText = info.total_boxes;
-    
+    document.getElementById('disp-vendor').innerText = info.vendor_name || '--';
+    document.getElementById('disp-boxes').innerText = `${info.total_boxes || 0} 箱（本车合计）`;
+
     if (info.queue_status === 'pending') {
       document.getElementById('disp-status').innerText = '⏳ 待签到';
       document.getElementById('disp-ahead').innerText = '-- 辆';
     } else if (info.queue_status === 'waiting') {
+      const ahead = Number(info.cars_ahead || 0);
       document.getElementById('disp-status').innerText = '🚚 已签到，排队中';
-      document.getElementById('disp-ahead').innerText = (info.cars_ahead || 0) + ' 辆';
+      document.getElementById('disp-ahead').innerText = ahead > 0 ? `${ahead} 辆` : '即将轮到您';
     } else if (info.queue_status === 'calling') {
-      // ★ 触发强提醒
-      isCalling = true;
-      document.getElementById('main-content').style.display = 'none';
-      document.getElementById('calling-screen').style.display = 'flex';
-      document.getElementById('disp-dock').innerText = info.assigned_dock;
-      
-      // 震动（部分手机支持）
-      if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500, 1000]);
-      // 语音播报
-      speak(`请前往${info.assigned_dock}卸货`);
+      document.getElementById('disp-dock').innerText = info.assigned_dock || '--';
+      if (!isCalling) {
+        // ★ 只在首次叫号时触发强提醒
+        isCalling = true;
+        document.getElementById('main-content').style.display = 'none';
+        document.getElementById('calling-screen').style.display = 'flex';
+        // 震动（部分手机支持）
+        if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500, 1000]);
+        // 语音播报
+        speak(`请前往${info.assigned_dock}卸货`);
+      }
+    } else if (info.queue_status === 'done') {
+      // 叫号完成后仍继续轮询，收到 done 再提示离场
+      isDone = true;
+      isCalling = false;
+      document.getElementById('calling-screen').style.display = 'none';
+      document.getElementById('main-content').style.display = 'flex';
+      document.getElementById('disp-status').innerText = '✅ 已完成卸货，请离场';
+      document.getElementById('disp-status').style.color = '#4ade80';
+      document.getElementById('disp-ahead').innerText = '-- 辆';
+      speak('卸货已完成，请离场');
     }
   }
 
