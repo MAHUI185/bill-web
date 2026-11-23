@@ -3664,7 +3664,7 @@ async function renderLogs(v) {
       el.innerHTML = `<p style="color:#cf1322;">加载失败：${error.message}</p>`
       return
     }
-    const ACTION = { checkin: '签到', call: '叫号', done: '完成' }
+    const ACTION = { checkin: '签到', call: '叫车', done: '完成收货' }
     el.innerHTML = `
       <div class="scroll">
         <table>
@@ -4417,6 +4417,7 @@ async function renderDockQueue(v) {
           合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车；签到 / 叫号 / 完成按整车联动，只占一个码头。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
+          <button class="secondary small" id="btn-receive">手机收货</button>
           <button class="secondary small" id="btn-dock-board">码头看板</button>
         </div>
         <div class="row" style="margin-bottom:16px;">
@@ -4436,8 +4437,8 @@ async function renderDockQueue(v) {
               <td>${g.status === 'calling' ? `<span style="color:#cf1322;">📢 ${g.dock || ''} 卸货中</span>` : '<span style="color:#389e0d;">🚚 排队中</span>'}</td>
               <td>
                 ${g.status === 'waiting'
-                  ? `<button class="small" data-act="call" data-key="${g.key}" data-code="${g.codes[0]}" data-wh="${g.warehouse || ''}">叫号分配码头</button>`
-                  : `<button class="small secondary" data-act="finish" data-key="${g.key}" data-code="${g.codes[0]}">完成卸货</button>`}
+                  ? `<button class="small" data-act="call" data-key="${g.key}" data-code="${g.codes[0]}" data-wh="${g.warehouse || ''}">叫车</button>`
+                  : `<button class="small secondary" data-act="finish" data-key="${g.key}" data-code="${g.codes[0]}">完成收货</button>`}
               </td>
             </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无排队车辆</td></tr>'}
           </tbody>
@@ -4451,6 +4452,29 @@ async function renderDockQueue(v) {
 
     document.getElementById('btn-dock-board').onclick = () => {
       window.open('./dock.html', '_blank')
+    }
+
+    document.getElementById('btn-receive').onclick = () => {
+      const url = 'https://bill.mahui.pw/receive.html'
+      const box = document.createElement('div')
+      box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
+      box.innerHTML = `
+        <div style="background:#fff;border-radius:8px;max-width:360px;width:100%;padding:20px;text-align:center;">
+          <h2 style="margin:0 0 8px;">收货员手机端</h2>
+          <p style="font-size:13px;color:#666;margin-bottom:12px;">手机扫码打开，用管理员账号登录后即可叫车、完成收货。</p>
+          <div id="rcv-qr" style="display:flex;justify-content:center;margin-bottom:12px;"></div>
+          <input readonly value="${url}" style="font-size:12px;" onclick="this.select()" />
+          <button class="secondary" id="rcv-close" style="width:100%;">关闭</button>
+        </div>`
+      document.body.appendChild(box)
+      box.querySelector('#rcv-close').onclick = () => box.remove()
+      box.onclick = (e) => { if (e.target === box) box.remove() }
+      const qrEl = box.querySelector('#rcv-qr')
+      if (window.QRCode) {
+        new window.QRCode(qrEl, { text: url, width: 220, height: 220, correctLevel: window.QRCode.CorrectLevel.M })
+      } else {
+        qrEl.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}" />`
+      }
     }
     document.getElementById('btn-checkin').onclick = async () => {
       const code = document.getElementById('checkin-code').value.trim().toUpperCase()
@@ -4501,7 +4525,7 @@ async function renderDockQueue(v) {
           await logQueueAction('call', key, code, dock.trim())
           loadList()
         } else if (b.dataset.act === 'finish') {
-          if (!confirm('确认该车已完成卸货？')) return
+          if (!confirm('确认该车已完成收货？')) return
           const { data: updated, error } = await byKey(
             ctx.supabase.from('bill_order')
               .update({ queue_status: 'done', done_time: new Date().toISOString() })

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>收货员工作台</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin: 0; background: #f1f5f9; color: #0f172a; font-family: -apple-system, "Microsoft YaHei", sans-serif; padding-bottom: 70px; }
+  header { position: sticky; top: 0; z-index: 10; background: #0f172a; color: #fff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+  header .clock { font-size: 18px; color: #38bdf8; font-variant-numeric: tabular-nums; }
+  section { padding: 12px 16px 0; }
+  h2 { font-size: 15px; color: #475569; margin: 8px 0 10px; }
+  h2 span { color: #1677ff; }
+  .cards { display: flex; flex-direction: column; gap: 10px; }
+  .card { background: #fff; border-radius: 12px; padding: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.06); border-left: 4px solid #cbd5e1; }
+  .card.calling { border-left-color: #f97316; }
+  .card .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .card .code { font-size: 20px; font-weight: bold; color: #1677ff; letter-spacing: 1px; }
+  .card .dock { background: #ffedd5; color: #c2410c; font-size: 13px; font-weight: bold; padding: 3px 10px; border-radius: 999px; }
+  .card .pos { background: #e0f2fe; color: #0369a1; font-size: 13px; font-weight: bold; padding: 3px 10px; border-radius: 999px; }
+  .card .meta { font-size: 13px; color: #64748b; margin: 8px 0 12px; line-height: 1.6; }
+  .card .btn { width: 100%; border: none; border-radius: 10px; padding: 14px; font-size: 17px; font-weight: bold; color: #fff; }
+  .btn.green { background: #16a34a; }
+  .btn.blue { background: #1677ff; }
+  .btn:active { opacity: .8; }
+  .empty { color: #94a3b8; text-align: center; padding: 18px; font-size: 14px; background: #fff; border-radius: 12px; }
+  .msg { margin: 10px 16px 0; color: #b91c1c; font-size: 13px; }
+  .footer { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e2e8f0; padding: 10px 16px; display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8; }
+  .footer a { color: #1677ff; text-decoration: none; }
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; display: flex; align-items: flex-end; }
+  .sheet { background: #fff; width: 100%; border-radius: 16px 16px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-height: 80vh; overflow: auto; }
+  .sheet h3 { margin: 0 0 12px; font-size: 17px; }
+  .sheet .opt { width: 100%; text-align: left; padding: 14px; border-radius: 10px; border: 1px solid #cbd5e1; background: #f8fafc; margin-bottom: 8px; font-size: 16px; }
+  .sheet .opt:disabled { color: #94a3b8; background: #f1f5f9; }
+  .sheet .opt.primary { border-color: #1677ff; background: #eff6ff; color: #1677ff; font-weight: bold; }
+  .sheet .cancel { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #e2e8f0; color: #475569; font-size: 16px; margin-top: 6px; }
+  .sheet input { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 16px; margin-bottom: 8px; }
+  .login { padding: 60px 24px; text-align: center; color: #475569; }
+  .login a { color: #1677ff; }
+</style>
+<script src="./supabase-js.js"></script>
+</head>
+<body>
+<header>
+  <div>
+    <h1>🚚 收货员工作台</h1>
+    <div class="sub" id="who">正在验证账号...</div>
+  </div>
+  <div class="clock" id="clock">--:--</div>
+</header>
+
+<div id="msg" class="msg"></div>
+
+<section>
+  <h2>卸货中 <span id="calling-count">0</span></h2>
+  <div id="calling-list" class="cards"></div>
+</section>
+
+<section>
+  <h2>等待叫车 <span id="waiting-count">0</span></h2>
+  <div id="waiting-list" class="cards"></div>
+</section>
+
+<div class="footer">
+  <span id="updated">--</span>
+  <a href="javascript:location.reload()">刷新页面</a>
+</div>
+
+<div id="modal-root"></div>
+
+<script>
+(function () {
+  const SUPABASE_URL = 'https://gpjdzgakvqhnpykuqbfr.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_vUAhYoF1D51WyWlPnLzSlA_JDBODtaW';
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  if (!window.supabase || !window.supabase.createClient) {
+    $('msg').innerText = '页面组件加载失败，请检查网络后刷新';
+    return;
+  }
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  let operator = '收货员';
+  let currentRows = [];
+  let timer = null;
+  let ticking = null;
+
+  const tick = () => { $('clock').innerText = new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5); };
+  tick();
+  ticking = setInterval(tick, 10000);
+
+  function showLogin() {
+    document.body.innerHTML = `<div class="login">
+      <h2>请先登录</h2>
+      <p style="margin-top:12px;">收货员需要使用管理员账号登录主系统后，再打开本页。</p>
+      <p style="margin-top:16px;"><a href="/">去登录</a></p>
+    </div>`;
+  }
+
+  async function init() {
+    const { data: { session } } = await sb.auth.getSession();
+    if (!session) { showLogin(); return; }
+
+    const { data: au } = await sb.from('admin_users')
+      .select('name, role, status').eq('id', session.user.id).maybeSingle();
+    if (!au) {
+      $('who').innerText = '无收货权限';
+      $('msg').innerText = '当前账号不是管理员，无法使用收货员工作台。';
+      return;
+    }
+    operator = au.name || session.user.email || '收货员';
+    $('who').innerText = '收货员：' + operator;
+
+    await load();
+    timer = setInterval(load, 5000);
+  }
+
+  function groupRows(rows) {
+    const map = new Map();
+    (rows || []).forEach(r => {
+      const key = r.vehicle_key || ('AP|' + r.appointment_code);
+      let g = map.get(key);
+      if (!g) {
+        g = {
+          key, code: r.appointment_code, vendor: r.vendor_name || '',
+          wh: r.warehouse_code || '', boxes: 0, slot: r.arrival_time_slot || '',
+          status: r.queue_status, dock: r.assigned_dock || '',
+          checkIn: r.check_in_time, callTime: r.call_time,
+          driver: r.driver_name || '', phone: r.driver_phone || ''
+        };
+        map.set(key, g);
+      }
+      g.boxes += Number(r.box_qty) || 0;
+      if (r.queue_status === 'calling') { g.status = 'calling'; g.dock = r.assigned_dock || g.dock; }
+      else if (g.status !== 'calling') g.status = r.queue_status;
+    });
+    return Array.from(map.values());
+  }
+
+  function minutesSince(t) {
+    if (!t) return 0;
+    return Math.max(0, Math.floor((Date.now() - new Date(t).getTime()) / 60000));
+  }
+
+  async function load() {
+    const { data, error } = await sb.from('bill_order')
+      .select('appointment_code, vehicle_key, vendor_name, warehouse_code, box_qty, arrival_time_slot, queue_status, check_in_time, assigned_dock, call_time, driver_name, driver_phone')
+      .in('queue_status', ['waiting', 'calling'])
+      .order('check_in_time', { ascending: true });
+
+    if (error) { $('msg').innerText = '加载失败：' + error.message; return; }
+    $('msg').innerText = '';
+    currentRows = groupRows(data);
+    render();
+    $('updated').innerText = '更新于 ' + new Date().toLocaleTimeString();
+  }
+
+  function render() {
+    const calling = currentRows.filter(v => v.status === 'calling');
+    const waiting = currentRows.filter(v => v.status !== 'calling')
+      .sort((a, b) => new Date(a.checkIn || 0) - new Date(b.checkIn || 0));
+
+    $('calling-count').innerText = calling.length;
+    $('waiting-count').innerText = waiting.length;
+
+    $('calling-list').innerHTML = calling.map(v => `
+      <div class="card calling">
+        <div class="top">
+          <span class="dock">${esc(v.dock || '未分配码头')}</span>
+          <span class="code">${esc(v.code)}</span>
+        </div>
+        <div class="meta">
+          ${esc(v.vendor || '-')} · <b>${v.boxes}</b> 箱<br>
+          ${esc(v.slot || '')}${v.callTime ? ' · 已卸货 ' + minutesSince(v.callTime) + ' 分钟' : ''}
+        </div>
+        <button class="btn green" data-done="${esc(v.key)}" data-code="${esc(v.code)}" data-dock="${esc(v.dock)}">完成收货</button>
+      </div>`).join('') || '<div class="empty">暂无卸货车辆</div>';
+
+    $('waiting-list').innerHTML = waiting.map((v, i) => `
+      <div class="card">
+        <div class="top">
+          <span class="pos">第 ${i + 1} 位</span>
+          <span class="code">${esc(v.code)}</span>
+        </div>
+        <div class="meta">
+          ${esc(v.vendor || '-')} · <b>${v.boxes}</b> 箱 · ${esc(v.slot || '')}<br>
+          已等 ${minutesSince(v.checkIn)} 分钟
+        </div>
+        <button class="btn blue" data-call="${esc(v.key)}" data-code="${esc(v.code)}" data-wh="${esc(v.wh)}">叫车</button>
+      </div>`).join('') || '<div class="empty">暂无等待车辆</div>';
+
+    document.querySelectorAll('[data-done]').forEach(b => {
+      b.onclick = () => finishVehicle(b.dataset.done, b.dataset.code, b.dataset.dock);
+    });
+    document.querySelectorAll('[data-call]').forEach(b => {
+      b.onclick = () => startCall(b.dataset.call, b.dataset.code, b.dataset.wh);
+    });
+  }
+
+  function filterByKey(q, key, code) {
+    return key.indexOf('AP|') === 0
+      ? q.eq('appointment_code', code)
+      : q.eq('vehicle_key', key);
+  }
+
+  async function logAction(action, code, key, dock) {
+    try {
+      await sb.from('dock_queue_log').insert({
+        appointment_code: code,
+        vehicle_key: key,
+        action,
+        dock: dock || null,
+        operator
+      });
+    } catch (e) { /* 日志失败不影响主流程 */ }
+  }
+
+  async function startCall(key, code, wh) {
+    const dock = await pickDock(wh);
+    if (!dock) return;
+    const { data, error } = await filterByKey(
+      sb.from('bill_order')
+        .update({ queue_status: 'calling', assigned_dock: dock, call_time: new Date().toISOString() })
+        .eq('queue_status', 'waiting'),
+      key, code
+    ).select('id');
+
+    if (error) return alert('叫车失败：' + error.message);
+    if (!data || !data.length) return alert('这辆车已被叫号，请刷新');
+    await logAction('call', code, key, dock);
+    await load();
+  }
+
+  async function finishVehicle(key, code, dock) {
+    if (!confirm('确认该车已完成收货？')) return;
+    const { data, error } = await filterByKey(
+      sb.from('bill_order')
+        .update({ queue_status: 'done', done_time: new Date().toISOString() })
+        .eq('queue_status', 'calling'),
+      key, code
+    ).select('id');
+
+    if (error) return alert('操作失败：' + error.message);
+    if (!data || !data.length) return alert('状态已变化，请刷新');
+    await logAction('done', code, key, dock);
+    await load();
+    openNextCall();
+  }
+
+  function sheet(html) {
+    const mask = document.createElement('div');
+    mask.className = 'mask';
+    mask.innerHTML = `<div class="sheet">${html}</div>`;
+    $('modal-root').appendChild(mask);
+    mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
+    return mask;
+  }
+
+  function pickDock(wh) {
+    return new Promise(async (resolve) => {
+      let docks = [];
+      let busy = new Set();
+      try {
+        if (wh) {
+          const { data } = await sb.from('dock')
+            .select('*').eq('warehouse_code', wh).eq('status', 1)
+            .order('sort_order').order('dock_name');
+          docks = data || [];
+          const { data: occupied } = await sb.from('bill_order')
+            .select('assigned_dock').eq('warehouse_code', wh).eq('queue_status', 'calling');
+          busy = new Set((occupied || []).map(x => x.assigned_dock).filter(Boolean));
+        }
+      } catch (e) {}
+
+      const mask = sheet(`
+        <h3>选择码头</h3>
+        ${docks.map(d => {
+          const used = busy.has(d.dock_name);
+          return `<button class="opt ${used ? '' : 'primary'}" data-dock="${esc(d.dock_name)}" ${used ? 'disabled' : ''}>
+            ${esc(d.dock_name)}${d.temp_layer ? ' · ' + esc(d.temp_layer) : ''}${used ? '（占用中）' : ''}
+          </button>`;
+        }).join('') || '<p style="color:#94a3b8;font-size:14px;">该仓库还没有配置码头，可手动输入</p>'}
+        <input id="dk-custom" placeholder="或手动输入码头名称" />
+        <button class="opt primary" id="dk-ok">确认输入</button>
+        <button class="cancel" id="dk-cancel">取消</button>
+      `);
+
+      const done = (v) => { mask.remove(); resolve(v); };
+      mask.querySelectorAll('[data-dock]').forEach(b => { b.onclick = () => done(b.dataset.dock); });
+      mask.querySelector('#dk-cancel').onclick = () => done(null);
+      mask.querySelector('#dk-ok').onclick = () => {
+        const v = mask.querySelector('#dk-custom').value.trim();
+        if (v) done(v);
+      };
+    });
+  }
+
+  function openNextCall() {
+    const waiting = currentRows.filter(v => v.status === 'waiting')
+      .sort((a, b) => new Date(a.checkIn || 0) - new Date(b.checkIn || 0));
+
+    const mask = sheet(`
+      <h3>选择下一辆叫车</h3>
+      ${waiting.map((v, i) => `<button class="opt primary" data-next="${esc(v.key)}" data-code="${esc(v.code)}" data-wh="${esc(v.wh)}">
+        第 ${i + 1} 位 · ${esc(v.code)} · ${esc(v.vendor || '-')} · ${v.boxes} 箱
+      </button>`).join('') || '<p style="color:#94a3b8;font-size:14px;">暂无等待车辆</p>'}
+      <button class="cancel" id="next-cancel">关闭</button>
+    `);
+
+    mask.querySelector('#next-cancel').onclick = () => mask.remove();
+    mask.querySelectorAll('[data-next]').forEach(b => {
+      b.onclick = async () => {
+        mask.remove();
+        await startCall(b.dataset.next, b.dataset.code, b.dataset.wh);
+      };
+    });
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
