@@ -11,6 +11,7 @@
   header h1 { font-size: 18px; margin: 0; }
   header .sub { font-size: 12px; color: #94a3b8; margin-top: 2px; }
   header .clock { font-size: 18px; color: #38bdf8; font-variant-numeric: tabular-nums; }
+  header a { color: #fca5a5; font-size: 12px; text-decoration: none; margin-left: 10px; }
   section { padding: 12px 16px 0; }
   h2 { font-size: 15px; color: #475569; margin: 8px 0 10px; }
   h2 span { color: #1677ff; }
@@ -30,6 +31,12 @@
   .msg { margin: 10px 16px 0; color: #b91c1c; font-size: 13px; }
   .footer { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid #e2e8f0; padding: 10px 16px; display: flex; justify-content: space-between; font-size: 12px; color: #94a3b8; }
   .footer a { color: #1677ff; text-decoration: none; }
+  .login-card { margin: 24px 16px; background: #fff; border-radius: 14px; padding: 22px 18px; box-shadow: 0 2px 10px rgba(0,0,0,.06); }
+  .login-card h2 { font-size: 20px; color: #0f172a; margin: 0 0 6px; }
+  .login-card p { font-size: 13px; color: #64748b; margin: 0 0 18px; line-height: 1.6; }
+  .login-card input { width: 100%; padding: 14px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 17px; margin-bottom: 12px; }
+  .login-card button { width: 100%; padding: 15px; border: none; border-radius: 10px; background: #1677ff; color: #fff; font-size: 18px; font-weight: bold; }
+  .login-msg { color: #b91c1c; font-size: 13px; margin-top: 10px; min-height: 18px; }
   .mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 100; display: flex; align-items: flex-end; }
   .sheet { background: #fff; width: 100%; border-radius: 16px 16px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-height: 80vh; overflow: auto; }
   .sheet h3 { margin: 0 0 12px; font-size: 17px; }
@@ -38,8 +45,6 @@
   .sheet .opt.primary { border-color: #1677ff; background: #eff6ff; color: #1677ff; font-weight: bold; }
   .sheet .cancel { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #e2e8f0; color: #475569; font-size: 16px; margin-top: 6px; }
   .sheet input { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 16px; margin-bottom: 8px; }
-  .login { padding: 60px 24px; text-align: center; color: #475569; }
-  .login a { color: #1677ff; }
 </style>
 <script src="./supabase-js.js"></script>
 </head>
@@ -47,22 +52,32 @@
 <header>
   <div>
     <h1>🚚 收货员工作台</h1>
-    <div class="sub" id="who">正在验证账号...</div>
+    <div class="sub"><span id="who">未登录</span><a id="logout" href="javascript:void(0)" style="display:none;">退出登录</a></div>
   </div>
   <div class="clock" id="clock">--:--</div>
 </header>
 
 <div id="msg" class="msg"></div>
 
-<section>
-  <h2>卸货中 <span id="calling-count">0</span></h2>
-  <div id="calling-list" class="cards"></div>
-</section>
+<div id="login-box" class="login-card">
+  <h2>收货员登录</h2>
+  <p>输入姓名和手机号登录（由管理员在「基础数据 → 码头管理」里维护收货员）。</p>
+  <input id="lg-name" placeholder="姓名" autocomplete="name" />
+  <input id="lg-phone" placeholder="手机号" type="tel" autocomplete="tel" inputmode="numeric" />
+  <button id="lg-btn">登录</button>
+  <div class="login-msg" id="lg-msg"></div>
+</div>
 
-<section>
-  <h2>等待叫车 <span id="waiting-count">0</span></h2>
-  <div id="waiting-list" class="cards"></div>
-</section>
+<div id="workbench" style="display:none;">
+  <section>
+    <h2>卸货中 <span id="calling-count">0</span></h2>
+    <div id="calling-list" class="cards"></div>
+  </section>
+  <section>
+    <h2>等待叫车 <span id="waiting-count">0</span></h2>
+    <div id="waiting-list" class="cards"></div>
+  </section>
+</div>
 
 <div class="footer">
   <span id="updated">--</span>
@@ -75,6 +90,7 @@
 (function () {
   const SUPABASE_URL = 'https://gpjdzgakvqhnpykuqbfr.supabase.co';
   const SUPABASE_KEY = 'sb_publishable_vUAhYoF1D51WyWlPnLzSlA_JDBODtaW';
+  const TOKEN_KEY = 'dock_receiver_token_v1';
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -85,62 +101,82 @@
   }
   const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  let operator = '收货员';
-  let currentRows = [];
+  let token = localStorage.getItem(TOKEN_KEY) || '';
+  let me = null;
+  let rows = [];
   let timer = null;
-  let ticking = null;
 
   const tick = () => { $('clock').innerText = new Date().toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5); };
   tick();
-  ticking = setInterval(tick, 10000);
+  setInterval(tick, 10000);
 
   function showLogin() {
-    document.body.innerHTML = `<div class="login">
-      <h2>请先登录</h2>
-      <p style="margin-top:12px;">收货员需要使用管理员账号登录主系统后，再打开本页。</p>
-      <p style="margin-top:16px;"><a href="/">去登录</a></p>
-    </div>`;
+    if (timer) { clearInterval(timer); timer = null; }
+    $('login-box').style.display = 'block';
+    $('workbench').style.display = 'none';
+    $('logout').style.display = 'none';
+    $('who').innerText = '未登录';
   }
 
-  async function init() {
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) { showLogin(); return; }
-
-    const { data: au } = await sb.from('admin_users')
-      .select('name, role, status').eq('id', session.user.id).maybeSingle();
-    if (!au) {
-      $('who').innerText = '无收货权限';
-      $('msg').innerText = '当前账号不是管理员，无法使用收货员工作台。';
-      return;
-    }
-    operator = au.name || session.user.email || '收货员';
-    $('who').innerText = '收货员：' + operator;
-
-    await load();
+  function showWorkbench() {
+    $('login-box').style.display = 'none';
+    $('workbench').style.display = 'block';
+    $('logout').style.display = 'inline';
+    $('who').innerText = '收货员：' + (me.name || '') + (me.warehouse_code ? '（' + me.warehouse_code + '）' : '');
+    if (timer) clearInterval(timer);
+    load();
     timer = setInterval(load, 5000);
   }
 
-  function groupRows(rows) {
-    const map = new Map();
-    (rows || []).forEach(r => {
-      const key = r.vehicle_key || ('AP|' + r.appointment_code);
-      let g = map.get(key);
-      if (!g) {
-        g = {
-          key, code: r.appointment_code, vendor: r.vendor_name || '',
-          wh: r.warehouse_code || '', boxes: 0, slot: r.arrival_time_slot || '',
-          status: r.queue_status, dock: r.assigned_dock || '',
-          checkIn: r.check_in_time, callTime: r.call_time,
-          driver: r.driver_name || '', phone: r.driver_phone || ''
-        };
-        map.set(key, g);
-      }
-      g.boxes += Number(r.box_qty) || 0;
-      if (r.queue_status === 'calling') { g.status = 'calling'; g.dock = r.assigned_dock || g.dock; }
-      else if (g.status !== 'calling') g.status = r.queue_status;
-    });
-    return Array.from(map.values());
+  async function rpcOne(fn, args) {
+    const { data, error } = await sb.rpc(fn, args);
+    if (error) throw error;
+    return Array.isArray(data) ? data[0] : data;
   }
+
+  async function boot() {
+    if (token) {
+      try {
+        const r = await rpcOne('receiver_me', { p_token: token });
+        if (r && r.ok) { me = r; showWorkbench(); return; }
+      } catch (e) { /* 网络或 token 失效 */ }
+      token = '';
+      localStorage.removeItem(TOKEN_KEY);
+    }
+    showLogin();
+  }
+
+  $('lg-btn').onclick = async () => {
+    const name = $('lg-name').value.trim();
+    const phone = $('lg-phone').value.trim();
+    const m = $('lg-msg');
+    m.innerText = '';
+    if (!name || !phone) { m.innerText = '请填写姓名和手机号'; return; }
+    $('lg-btn').disabled = true;
+    $('lg-btn').innerText = '登录中...';
+    try {
+      const r = await rpcOne('receiver_login', { p_name: name, p_phone: phone });
+      if (!r || !r.ok) {
+        m.innerText = (r && r.message) || '登录失败';
+        return;
+      }
+      token = r.session_token;
+      localStorage.setItem(TOKEN_KEY, token);
+      me = { name: r.name, warehouse_code: r.warehouse_code };
+      showWorkbench();
+    } catch (e) {
+      m.innerText = '登录失败：' + (e.message || e);
+    } finally {
+      $('lg-btn').disabled = false;
+      $('lg-btn').innerText = '登录';
+    }
+  };
+
+  $('logout').onclick = () => {
+    token = '';
+    localStorage.removeItem(TOKEN_KEY);
+    location.reload();
+  };
 
   function minutesSince(t) {
     if (!t) return 0;
@@ -148,22 +184,29 @@
   }
 
   async function load() {
-    const { data, error } = await sb.from('bill_order')
-      .select('appointment_code, vehicle_key, vendor_name, warehouse_code, box_qty, arrival_time_slot, queue_status, check_in_time, assigned_dock, call_time, driver_name, driver_phone')
-      .in('queue_status', ['waiting', 'calling'])
-      .order('check_in_time', { ascending: true });
-
-    if (error) { $('msg').innerText = '加载失败：' + error.message; return; }
-    $('msg').innerText = '';
-    currentRows = groupRows(data);
-    render();
-    $('updated').innerText = '更新于 ' + new Date().toLocaleTimeString();
+    try {
+      const { data, error } = await sb.rpc('receiver_queue', { p_token: token });
+      if (error) throw error;
+      rows = data || [];
+      $('msg').innerText = '';
+      render();
+      $('updated').innerText = '更新于 ' + new Date().toLocaleTimeString();
+    } catch (e) {
+      if (String(e.message || '').indexOf('登录') >= 0) {
+        token = '';
+        localStorage.removeItem(TOKEN_KEY);
+        showLogin();
+        $('lg-msg').innerText = '登录已失效，请重新登录';
+        return;
+      }
+      $('msg').innerText = '加载失败：' + (e.message || e);
+    }
   }
 
   function render() {
-    const calling = currentRows.filter(v => v.status === 'calling');
-    const waiting = currentRows.filter(v => v.status !== 'calling')
-      .sort((a, b) => new Date(a.checkIn || 0) - new Date(b.checkIn || 0));
+    const calling = rows.filter(v => v.queue_status === 'calling');
+    const waiting = rows.filter(v => v.queue_status !== 'calling')
+      .sort((a, b) => new Date(a.check_in_time || 0) - new Date(b.check_in_time || 0));
 
     $('calling-count').innerText = calling.length;
     $('waiting-count').innerText = waiting.length;
@@ -171,85 +214,59 @@
     $('calling-list').innerHTML = calling.map(v => `
       <div class="card calling">
         <div class="top">
-          <span class="dock">${esc(v.dock || '未分配码头')}</span>
-          <span class="code">${esc(v.code)}</span>
+          <span class="dock">${esc(v.assigned_dock || '未分配码头')}</span>
+          <span class="code">${esc(v.appointment_code)}</span>
         </div>
         <div class="meta">
-          ${esc(v.vendor || '-')} · <b>${v.boxes}</b> 箱<br>
-          ${esc(v.slot || '')}${v.callTime ? ' · 已卸货 ' + minutesSince(v.callTime) + ' 分钟' : ''}
+          ${esc(v.vendor_name || '-')} · <b>${v.boxes}</b> 箱<br>
+          ${esc(v.slot || '')}${v.call_time ? ' · 已卸货 ' + minutesSince(v.call_time) + ' 分钟' : ''}
         </div>
-        <button class="btn green" data-done="${esc(v.key)}" data-code="${esc(v.code)}" data-dock="${esc(v.dock)}">完成收货</button>
+        <button class="btn green" data-done="${esc(v.appointment_code)}">完成收货</button>
       </div>`).join('') || '<div class="empty">暂无卸货车辆</div>';
 
     $('waiting-list').innerHTML = waiting.map((v, i) => `
       <div class="card">
         <div class="top">
           <span class="pos">第 ${i + 1} 位</span>
-          <span class="code">${esc(v.code)}</span>
+          <span class="code">${esc(v.appointment_code)}</span>
         </div>
         <div class="meta">
-          ${esc(v.vendor || '-')} · <b>${v.boxes}</b> 箱 · ${esc(v.slot || '')}<br>
-          已等 ${minutesSince(v.checkIn)} 分钟
+          ${esc(v.vendor_name || '-')} · <b>${v.boxes}</b> 箱 · ${esc(v.slot || '')}<br>
+          已等 ${minutesSince(v.check_in_time)} 分钟
         </div>
-        <button class="btn blue" data-call="${esc(v.key)}" data-code="${esc(v.code)}" data-wh="${esc(v.wh)}">叫车</button>
+        <button class="btn blue" data-call="${esc(v.appointment_code)}" data-wh="${esc(v.warehouse_code || '')}">叫车</button>
       </div>`).join('') || '<div class="empty">暂无等待车辆</div>';
 
     document.querySelectorAll('[data-done]').forEach(b => {
-      b.onclick = () => finishVehicle(b.dataset.done, b.dataset.code, b.dataset.dock);
+      b.onclick = () => finishVehicle(b.dataset.done);
     });
     document.querySelectorAll('[data-call]').forEach(b => {
-      b.onclick = () => startCall(b.dataset.call, b.dataset.code, b.dataset.wh);
+      b.onclick = () => callVehicle(b.dataset.call, b.dataset.wh);
     });
   }
 
-  function filterByKey(q, key, code) {
-    return key.indexOf('AP|') === 0
-      ? q.eq('appointment_code', code)
-      : q.eq('vehicle_key', key);
-  }
-
-  async function logAction(action, code, key, dock) {
-    try {
-      await sb.from('dock_queue_log').insert({
-        appointment_code: code,
-        vehicle_key: key,
-        action,
-        dock: dock || null,
-        operator
-      });
-    } catch (e) { /* 日志失败不影响主流程 */ }
-  }
-
-  async function startCall(key, code, wh) {
+  async function callVehicle(code, wh) {
     const dock = await pickDock(wh);
     if (!dock) return;
-    const { data, error } = await filterByKey(
-      sb.from('bill_order')
-        .update({ queue_status: 'calling', assigned_dock: dock, call_time: new Date().toISOString() })
-        .eq('queue_status', 'waiting'),
-      key, code
-    ).select('id');
-
-    if (error) return alert('叫车失败：' + error.message);
-    if (!data || !data.length) return alert('这辆车已被叫号，请刷新');
-    await logAction('call', code, key, dock);
-    await load();
+    try {
+      const r = await rpcOne('receiver_call', { p_token: token, p_code: code, p_dock: dock });
+      if (!r || !r.ok) return alert((r && r.message) || '叫车失败');
+      await load();
+    } catch (e) {
+      alert('叫车失败：' + (e.message || e));
+    }
   }
 
-  async function finishVehicle(key, code, dock) {
+  async function finishVehicle(code) {
     if (!confirm('确认该车已完成收货？')) return;
-    const { data, error } = await filterByKey(
-      sb.from('bill_order')
-        .update({ queue_status: 'done', done_time: new Date().toISOString() })
-        .eq('queue_status', 'calling'),
-      key, code
-    ).select('id');
-
-    if (error) return alert('操作失败：' + error.message);
-    if (!data || !data.length) return alert('状态已变化，请刷新');
-    await logAction('done', code, key, dock);
-    await load();
-    openNextCall();
+    try {
+      const r = await rpcOne('receiver_finish', { p_token: token, p_code: code });
+      if (!r || !r.ok) return alert((r && r.message) || '操作失败');
+      await load();
+      openNextCall();
+    } catch (e) {
+      alert('操作失败：' + (e.message || e));
+    }
   }
 
   function sheet(html) {
@@ -261,22 +278,17 @@
     return mask;
   }
 
-  function pickDock(wh) {
-    return new Promise(async (resolve) => {
-      let docks = [];
-      let busy = new Set();
-      try {
-        if (wh) {
-          const { data } = await sb.from('dock')
-            .select('*').eq('warehouse_code', wh).eq('status', 1)
-            .order('sort_order').order('dock_name');
-          docks = data || [];
-          const { data: occupied } = await sb.from('bill_order')
-            .select('assigned_dock').eq('warehouse_code', wh).eq('queue_status', 'calling');
-          busy = new Set((occupied || []).map(x => x.assigned_dock).filter(Boolean));
-        }
-      } catch (e) {}
+  async function pickDock(wh) {
+    let docks = [];
+    try {
+      const { data, error } = await sb.rpc('receiver_docks', { p_token: token });
+      if (!error) docks = (data || []).filter(d => !wh || d.warehouse_code === wh);
+    } catch (e) {}
 
+    const busy = new Set(rows.filter(v => v.queue_status === 'calling' && (!wh || v.warehouse_code === wh))
+      .map(v => v.assigned_dock).filter(Boolean));
+
+    return new Promise((resolve) => {
       const mask = sheet(`
         <h3>选择码头</h3>
         ${docks.map(d => {
@@ -301,13 +313,13 @@
   }
 
   function openNextCall() {
-    const waiting = currentRows.filter(v => v.status === 'waiting')
-      .sort((a, b) => new Date(a.checkIn || 0) - new Date(b.checkIn || 0));
+    const waiting = rows.filter(v => v.queue_status !== 'calling')
+      .sort((a, b) => new Date(a.check_in_time || 0) - new Date(b.check_in_time || 0));
 
     const mask = sheet(`
       <h3>选择下一辆叫车</h3>
-      ${waiting.map((v, i) => `<button class="opt primary" data-next="${esc(v.key)}" data-code="${esc(v.code)}" data-wh="${esc(v.wh)}">
-        第 ${i + 1} 位 · ${esc(v.code)} · ${esc(v.vendor || '-')} · ${v.boxes} 箱
+      ${waiting.map((v, i) => `<button class="opt primary" data-next="${esc(v.appointment_code)}" data-wh="${esc(v.warehouse_code || '')}">
+        第 ${i + 1} 位 · ${esc(v.appointment_code)} · ${esc(v.vendor_name || '-')} · ${v.boxes} 箱
       </button>`).join('') || '<p style="color:#94a3b8;font-size:14px;">暂无等待车辆</p>'}
       <button class="cancel" id="next-cancel">关闭</button>
     `);
@@ -316,12 +328,12 @@
     mask.querySelectorAll('[data-next]').forEach(b => {
       b.onclick = async () => {
         mask.remove();
-        await startCall(b.dataset.next, b.dataset.code, b.dataset.wh);
+        await callVehicle(b.dataset.next, b.dataset.wh);
       };
     });
   }
 
-  init();
+  boot();
 })();
 </script>
 </body>

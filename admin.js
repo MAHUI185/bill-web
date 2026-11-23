@@ -2710,6 +2710,8 @@ async function renderDockMaster(v) {
     .select('warehouse_code, warehouse_name').order('warehouse_code')
   const { data: docks } = await ctx.supabase.from('dock')
     .select('*').order('warehouse_code').order('sort_order')
+  const { data: receivers } = await ctx.supabase.from('dock_receiver')
+    .select('*').order('status', { ascending: false }).order('id')
 
   v.innerHTML = `
     <div class="card" style="box-shadow:none;padding:16px;margin-bottom:16px;">
@@ -2738,6 +2740,30 @@ async function renderDockMaster(v) {
           <td><button class="small danger" data-del="${d.id}">删除</button></td>
         </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">暂无码头</td></tr>'}</tbody>
       </table>
+    </div>
+    <div class="card" style="box-shadow:none;padding:16px;margin-top:16px;">
+      <h2>收货员管理（扫码登录用）</h2>
+      <div class="row" style="margin-bottom:12px;">
+        <input id="rcv-name" placeholder="姓名" style="flex:1;" />
+        <input id="rcv-phone" placeholder="手机号" style="flex:1;" />
+        <select id="rcv-wh" style="flex:0 0 200px;">
+          <option value="">全部仓库</option>
+          ${(whs || []).map(w => `<option value="${w.warehouse_code}">${w.warehouse_name || w.warehouse_code}</option>`).join('')}
+        </select>
+        <button id="rcv-add" style="flex:0 0 90px;">新增</button>
+      </div>
+      <div id="rcv-msg"></div>
+      <table>
+        <tr><th>姓名</th><th>手机号</th><th>负责仓库</th><th>状态</th><th>操作</th></tr>
+        <tbody>${(receivers || []).map(r => `<tr>
+          <td><b>${r.name}</b></td><td>${r.phone}</td><td>${r.warehouse_code || '全部'}</td>
+          <td>${r.status === 1 ? '启用' : '停用'}</td>
+          <td>
+            <button class="small secondary" data-rcv-toggle="${r.id}" data-status="${r.status}">${r.status === 1 ? '停用' : '启用'}</button>
+            <button class="small danger" data-rcv-del="${r.id}">删除</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">暂无收货员</td></tr>'}</tbody>
+      </table>
     </div>`
 
   const msgEl = document.getElementById('dm-msg')
@@ -2757,6 +2783,37 @@ async function renderDockMaster(v) {
     b.onclick = async () => {
       if (!confirm('确定删除该码头？')) return
       const { error } = await ctx.supabase.from('dock').delete().eq('id', b.dataset.del)
+      if (error) return alert('删除失败：' + error.message)
+      renderDockMaster(v)
+    }
+  })
+
+  const rcvMsg = document.getElementById('rcv-msg')
+  document.getElementById('rcv-add').onclick = async () => {
+    const name = document.getElementById('rcv-name').value.trim()
+    const phone = document.getElementById('rcv-phone').value.trim()
+    const wh = document.getElementById('rcv-wh').value
+    if (!name || !phone) return rcvMsg.innerHTML = ctx.msg('请填写姓名和手机号', false)
+    const { error } = await ctx.supabase.from('dock_receiver').insert({
+      name, phone, warehouse_code: wh || null, status: 1
+    })
+    if (error) return rcvMsg.innerHTML = ctx.msg('新增失败：' + error.message, false)
+    renderDockMaster(v)
+  }
+
+  v.querySelectorAll('[data-rcv-toggle]').forEach(b => {
+    b.onclick = async () => {
+      const next = Number(b.dataset.status) === 1 ? 0 : 1
+      const { error } = await ctx.supabase.from('dock_receiver').update({ status: next }).eq('id', b.dataset.rcvToggle)
+      if (error) return alert('操作失败：' + error.message)
+      renderDockMaster(v)
+    }
+  })
+
+  v.querySelectorAll('[data-rcv-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除该收货员？')) return
+      const { error } = await ctx.supabase.from('dock_receiver').delete().eq('id', b.dataset.rcvDel)
       if (error) return alert('删除失败：' + error.message)
       renderDockMaster(v)
     }
