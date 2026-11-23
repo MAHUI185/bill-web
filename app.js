@@ -2163,6 +2163,9 @@ async function renderCheckin(view) {
       <button class="small" data-qr="${g.code}">下载二维码</button>
       <a href="https://bill.mahui.pw/track.html?code=${g.code}&v=20261123" target="_blank" style="font-size:12px;margin-left:6px;">排队进度</a>
       ${g.noOrder ? '<div style="font-size:12px;color:#d46b08;margin-top:4px;">到仓后在「填报」填此码补单</div>' : ''}
+      ${g.noOrder ? (g.status === 'pending'
+        ? `<button class="small danger" data-del-appt="${g.code}" style="margin-top:6px;">删除预约</button>`
+        : '<div style="font-size:12px;color:#999;margin-top:4px;">已签到，不能删除</div>') : ''}
     </td>
   </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无预约记录</td></tr>'
 
@@ -2181,6 +2184,22 @@ async function renderCheckin(view) {
 
   view.querySelectorAll('[data-qr]').forEach(b => {
     b.onclick = () => downloadQrCode(b.dataset.qr)
+  })
+
+  view.querySelectorAll('[data-del-appt]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除该无单预约？删除后释放该时段产能，且不可恢复。')) return
+      b.disabled = true
+      const { error } = await supabase.from('bill_order').delete()
+        .eq('appointment_code', b.dataset.delAppt)
+        .eq('bill_type', '无单预约')
+      if (error) {
+        alert('删除失败：' + error.message)
+        b.disabled = false
+        return
+      }
+      renderCheckin(view)
+    }
   })
 }
 
