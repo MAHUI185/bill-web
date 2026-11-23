@@ -401,8 +401,8 @@ function renderMain() {
   
   // ★ 新增：厂商和物流商共用「我的对账」入口
   const tabs = isAdmin 
-    ? [['fill','管理填报'], ['admin','管理后台']] 
-    : [['fill','填报'],['my','我的单据'],['products','商品资料'],['qc','质检报告'],['billing','我的对账']]
+    ? [['fill','管理填报'], ['checkin','到仓信息'], ['admin','管理后台']] 
+    : [['fill','填报'],['checkin','到仓信息'],['my','我的单据'],['products','商品资料'],['qc','质检报告'],['billing','我的对账']]
   
   nav.innerHTML = tabs.map(([k, v]) => `<button data-k="${k}">${v}</button>`).join('')
   nav.querySelectorAll('button').forEach(b => {
@@ -455,6 +455,7 @@ async function renderView(key) {
   if (cdEl) cdEl.style.display = 'none'
 
   if (key === 'fill') return renderFill(view)
+  if (key === 'checkin') return renderCheckin(view)
   if (key === 'my') return renderMy(view)
   if (key === 'products') return renderProducts(view)
   if (key === 'qc') return renderQC(view)
@@ -1935,7 +1936,7 @@ async function renderMy(view) {
       <div id="my-msg"></div>
       <div class="scroll" style="max-height: 600px;">
         <table>
-          <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>预约码</th><th>已导出</th><th>时间</th><th>操作</th></tr>
+          <tr><th>ID</th><th>厂编</th><th>类型</th><th>商品</th><th>数量</th><th>仓库</th><th>已导出</th><th>时间</th><th>操作</th></tr>
           <tbody id="my-body"></tbody>
         </table>
       </div>
@@ -1946,14 +1947,14 @@ async function renderMy(view) {
     currentPage = page;
     const tbody = document.getElementById('my-body');
     if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#999;">加载中...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;">加载中...</td></tr>';
 
-    let q = supabase.from('bill_order').select('*', { count: 'exact' });
+    let q = supabase.from('bill_order').select('*', { count: 'exact' }).neq('bill_type', '无单预约');
     
     if (isLogistics) {
       const codes = myVendors.map(v => v.vendor_code);
       if (!codes.length) {
-        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>';
         return;
       }
       q = q.in('vendor_code', codes);
@@ -1972,14 +1973,13 @@ async function renderMy(view) {
     const { data, error, count } = await q;
 
     if (error) {
-      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;color:#cf1322;">查询失败：${error.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#cf1322;">查询失败：${error.message}</td></tr>`;
       return;
     }
 
     tbody.innerHTML = (data||[]).map(b => `<tr>
       <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
-      <td>${b.bill_type === '无单预约' ? (b.box_qty || 0) : b.quantity}</td><td>${b.warehouse_code}</td>
-      <td>${b.appointment_code ? `<b>${b.appointment_code}</b><br><span style="font-size:12px;color:#666;">${b.arrival_time_slot || ''} ${({ pending: '待签到', waiting: '排队中', calling: '叫号中', done: '已完成' })[b.queue_status] || ''}</span><br><a href="https://bill.mahui.pw/track.html?code=${b.appointment_code}&v=20261123" target="_blank" style="font-size:12px;">排队进度</a>${b.bill_type === '无单预约' ? '<br><span style="font-size:12px;color:#d46b08;">到「管理填报」填此码补单</span>' : ''}` : '—'}</td>
+      <td>${b.quantity}</td><td>${b.warehouse_code}</td>
       <td>${b.exported ? '是' : '否'}</td>
       <td>${new Date(b.created_at).toLocaleString()}</td>
       <td>
@@ -1987,7 +1987,7 @@ async function renderMy(view) {
           ? `<button class="small secondary" disabled style="opacity:0.5; cursor:not-allowed;">已导出</button>` 
           : `<button class="small danger" data-del="${b.id}">删除</button>`}
       </td>
-    </tr>`).join('') || '<tr><td colspan="10" style="text-align:center;color:#999;">暂无单据</td></tr>';
+    </tr>`).join('') || '<tr><td colspan="9" style="text-align:center;color:#999;">暂无单据</td></tr>';
 
     const totalPages = Math.ceil((count || 0) / pageSize);
     const pageEl = document.getElementById('my-pagination');
@@ -2033,6 +2033,130 @@ async function renderMy(view) {
   };
 
   loadData(0);
+}
+
+// ================= 到仓信息（预约码 / 二维码） =================
+async function renderCheckin(view) {
+  view.innerHTML = `
+    <div class="card">
+      <h2>到仓信息</h2>
+      <p style="font-size:13px;color:#666;margin:-8px 0 16px;">
+        预约码和二维码可重复下载；司机到仓后在排队页签到。无单预约到仓后，用预约码到「填报」页补单。
+      </p>
+      <div id="ck-msg"></div>
+      <div class="scroll" style="max-height: calc(100vh - 280px);">
+        <table>
+          <tr><th>预约码</th><th>厂商</th><th>仓库</th><th>到仓日 / 时段</th><th>箱数</th><th>司机</th><th>状态</th><th>操作</th></tr>
+          <tbody id="ck-body"><tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
+        </table>
+      </div>
+    </div>`
+
+  const body = document.getElementById('ck-body')
+  let q = supabase.from('bill_order')
+    .select('appointment_code, vendor_name, warehouse_code, arrival_date, arrival_time_slot, box_qty, driver_name, driver_phone, queue_status, bill_type, created_at')
+    .not('appointment_code', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(500)
+
+  if (isLogistics) {
+    const codes = (myVendors || []).map(v => v.vendor_code).filter(Boolean)
+    if (!codes.length) {
+      body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>'
+      return
+    }
+    q = q.in('vendor_code', codes)
+  } else if (!isAdmin) {
+    q = q.eq('vendor_id', currentUser.id)
+  }
+
+  const { data, error } = await q
+  if (error) {
+    body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
+    return
+  }
+
+  const map = new Map()
+  ;(data || []).forEach(r => {
+    const code = r.appointment_code
+    let g = map.get(code)
+    if (!g) {
+      g = {
+        code, vendor: r.vendor_name || '', warehouse: r.warehouse_code || '',
+        date: r.arrival_date || '', slot: r.arrival_time_slot || '',
+        boxes: 0, driver: r.driver_name || '', phone: r.driver_phone || '',
+        status: r.queue_status || 'pending', noOrder: r.bill_type === '无单预约',
+        created: r.created_at
+      }
+      map.set(code, g)
+    }
+    g.boxes += Number(r.box_qty) || 0
+    if (r.bill_type !== '无单预约') g.noOrder = false
+    if (r.queue_status === 'calling') g.status = 'calling'
+    else if (g.status !== 'calling') g.status = r.queue_status || g.status
+  })
+
+  const statusText = { pending: '待签到', waiting: '排队中', calling: '叫号中', done: '已完成' }
+  const rows = Array.from(map.values()).sort((a, b) => new Date(b.created) - new Date(a.created))
+
+  body.innerHTML = rows.map(g => `<tr>
+    <td><b style="font-size:15px;color:#1677ff;">${g.code}</b>${g.noOrder ? '<br><span style="font-size:12px;color:#d46b08;">无单预约</span>' : ''}</td>
+    <td>${g.vendor}</td>
+    <td>${g.warehouse}</td>
+    <td>${g.date}<br><span style="font-size:12px;color:#666;">${g.slot}</span></td>
+    <td>${g.boxes} 箱</td>
+    <td>${g.driver}<br><span style="font-size:12px;color:#999;">${g.phone}</span></td>
+    <td>${statusText[g.status] || g.status}</td>
+    <td style="white-space:nowrap;">
+      <button class="small secondary" data-copy="${g.code}">复制码</button>
+      <button class="small" data-qr="${g.code}">下载二维码</button>
+      <a href="https://bill.mahui.pw/track.html?code=${g.code}&v=20261123" target="_blank" style="font-size:12px;margin-left:6px;">排队进度</a>
+      ${g.noOrder ? '<div style="font-size:12px;color:#d46b08;margin-top:4px;">到仓后在「填报」填此码补单</div>' : ''}
+    </td>
+  </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无预约记录</td></tr>'
+
+  view.querySelectorAll('[data-copy]').forEach(b => {
+    b.onclick = async () => {
+      const code = b.dataset.copy
+      try {
+        await navigator.clipboard.writeText(code)
+        b.innerText = '已复制'
+        setTimeout(() => { b.innerText = '复制码' }, 1500)
+      } catch (e) {
+        prompt('复制预约码', code)
+      }
+    }
+  })
+
+  view.querySelectorAll('[data-qr]').forEach(b => {
+    b.onclick = () => downloadQrCode(b.dataset.qr)
+  })
+}
+
+function downloadQrCode(code) {
+  const url = `https://bill.mahui.pw/track.html?code=${code}&v=20261123`
+  if (!window.QRCode) {
+    window.open(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(url)}`, '_blank')
+    return
+  }
+  const tmp = document.createElement('div')
+  tmp.style.cssText = 'position:fixed;left:-9999px;top:-9999px;'
+  document.body.appendChild(tmp)
+  try {
+    new window.QRCode(tmp, { text: url, width: 512, height: 512, correctLevel: window.QRCode.CorrectLevel.M })
+    const canvas = tmp.querySelector('canvas')
+    if (!canvas) throw new Error('no canvas')
+    const a = document.createElement('a')
+    a.download = `${code}.png`
+    a.href = canvas.toDataURL('image/png')
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } catch (e) {
+    window.open(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(url)}`, '_blank')
+  } finally {
+    tmp.remove()
+  }
 }
 
 // ================= 质检报告 =================

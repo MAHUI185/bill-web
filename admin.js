@@ -2677,6 +2677,7 @@ async function renderBase(v) {
       <button data-t="holiday">节假日</button>
       <button data-t="bypass">强制放行</button>
       <button data-t="dock">月台产能配置</button> <!-- ★ 新增月台配置 -->
+      <button data-t="dockmaster">码头管理</button>
     </div>
     <div id="base-view"></div>`
     
@@ -2700,6 +2701,66 @@ async function renderBaseSub(key) {
   if (key === 'holiday') return renderHoliday(v)
   if (key === 'bypass') return renderBypass(v)
   if (key === 'dock') return renderDockCapacity(v) // ★ 新增路由
+  if (key === 'dockmaster') return renderDockMaster(v) // ★ 码头主数据
+}
+
+// ===== 6.0 码头管理 =====
+async function renderDockMaster(v) {
+  const { data: whs } = await ctx.supabase.from('warehouse')
+    .select('warehouse_code, warehouse_name').order('warehouse_code')
+  const { data: docks } = await ctx.supabase.from('dock')
+    .select('*').order('warehouse_code').order('sort_order')
+
+  v.innerHTML = `
+    <div class="card" style="box-shadow:none;padding:16px;margin-bottom:16px;">
+      <h2>新增码头</h2>
+      <div class="row" style="margin-bottom:12px;">
+        <select id="dm-wh" style="flex:1;">
+          ${(whs || []).map(w => `<option value="${w.warehouse_code}">${w.warehouse_name || w.warehouse_code}</option>`).join('')}
+        </select>
+        <input id="dm-name" placeholder="码头名称，如 1号冷冻口" style="flex:1;" />
+        <select id="dm-temp" style="flex:0 0 120px;">
+          <option value="冷冻">冷冻</option>
+          <option value="冷藏">冷藏</option>
+          <option value="常温">常温</option>
+        </select>
+        <button id="dm-add" style="flex:0 0 90px;">保存</button>
+      </div>
+      <div id="dm-msg"></div>
+    </div>
+    <div class="card" style="box-shadow:none;padding:16px;">
+      <h2>码头列表（${(docks || []).length}）</h2>
+      <table>
+        <tr><th>仓库</th><th>码头名称</th><th>温层</th><th>排序</th><th>状态</th><th>操作</th></tr>
+        <tbody>${(docks || []).map(d => `<tr>
+          <td>${d.warehouse_code}</td><td><b>${d.dock_name}</b></td><td>${d.temp_layer || '-'}</td>
+          <td>${d.sort_order || 0}</td><td>${d.status === 1 ? '启用' : '停用'}</td>
+          <td><button class="small danger" data-del="${d.id}">删除</button></td>
+        </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">暂无码头</td></tr>'}</tbody>
+      </table>
+    </div>`
+
+  const msgEl = document.getElementById('dm-msg')
+  document.getElementById('dm-add').onclick = async () => {
+    const wh = document.getElementById('dm-wh').value
+    const name = document.getElementById('dm-name').value.trim()
+    const temp = document.getElementById('dm-temp').value
+    if (!name) return msgEl.innerHTML = ctx.msg('请输入码头名称', false)
+    const { error } = await ctx.supabase.from('dock').insert({
+      warehouse_code: wh, dock_name: name, temp_layer: temp, sort_order: 0, status: 1
+    })
+    if (error) return msgEl.innerHTML = ctx.msg('新增失败：' + error.message, false)
+    renderDockMaster(v)
+  }
+
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除该码头？')) return
+      const { error } = await ctx.supabase.from('dock').delete().eq('id', b.dataset.del)
+      if (error) return alert('删除失败：' + error.message)
+      renderDockMaster(v)
+    }
+  })
 }
 
 // ===== 6.1 仓库 =====
@@ -3426,6 +3487,7 @@ async function renderLogs(v) {
       <button data-t="op" class="active">操作日志</button>
       <button data-t="edit">厂商修改记录</button>
       <button data-t="batch">导出批次</button>
+      <button data-t="queue">排队日志</button>
     </div>
     <div id="log-view"></div>`
 
@@ -3593,12 +3655,38 @@ async function renderLogs(v) {
     loadBatches(0)
   }
 
+  const renderQueueLog = async () => {
+    const el = document.getElementById('log-view')
+    el.innerHTML = '<p style="color:#999;">加载中...</p>'
+    const { data, error } = await ctx.supabase.from('dock_queue_log')
+      .select('*').order('created_at', { ascending: false }).limit(200)
+    if (error) {
+      el.innerHTML = `<p style="color:#cf1322;">加载失败：${error.message}</p>`
+      return
+    }
+    const ACTION = { checkin: '签到', call: '叫号', done: '完成' }
+    el.innerHTML = `
+      <div class="scroll">
+        <table>
+          <tr><th>时间</th><th>动作</th><th>预约码</th><th>码头</th><th>操作人</th></tr>
+          <tbody>${(data || []).map(r => `<tr>
+            <td>${new Date(r.created_at).toLocaleString()}</td>
+            <td>${ACTION[r.action] || r.action}</td>
+            <td>${r.appointment_code || '-'}</td>
+            <td>${r.dock || '-'}</td>
+            <td>${r.operator || '-'}</td>
+          </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">暂无数据</td></tr>'}</tbody>
+        </table>
+      </div>`
+  }
+
   document.querySelectorAll('#log-tabs button').forEach(b => {
     b.onclick = () => {
       document.querySelectorAll('#log-tabs button').forEach(x => x.classList.remove('active'))
       b.classList.add('active')
       if (b.dataset.t === 'op') renderOp()
       else if (b.dataset.t === 'edit') renderEdit()
+      else if (b.dataset.t === 'queue') renderQueueLog()
       else renderBatch()
     }
   })
@@ -4329,9 +4417,7 @@ async function renderDockQueue(v) {
           合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车；签到 / 叫号 / 完成按整车联动，只占一个码头。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
-          <button class="secondary small" id="btn-dock-manage">码头管理</button>
           <button class="secondary small" id="btn-dock-board">码头看板</button>
-          <button class="secondary small" id="btn-queue-log">排队日志</button>
         </div>
         <div class="row" style="margin-bottom:16px;">
           <input id="checkin-code" placeholder="扫描或输入司机提供的预约码，回车签到..." style="flex:1;" />
@@ -4366,41 +4452,6 @@ async function renderDockQueue(v) {
     document.getElementById('btn-dock-board').onclick = () => {
       window.open('./dock.html', '_blank')
     }
-    document.getElementById('btn-dock-manage').onclick = () => openDockManager()
-
-    document.getElementById('btn-queue-log').onclick = async () => {
-      const { data: logs, error } = await ctx.supabase.from('dock_queue_log')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100)
-      if (error) return alert('日志加载失败：' + error.message)
-
-      const box = document.createElement('div')
-      box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
-      box.innerHTML = `
-        <div style="background:#fff;border-radius:8px;max-width:780px;width:100%;max-height:80vh;display:flex;flex-direction:column;padding:16px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <h2 style="margin:0;">收货排队日志（最近 100 条）</h2>
-            <button class="secondary small" id="btn-log-close">关闭</button>
-          </div>
-          <div style="overflow:auto;flex:1;">
-            <table>
-              <tr><th>时间</th><th>动作</th><th>预约码</th><th>码头</th><th>操作人</th></tr>
-              <tbody>${(logs || []).map(l => `<tr>
-                <td>${new Date(l.created_at).toLocaleString()}</td>
-                <td>${({ checkin: '签到', call: '叫号', done: '完成' })[l.action] || l.action}</td>
-                <td>${l.appointment_code || '-'}</td>
-                <td>${l.dock || '-'}</td>
-                <td>${l.operator || '-'}</td>
-              </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">暂无日志</td></tr>'}</tbody>
-            </table>
-          </div>
-        </div>`
-      document.body.appendChild(box)
-      box.querySelector('#btn-log-close').onclick = () => box.remove()
-      box.onclick = (e) => { if (e.target === box) box.remove() }
-    }
-
     document.getElementById('btn-checkin').onclick = async () => {
       const code = document.getElementById('checkin-code').value.trim().toUpperCase()
       if (!code) return
