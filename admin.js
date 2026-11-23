@@ -46,6 +46,7 @@ export async function renderAdmin(view, context) {
   if (context.currentRole === 'super_admin') {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
+      <button data-t="dock_queue">收货排队</button> <!-- ★ 新增 -->
       <button data-t="bills">单据管理</button>
       <button data-t="billing">财务对账</button>
       <button data-t="qc">质检报告</button>
@@ -60,6 +61,7 @@ export async function renderAdmin(view, context) {
   } else if (context.currentRole === 'admin') {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
+      <button data-t="dock_queue">收货排队</button> <!-- ★ 新增 -->
       <button data-t="bills">单据管理</button>
       <button data-t="qc">质检报告</button>
       <button data-t="vendors">厂商管理</button>
@@ -104,6 +106,7 @@ async function renderTab(key) {
   v.innerHTML = '<p>加载中...</p>'
   try {
     if (key === 'progress') return renderProgress(v)
+    if (key === 'dock_queue') return renderDockQueue(v) // ★ 新增
     if (key === 'bills') return renderBills(v)
     if (key === 'billing') return renderBillingAdmin(v) // ★ 新增财务对账
     if (key === 'qc') return renderQCAdmin(v)
@@ -506,7 +509,7 @@ async function renderBills(v) {
     }
   }
 
-  const doExportSummary = async () => {
+    const doExportSummary = async () => {
     const warehouse_code = document.getElementById('exp-wh').value
     const start_date = document.getElementById('exp-start').value
     const end_date = document.getElementById('exp-end').value
@@ -518,40 +521,78 @@ async function renderBills(v) {
     const btn = document.getElementById('btn-export')
     const originalText = btn.innerText
     btn.disabled = true
-    btn.innerText = '汇总中...'
+    btn.innerText = '拉取中...'
     const msgEl = document.getElementById('export-msg')
-    msgEl.innerHTML = '<span style="color:#389e0d;font-size:13px;">正在让数据库极速汇总，请稍候...</span>'
+    msgEl.innerHTML = '<span style="color:#389e0d;font-size:13px;">正在拉取数据，请稍候...</span>'
 
     try {
-      const { data, error } = await ctx.supabase.rpc('get_outbound_summary', {
-        p_warehouse_code: warehouse_code,
-        p_start_date: start_date,
-        p_end_date: end_date,
-        p_bill_types: selectedTypes.length > 0 ? selectedTypes : null
+      let allBills = []
+      let page = 0
+      const pageSize = 1000
+      let hasMore = true
+
+      // 分页拉取明细数据
+      while (hasMore) {
+        let q = ctx.supabase.from('bill_order').select('*')
+          .eq('warehouse_code', warehouse_code)
+          .gte('created_at', start_date + 'T00:00:00+08:00')
+          .lte('created_at', end_date + 'T23:59:59+08:00')
+
+        if (selectedTypes.length > 0) {
+          q = q.in('bill_type', selectedTypes)
+        } else {
+          q = q.not('bill_type', 'ilike', '%入库%')
+        }
+
+        q = q.order('created_at', { ascending: false }).range(page * pageSize, (page + 1) * pageSize - 1)
+        const { data, error } = await q
+        if (error) throw error
+
+        if (data && data.length > 0) {
+          allBills = allBills.concat(data)
+          page++
+          msgEl.innerHTML = `<span style="color:#389e0d;font-size:13px;">已拉取 ${allBills.length} 条数据...</span>`
+          if (data.length < pageSize) hasMore = false
+        } else {
+          hasMore = false
+        }
+      }
+
+      if (allBills.length === 0) throw new Error('该时间段没有符合条件的数据')
+
+      // ★ 完全按截图模板组装数据
+      const exportData = allBills.map(b => {
+        let boxes = b.box_qty
+        if (!boxes || boxes === 0) {
+          const multiplier = Number(String(b.spec || '1').split('*').pop()) || 1
+          boxes = Math.round((b.quantity || 0) / multiplier)
+        }
+        
+        return {
+          '提报时间': new Date(new Date(b.created_at).getTime() + 8 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19),
+          '货号': b.product_code || '',
+          '品名': b.product_name || '',
+          '箱数': boxes,
+          '厂编': b.vendor_code || '',
+          '厂商名称': vMap[b.vendor_code] || '',
+          '门店代码': b.store_code || '',
+          '到店日期': b.pick_date || ''
+        }
       })
 
-      if (error) throw error
-      if (!data || data.length === 0) throw new Error('该时间段没有符合条件的数据')
-
-      const headers = ['配单类型', '货主代码', '商品代码', '品名', '箱数']
-      const rows = data.map(r => [r.bill_type, r.owner_code, r.product_code, r.product_name, r.total_boxes])
+      // 生成并下载 Excel
+      const ws = XLSX.utils.json_to_sheet(exportData)
+      // 设置列宽：提报时间、货号、品名、箱数、厂编、厂商名称、门店代码、到店日期
+      ws['!cols'] = [{wch:22}, {wch:15}, {wch:30}, {wch:10}, {wch:12}, {wch:30}, {wch:12}, {wch:15}]
       
-      let totalBoxes = 0
-      data.forEach(r => totalBoxes += Number(r.total_boxes))
-      
-      rows.push(['合计', '', '', '', totalBoxes])
-
-      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-      ws['!cols'] = [{ wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 40 }, { wch: 10 }]
-
       const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, '出库配单汇总')
-      XLSX.writeFile(wb, `配单汇总_${start_date}_至_${end_date}_${Date.now()}.xlsx`)
+      XLSX.utils.book_append_sheet(wb, ws, '出库明细')
+      XLSX.writeFile(wb, `出库明细_${warehouse_code}_${start_date}_至_${end_date}_${Date.now()}.xlsx`)
 
-      msgEl.innerHTML = ctx.msg(`汇总导出成功！共 ${data.length} 项，总计 ${totalBoxes} 箱。`, true)
+      msgEl.innerHTML = ctx.msg(`导出成功！共 ${allBills.length} 条记录。`, true)
     } catch (err) {
-      console.error('汇总异常:', err)
-      msgEl.innerHTML = ctx.msg(`汇总失败：${err.message}`, false)
+      console.error('导出异常:', err)
+      msgEl.innerHTML = ctx.msg(`导出失败：${err.message}`, false)
     } finally {
       btn.disabled = false
       btn.innerText = originalText
@@ -2632,8 +2673,10 @@ async function renderBase(v) {
       <button data-t="deadline">提报时间段</button>
       <button data-t="holiday">节假日</button>
       <button data-t="bypass">强制放行</button>
+      <button data-t="dock">月台产能配置</button> <!-- ★ 新增月台配置 -->
     </div>
     <div id="base-view"></div>`
+    
   document.querySelectorAll('#base-tabs button').forEach(b => {
     b.onclick = () => {
       document.querySelectorAll('#base-tabs button').forEach(x => x.classList.remove('active'))
@@ -2653,6 +2696,7 @@ async function renderBaseSub(key) {
   if (key === 'deadline') return renderDeadline(v)
   if (key === 'holiday') return renderHoliday(v)
   if (key === 'bypass') return renderBypass(v)
+  if (key === 'dock') return renderDockCapacity(v) // ★ 新增路由
 }
 
 // ===== 6.1 仓库 =====
@@ -4019,4 +4063,162 @@ async function renderAnnouncements(v) {
         </div>`
     }
   })
+}
+
+// ===== 6.7 月台产能配置 =====
+async function renderDockCapacity(v) {
+  const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
+  const { data: list } = await ctx.supabase.from('dock_capacity').select('*').order('warehouse_code').order('start_time')
+
+  v.innerHTML = `
+    <div class="card" style="box-shadow:none;padding:16px; margin-bottom:16px;">
+      <h2>新增月台产能配置</h2>
+      <div class="row" style="margin-bottom:12px;">
+        <select id="dk-wh" style="flex:1;">
+          ${(whs||[]).map(w=>`<option value="${w.warehouse_code}">${w.warehouse_name}</option>`).join('')}
+        </select>
+        <select id="dk-daytype" style="flex:1;">
+          <option value="all">全部日期</option>
+          <option value="weekday">仅工作日</option>
+          <option value="weekend">仅周末</option>
+        </select>
+      </div>
+      <div class="row" style="margin-bottom:12px;">
+        <div><label>开始时间 *</label><input id="dk-start" type="time" value="08:00" /></div>
+        <div><label>结束时间 *</label><input id="dk-end" type="time" value="10:00" /></div>
+        <div><label>最大接收(箱) *</label><input id="dk-max" type="number" min="1" value="1000" /></div>
+      </div>
+      <button id="btn-dk-add">保存配置</button>
+      <div id="dk-msg" style="margin-top:12px;"></div>
+    </div>
+    
+    <div class="card" style="box-shadow:none;padding:16px;">
+      <h2>产能配置列表</h2>
+      <div class="scroll">
+        <table>
+          <tr><th>仓库</th><th>日期类型</th><th>时间段</th><th>最大接收量(箱)</th><th>操作</th></tr>
+          <tbody>
+            ${(list||[]).map(r => `<tr>
+              <td>${r.warehouse_code}</td>
+              <td>${r.day_type === 'all' ? '全部' : r.day_type === 'weekday' ? '工作日' : '周末'}</td>
+              <td>${r.start_time} - ${r.end_time}</td>
+              <td style="font-weight:bold; color:#1677ff;">${r.max_boxes}</td>
+              <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+            </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">无配置</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`
+
+  document.getElementById('btn-dk-add').onclick = async () => {
+    const wh = document.getElementById('dk-wh').value
+    const daytype = document.getElementById('dk-daytype').value
+    const start = document.getElementById('dk-start').value
+    const end = document.getElementById('dk-end').value
+    const max = Number(document.getElementById('dk-max').value)
+    const msgEl = document.getElementById('dk-msg')
+
+    if (!start || !end || !max) return msgEl.innerHTML = ctx.msg('必填项不能为空', false)
+    if (start >= end) return msgEl.innerHTML = ctx.msg('开始时间必须早于结束时间', false)
+
+    msgEl.innerHTML = ctx.msg('保存中...', true)
+    const { error } = await ctx.supabase.from('dock_capacity').insert({
+      warehouse_code: wh, day_type: daytype, start_time: start, end_time: end, max_boxes: max
+    })
+    if (error) {
+      msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false); return
+    }
+    msgEl.innerHTML = ctx.msg('已新增配置', true)
+    renderDockCapacity(v)
+  }
+
+  v.querySelectorAll('[data-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除该配置？')) return
+      const { error } = await ctx.supabase.from('dock_capacity').delete().eq('id', b.dataset.del)
+      if (error) return alert(ctx.translateError(error.message))
+      renderDockCapacity(v)
+    }
+  })
+}
+
+// ================= 收货排队叫号 =================
+async function renderDockQueue(v) {
+  const loadList = async () => {
+    const { data, error } = await ctx.supabase.from('bill_order')
+      .select('appointment_code, vendor_name, vendor_code, box_qty, arrival_time_slot, check_in_time, queue_status, assigned_dock')
+      .in('queue_status', ['waiting', 'calling'])
+      .order('check_in_time', { ascending: true })
+      
+    if (error) return v.innerHTML = ctx.msg('加载失败', false)
+
+    v.innerHTML = `
+      <div class="card" style="padding:16px;">
+        <h2>收货签到与叫号大厅</h2>
+        <div class="row" style="margin-bottom:16px;">
+          <input id="checkin-code" placeholder="扫描或输入司机提供的预约码，回车签到..." style="flex:1;" />
+          <button id="btn-checkin" style="flex:0 0 100px;">确认签到</button>
+        </div>
+        <table>
+          <tr><th>签到时间</th><th>预约码</th><th>厂商</th><th>货量</th><th>预约时段</th><th>状态/码头</th><th>操作</th></tr>
+          <tbody>
+            ${(data||[]).map(r => `<tr>
+              <td>${new Date(r.check_in_time).toLocaleTimeString()}</td>
+              <td><strong>${r.appointment_code}</strong></td>
+              <td>${r.vendor_name}</td>
+              <td><span style="color:#cf1322;font-weight:bold;">${r.box_qty}</span> 箱</td>
+              <td>${r.arrival_time_slot}</td>
+              <td>${r.queue_status === 'calling' ? `<span style="color:#cf1322;">📢 ${r.assigned_dock} 卸货中</span>` : '<span style="color:#389e0d;">🚚 排队中</span>'}</td>
+              <td>
+                ${r.queue_status === 'waiting' 
+                  ? `<button class="small" data-act="call" data-code="${r.appointment_code}">叫号分配码头</button>` 
+                  : `<button class="small secondary" data-act="finish" data-code="${r.appointment_code}">完成卸货</button>`}
+              </td>
+            </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:#999;">暂无排队车辆</td></tr>'}
+          </tbody>
+        </table>
+      </div>`
+      
+    document.getElementById('btn-checkin').onclick = async () => {
+      const code = document.getElementById('checkin-code').value.trim().toUpperCase()
+      if (!code) return
+      // 校验并签到
+      const { data: check } = await ctx.supabase.from('bill_order').select('id, queue_status').eq('appointment_code', code).maybeSingle()
+      if (!check) return alert('预约码不存在')
+      if (check.queue_status !== 'pending') return alert('该预约码已签到或已过号')
+
+      const { error } = await ctx.supabase.from('bill_order')
+        .update({ queue_status: 'waiting', check_in_time: new Date().toISOString() })
+        .eq('appointment_code', code)
+        
+      if (error) return alert('签到失败：' + error.message)
+      alert('✅ 签到成功，已加入排队序列')
+      document.getElementById('checkin-code').value = ''
+      loadList()
+    }
+
+    v.querySelectorAll('button[data-act]').forEach(b => {
+      b.onclick = async () => {
+        const code = b.dataset.code
+        if (b.dataset.act === 'call') {
+          const dock = prompt(`请为车辆 ${code} 分配码头：\n(例如：1号冷冻口、2号冷藏口)`)
+          if (!dock) return
+          const { error } = await ctx.supabase.from('bill_order')
+            .update({ queue_status: 'calling', assigned_dock: dock })
+            .eq('appointment_code', code)
+          if (error) return alert('操作失败：' + error.message)
+          loadList()
+        } else if (b.dataset.act === 'finish') {
+          if (!confirm('确认该车已完成卸货？')) return
+          const { error } = await ctx.supabase.from('bill_order')
+            .update({ queue_status: 'done' })
+            .eq('appointment_code', code)
+          if (error) return alert('操作失败：' + error.message)
+          loadList()
+        }
+      }
+    })
+  }
+
+  loadList()
 }

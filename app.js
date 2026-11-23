@@ -611,7 +611,7 @@ async function renderFill(view) {
 
   let myVendorCode = selectedVendor.vendor_code
 
-  // ★ 核心修复：增加管理员兜底
+  // 获取授权仓库（管理员兜底 2608）
   let myWhs = []
   if (isAdminDelegate || isLogistics) {
     const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
@@ -619,10 +619,7 @@ async function renderFill(view) {
       const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
       myWhs = (vw||[]).map(x => x.warehouse_code)
     }
-    // 如果是管理员代报，且数据库 RLS 拦截导致查不到仓库，强行兜底给 2608
-    if (isAdminDelegate && myWhs.length === 0) {
-      myWhs = ['2608']
-    }
+    if (isAdminDelegate && myWhs.length === 0) myWhs = ['2608']
   } else {
     const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', currentUser.id)
     myWhs = (vw||[]).map(x => x.warehouse_code)
@@ -847,7 +844,6 @@ async function renderFill(view) {
             if (vp) {
               const { data: vw } = await supabase.from('vendor_warehouse').select('warehouse_code').eq('vendor_id', vp.id)
               myWhs = (vw||[]).map(x => x.warehouse_code)
-              // ★ 管理员兜底
               if (isAdminDelegate && myWhs.length === 0) myWhs = ['2608']
               
               if (myWhs.length) {
@@ -858,7 +854,6 @@ async function renderFill(view) {
               }
             }
             
-            // ★ 刷新 locs 和 myStores
             const { data: locData } = await supabase.from('location_config')
               .select('warehouse_code, location_code')
               .eq('status', 1)
@@ -1060,8 +1055,8 @@ async function renderFill(view) {
       const filledOut = outRows.filter(isOutRowFilled)
       if (filledIn.length === 0 && filledOut.length === 0) return msgEl.innerHTML = msg('请至少填写一条单据', false)
 
+      // 1. 基础防呆校验
       const errors = []
-
       inRows.forEach((r, idx) => {
         if (!isInRowFilled(r)) return
         const missing = []
@@ -1098,6 +1093,7 @@ async function renderFill(view) {
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
 
+      // 2. DSP 出库前置校验
       const dspOutRows = validOut.filter(r =>
         r.bill_type === 'DSP出库' || r.bill_type === '济转西DSP(越库)'
       )
@@ -1132,63 +1128,185 @@ async function renderFill(view) {
         }
       }
 
-      let vendorAuthId
-      if (isLogistics || isAdminDelegate) {
-        const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
-        if (!vp) return msgEl.innerHTML = msg('找不到代报厂商', false)
-        vendorAuthId = vp.id
-      } else {
-        vendorAuthId = currentUser.id
+      // 3. 计算入库总箱数
+      let totalBoxes = 0
+      validIn.forEach(r => { totalBoxes += Number(r.quantity) || 0 })
+      
+      // 纯出库跳过月台弹窗
+      if (totalBoxes === 0) {
+        await doFinalSubmit(null, '', '');
+        return;
       }
 
-      let defaultWh = myWhs[0]
-      if (!defaultWh) return msgEl.innerHTML = msg('没有授权仓库', false)
+      const date = validIn[0]?.arrival_date;
+      if (!date) return msgEl.innerHTML = msg('请先填写到仓日期', false);
 
-      function calcQty(specStr, boxQty) {
-        if (!boxQty) return 0
-        if (!specStr) return Number(boxQty)
-        const parts = String(specStr).split('*')
-        const multiplier = Number(parts[parts.length - 1])
-        if (isNaN(multiplier) || multiplier === 0) return Number(boxQty)
-        return Number(boxQty) * multiplier
+      msgEl.innerHTML = msg('正在加载预约看板...', true)
+      
+      // 4. 请求可用时间段
+      const { data: slots, error: slotErr } = await supabase.rpc('get_available_slots', {
+        p_warehouse: myWhs[0],
+        p_date: date
+      });
+
+      if (slotErr || !slots || slots.length === 0) {
+        msgEl.innerHTML = msg('该日期未配置月台产能，或加载失败。', false)
+        return
       }
 
-      const inPayloads = validIn.map(r => ({
-        vendor_id: vendorAuthId, warehouse_code: defaultWh,
-        bill_type: r.bill_type, source_no: r.source_no || null,
-        vendor_code: r.vendor_code, owner_code: r.owner_code,
-        location_code: r.location_code, logistics_mode: getModeByType(r.bill_type),
-        product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
-        price: 1, arrival_date: r.arrival_date || null, effective_date: addOneDay(r.arrival_date),
-        whole_process: 'NO', 
-        product_name: r.product_name || '',
-        product_remark: r.product_name || r.product_code || '无',
-        submitter_type: isAdmin ? 'admin' : 'vendor'
-      }))
+      // 5. 渲染看板弹窗（包含司机信息输入）
+      const modalId = 'slot-modal';
+      const existing = document.getElementById(modalId);
+      if (existing) existing.remove();
 
-      const outPayloads = validOut.map(r => ({
-        vendor_id: vendorAuthId, warehouse_code: defaultWh,
-        bill_type: r.bill_type, source_no: r.source_no || null, inbound_order_no: r.source_no || null,
-        owner_code: r.owner_code, store_code: r.store_code,
-        location_code: r.location_code, logistics_mode: getModeByType(r.bill_type),
-        pick_date: r.pick_date || null, effective_date: addOneDay(r.pick_date),
-        product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
-        price: 1, 
-        product_name: r.product_name || '',
-        product_remark: r.product_name || r.product_code || '无',
-        submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode
-      }))
+      const modal = document.createElement('div');
+      modal.id = modalId;
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+      
+      modal.innerHTML = `
+        <div style="background:#fff;border-radius:12px;max-width:500px;width:100%;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.2);">
+          <h2 style="margin-bottom:8px;">选择到仓时间段</h2>
+          <p style="color:#666;font-size:13px;margin-bottom:16px;">
+            本次入库总计：<strong style="color:#cf1322;font-size:16px;">${totalBoxes}</strong> 箱。请选择剩余产能充足的时间段并填写司机信息。
+          </p>
+          
+          <div style="display:flex;gap:12px;margin-bottom:16px;">
+            <input id="driver-name" placeholder="司机姓名 *" style="flex:1; padding:8px; border:1px solid #ccc; border-radius:4px;" />
+            <input id="driver-phone" placeholder="司机手机号 *" style="flex:1; padding:8px; border:1px solid #ccc; border-radius:4px;" />
+          </div>
 
-      const all = [...inPayloads, ...outPayloads]
-      msgEl.innerHTML = msg('预约中...', true)
+          <div style="display:flex;flex-direction:column;gap:12px;max-height:260px;overflow-y:auto;">
+            ${slots.map(s => {
+              const isFull = s.remaining_boxes < totalBoxes;
+              return `<button 
+                class="slot-btn" data-slot="${s.slot_name}"
+                style="width:100%;padding:14px;border-radius:8px;border:1px solid ${isFull ? '#e0e0e0' : '#91caff'};background:${isFull ? '#f5f5f5' : '#f0f7ff'};cursor:${isFull ? 'not-allowed' : 'pointer'};display:flex;justify-content:space-between;align-items:center;transition:all .2s;"
+                ${isFull ? 'disabled' : ''}>
+                <div style="font-weight:bold;color:${isFull ? '#999' : '#1677ff'};font-size:16px;">${s.slot_name}</div>
+                <div style="font-size:13px;color:${isFull ? '#999' : '#389e0d'};">
+                  ${isFull ? '产能不足' : `可用余量: ${s.remaining_boxes} 箱`}
+                </div>
+              </button>`
+            }).join('')}
+          </div>
+          <div style="text-align:right;margin-top:20px;">
+            <button class="secondary" onclick="document.getElementById('${modalId}').remove()">取消</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
 
-      const { error } = await supabase.from('bill_order').insert(all)
-      if (error) return msgEl.innerHTML = msg(translateError(error.message), false)
+      modal.querySelectorAll('.slot-btn:not([disabled])').forEach(btn => {
+        btn.onclick = () => {
+          const dName = document.getElementById('driver-name').value.trim();
+          const dPhone = document.getElementById('driver-phone').value.trim();
+          if (!dName || !dPhone) return alert('请填写司机姓名和手机号');
+          
+          const selectedSlot = btn.dataset.slot;
+          modal.remove();
+          doFinalSubmit(selectedSlot, dName, dPhone);
+        }
+      })
 
-      msgEl.innerHTML = msg(`预约成功：入库 ${inPayloads.length} 条，出库 ${outPayloads.length} 条`, true)
-      inRows = [newInRowForVendor(myVendorCode)]
-      outRows = [newOutRowForVendor(myVendorCode)]
-      setTimeout(() => render(), 800)
+      // 6. 最终提交逻辑
+      async function doFinalSubmit(slotName, driverName, driverPhone) {
+        msgEl.innerHTML = msg('正在校验并提交...', true)
+
+        // 防超卖核心校验
+        if (slotName) {
+          const { error: bookErr } = await supabase.rpc('check_and_book_capacity', {
+            p_warehouse: myWhs[0],
+            p_date: date,
+            p_slot: slotName,
+            p_boxes: totalBoxes
+          });
+          if (bookErr) {
+            msgEl.innerHTML = `<div class="msg err">提交失败：${bookErr.message}</div>`;
+            return;
+          }
+        }
+
+        let vendorAuthId = currentUser.id
+        if (isLogistics || isAdminDelegate) {
+          const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
+          if (vp) vendorAuthId = vp.id
+        }
+
+        let defaultWh = myWhs[0]
+        function calcQty(specStr, boxQty) {
+          if (!boxQty) return 0
+          if (!specStr) return Number(boxQty)
+          const multiplier = Number(String(specStr).split('*').pop())
+          return isNaN(multiplier) || multiplier === 0 ? Number(boxQty) : Number(boxQty) * multiplier
+        }
+
+        // 生成预约码
+        let appointmentCode = null
+        if (slotName) {
+          const dateStr = date.replace(/-/g, '').slice(4); // 如 1122
+          const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
+          appointmentCode = `YD${dateStr}${randomStr}`;
+        }
+
+        const inPayloads = validIn.map(r => ({
+          vendor_id: vendorAuthId, warehouse_code: defaultWh,
+          bill_type: r.bill_type, source_no: r.source_no || null,
+          vendor_code: r.vendor_code, owner_code: r.owner_code,
+          location_code: r.location_code, logistics_mode: getModeByType(r.bill_type),
+          product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
+          price: 1, arrival_date: r.arrival_date || null, effective_date: addOneDay(r.arrival_date),
+          whole_process: 'NO', 
+          product_name: r.product_name || '', product_remark: r.product_name || r.product_code || '无',
+          submitter_type: isAdmin ? 'admin' : 'vendor',
+          arrival_time_slot: slotName, 
+          box_qty: Number(r.quantity),
+          driver_name: driverName,
+          driver_phone: driverPhone,
+          appointment_code: appointmentCode,
+          queue_status: 'pending'
+        }))
+
+        const outPayloads = validOut.map(r => ({
+          vendor_id: vendorAuthId, warehouse_code: defaultWh,
+          bill_type: r.bill_type, source_no: r.source_no || null, inbound_order_no: r.source_no || null,
+          owner_code: r.owner_code, store_code: r.store_code,
+          location_code: r.location_code, logistics_mode: getModeByType(r.bill_type),
+          pick_date: r.pick_date || null, effective_date: addOneDay(r.pick_date),
+          product_code: r.product_code, spec: r.spec, quantity: calcQty(r.spec, r.quantity),
+          price: 1, 
+          product_name: r.product_name || '', product_remark: r.product_name || r.product_code || '无',
+          submitter_type: isAdmin ? 'admin' : 'vendor', vendor_code: myVendorCode,
+          box_qty: Number(r.quantity)
+        }))
+
+        const { error } = await supabase.from('bill_order').insert([...inPayloads, ...outPayloads])
+        if (error) return msgEl.innerHTML = msg(translateError(error.message), false)
+
+        msgEl.innerHTML = msg(`预约成功！${appointmentCode ? '预约码：' + appointmentCode : ''}`, true)
+        
+        // 弹出二维码
+        if (appointmentCode) {
+          const qrUrl = `https://bill.mahui.pw/track.html?code=${appointmentCode}`;
+          const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrUrl)}`;
+          
+          const modalQr = document.createElement('div');
+          modalQr.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+          modalQr.innerHTML = `
+            <div style="background:#fff;border-radius:12px;padding:24px;text-align:center;max-width:400px;width:100%;">
+              <h2 style="margin-bottom:12px;">✅ 预约成功</h2>
+              <p style="font-size:14px;color:#666;margin-bottom:16px;">请让司机扫码进入排队进度页（或在微信中打开）</p>
+              <div style="font-size:28px;font-weight:bold;color:#1677ff;margin-bottom:16px;">${appointmentCode}</div>
+              <img src="${qrImg}" style="width:200px;height:200px;margin:0 auto;display:block;" />
+              <button class="secondary" style="width:100%;margin-top:20px;" onclick="this.closest('div').parentElement.remove()">关闭</button>
+            </div>
+          `;
+          document.body.appendChild(modalQr);
+        }
+
+        inRows = [newInRowForVendor(myVendorCode)]
+        outRows = [newOutRowForVendor(myVendorCode)]
+        setTimeout(() => render(), 1000)
+      }
     }
   }
 

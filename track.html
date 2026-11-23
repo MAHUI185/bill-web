@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>排队进度</title>
+<style>
+  body { margin: 0; background: #0f172a; color: #fff; font-family: -apple-system, sans-serif; display: flex; flex-direction: column; height: 100vh; text-align: center; transition: background 0.3s; }
+  .container { padding: 20px; flex: 1; display: flex; flex-direction: column; justify-content: center; }
+  .card { background: rgba(255,255,255,0.1); border-radius: 16px; padding: 24px; margin-bottom: 20px; }
+  .title { font-size: 16px; color: #94a3b8; margin-bottom: 10px; }
+  .value { font-size: 32px; font-weight: bold; color: #38bdf8; }
+  .status-box { font-size: 24px; font-weight: bold; margin-top: 20px; color: #fbbf24; }
+  .btn-active { background: #1677ff; color: #fff; border: none; padding: 16px; border-radius: 8px; font-size: 18px; width: 100%; margin-top: 20px; }
+  
+  /* 叫号闪烁强提醒特效 */
+  @keyframes flashBg { 0% { background: #dc2626; } 50% { background: #7f1d1d; } 100% { background: #dc2626; } }
+  .calling-mode { animation: flashBg 0.8s infinite; display: flex; flex-direction: column; justify-content: center; height: 100vh; padding: 20px; }
+  .calling-text { font-size: 40px; font-weight: bold; color: #fff; text-shadow: 0 4px 10px rgba(0,0,0,0.5); line-height: 1.5; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div class="container" id="main-content">
+  <h1 style="font-size: 28px; margin-bottom: 30px;">🚚 仓库排队进度</h1>
+  
+  <div class="card">
+    <div class="title">预约单号</div>
+    <div class="value" id="disp-code">--</div>
+  </div>
+
+  <div class="card">
+    <div class="title">厂商 / 货量</div>
+    <div style="font-size: 18px; font-weight: bold;" id="disp-vendor">--</div>
+    <div style="font-size: 18px; margin-top: 5px;" id="disp-boxes">-- 箱</div>
+  </div>
+
+  <div class="card">
+    <div class="title">前方排队车辆</div>
+    <div class="value" id="disp-ahead" style="color: #f87171;">-- 辆</div>
+  </div>
+
+  <div class="status-box" id="disp-status">正在获取状态...</div>
+</div>
+
+<!-- 全屏叫号弹窗 -->
+<div class="calling-mode" id="calling-screen" style="display: none;">
+  <div style="font-size: 60px; margin-bottom: 20px;">📢</div>
+  <div class="calling-text">请前往</div>
+  <div class="calling-text" id="disp-dock" style="color: #fde047; font-size: 56px; margin: 20px 0;">--</div>
+  <div class="calling-text" style="font-size: 32px;">卸货！</div>
+</div>
+
+<script>
+  const SUPABASE_URL = 'https://gpjdzgakvqhnpykuqbfr.supabase.co';
+  const SUPABASE_KEY = 'sb_publishable_vUAhYoF1D51WyWlPnLzSlA_JDBODtaW';
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get('code');
+  let isVoiceEnabled = false;
+  let isCalling = false;
+
+  if (!code) {
+    document.getElementById('disp-status').innerText = "❌ 缺少预约码参数";
+  } else {
+    document.getElementById('disp-code').innerText = code;
+    
+    // 微信浏览器要求必须手动点击屏幕才能开启语音
+    if (!isVoiceEnabled && !isCalling) {
+      const btn = document.createElement('button');
+      btn.className = 'btn-active';
+      btn.innerText = '🔊 点击开启语音播报';
+      btn.onclick = () => { isVoiceEnabled = true; btn.remove(); speak('语音已激活，正在为您排队'); };
+      document.getElementById('main-content').appendChild(btn);
+    }
+  }
+
+  function speak(text) {
+    if (!('speechSynthesis' in window) || !isVoiceEnabled) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'zh-CN';
+    u.rate = 0.9;
+    window.speechSynthesis.speak(u);
+  }
+
+  async function checkStatus() {
+    if (!code || isCalling) return;
+
+    const { data, error } = await supabase.rpc('get_queue_status', { p_code: code });
+    if (error || !data || data.length === 0) return;
+
+    const info = data[0];
+    document.getElementById('disp-vendor').innerText = info.vendor_name;
+    document.getElementById('disp-boxes').innerText = info.total_boxes;
+    
+    if (info.queue_status === 'pending') {
+      document.getElementById('disp-status').innerText = '⏳ 待签到';
+      document.getElementById('disp-ahead').innerText = '-- 辆';
+    } else if (info.queue_status === 'waiting') {
+      document.getElementById('disp-status').innerText = '🚚 已签到，排队中';
+      document.getElementById('disp-ahead').innerText = (info.cars_ahead || 0) + ' 辆';
+    } else if (info.queue_status === 'calling') {
+      // ★ 触发强提醒
+      isCalling = true;
+      document.getElementById('main-content').style.display = 'none';
+      document.getElementById('calling-screen').style.display = 'flex';
+      document.getElementById('disp-dock').innerText = info.assigned_dock;
+      
+      // 震动（部分手机支持）
+      if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500, 1000]);
+      // 语音播报
+      speak(`请前往${info.assigned_dock}卸货`);
+    }
+  }
+
+  // 每 10 秒刷新一次
+  if (code) {
+    checkStatus();
+    setInterval(checkStatus, 10000);
+  }
+</script>
+</body>
+</html>
