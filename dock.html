@@ -27,6 +27,9 @@
   .waiting td.pos { color: #38bdf8; font-weight: bold; font-size: 20px; width: 70px; }
   .waiting td.code { color: #fbbf24; font-weight: bold; }
   .empty { color: #475569; text-align: center; padding: 24px; font-size: 16px; }
+  .free { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip { background: #052e16; border: 1px solid #166534; color: #4ade80; padding: 10px 16px; border-radius: 999px; font-size: 16px; }
+  .chip span { color: #64748b; font-size: 12px; margin-left: 4px; }
   .err { color: #f87171; margin-top: 16px; font-size: 14px; }
   .updated { position: fixed; right: 20px; bottom: 14px; font-size: 12px; color: #475569; }
 </style>
@@ -38,12 +41,15 @@
     <h1>🏭 收货码头看板</h1>
     <div class="updated" id="updated"></div>
   </div>
-  <div class="stats">卸货中<b id="calling-count">0</b>车 · 排队<b id="waiting-count">0</b>车</div>
+  <div class="stats">卸货中<b id="calling-count">0</b>车 · 空闲<b id="free-count">0</b>个 · 排队<b id="waiting-count">0</b>车</div>
   <div class="clock" id="clock">--:--:--</div>
 </header>
 
 <h2>卸货中</h2>
 <div class="docks" id="docks"></div>
+
+<h2>空闲码头</h2>
+<div class="free" id="free-docks"></div>
 
 <h2>等待叫号</h2>
 <div class="waiting">
@@ -97,15 +103,22 @@
 
     const rows = data || [];
     const calling = rows.filter(r => r.status === 'calling');
-    const waiting = rows.filter(r => r.status !== 'calling');
+    const free = rows.filter(r => r.status === 'free');
+    const waiting = rows.filter(r => r.status === 'waiting');
 
     document.getElementById('calling-count').innerText = calling.length;
+    document.getElementById('free-count').innerText = free.length;
     document.getElementById('waiting-count').innerText = waiting.length;
+
+    document.getElementById('free-docks').innerHTML = free.map(r => `
+      <span class="chip">${esc(r.dock_name)}${r.temp_layer ? ' · ' + esc(r.temp_layer) : ''}
+        <span>${esc(r.warehouse_code || '')}</span></span>`).join('')
+      || '<div class="empty">暂无空闲码头</div>';
 
     // 卸货中：按码头分组
     const byDock = new Map();
     calling.forEach(r => {
-      const d = r.assigned_dock || '未分配码头';
+      const d = r.dock_name || r.assigned_dock || '未分配码头';
       if (!byDock.has(d)) byDock.set(d, []);
       byDock.get(d).push(r);
     });

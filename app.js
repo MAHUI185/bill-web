@@ -777,9 +777,14 @@ async function renderFill(view) {
         <h3 style="margin:24px 0 8px;">预览</h3>
         <div id="preview-box"></div>
 
-        <div style="margin-top:16px;">
+        <div style="margin-top:16px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <input id="existing-code" placeholder="已有预约码（无单预约补单，选填）" style="max-width:300px; margin:0;" />
+          <span style="font-size:12px; color:#888;">填写后本次入库行会并入该预约码，不再新生成</span>
+        </div>
+        <div style="margin-top:12px;">
           <button id="btn-submit-all">提交预约</button>
           <button class="secondary" id="btn-clear-all">清空</button>
+          <button class="secondary" id="btn-walkin">无单预约</button>
         </div>
       </div>`
 
@@ -1045,6 +1050,89 @@ async function renderFill(view) {
       render()
     }
 
+    // ★ 无单预约：先占时段，到仓后补单
+    const btnWalkin = document.getElementById('btn-walkin')
+    if (btnWalkin) btnWalkin.onclick = () => {
+      const modal = document.createElement('div')
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
+      modal.innerHTML = `
+        <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:24px;">
+          <h2 style="margin-bottom:8px;">无单预约</h2>
+          <p style="font-size:13px;color:#666;margin-bottom:16px;">没有商品单据也能先占时段；到仓后在「我的单据」用预约码补单。</p>
+          <div class="row">
+            <div><label>仓库 *</label><select id="wk-wh">${myWhs.map(w => `<option value="${w}">${w}</option>`).join('')}</select></div>
+            <div><label>到仓日期 *</label><input id="wk-date" type="date" value="${addDays(todayBj(), 1)}" /></div>
+          </div>
+          <div><label>时段 *</label><select id="wk-slot"><option value="">加载中...</option></select></div>
+          <div class="row">
+            <div><label>箱数 *</label><input id="wk-boxes" type="number" min="1" value="1" /></div>
+            <div><label>司机姓名 *</label><input id="wk-driver" /></div>
+          </div>
+          <div><label>司机手机号 *</label><input id="wk-phone" /></div>
+          <div id="wk-msg" style="margin-top:8px;"></div>
+          <div style="text-align:right;margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+            <button class="secondary" id="wk-cancel">取消</button>
+            <button id="wk-submit">提交预约</button>
+          </div>
+        </div>`
+      document.body.appendChild(modal)
+      const close = () => modal.remove()
+      modal.querySelector('#wk-cancel').onclick = close
+
+      async function loadSlots() {
+        const wh = modal.querySelector('#wk-wh').value
+        const d = modal.querySelector('#wk-date').value
+        const sel = modal.querySelector('#wk-slot')
+        if (!wh || !d) { sel.innerHTML = '<option value="">请选择仓库和日期</option>'; return }
+        sel.innerHTML = '<option value="">加载中...</option>'
+        const { data, error } = await supabase.rpc('get_available_slots', { p_warehouse: wh, p_date: d })
+        if (error) { sel.innerHTML = '<option value="">时段加载失败</option>'; return }
+        sel.innerHTML = (data || []).map(s => `<option value="${s.slot_name}" ${Number(s.remaining_boxes) <= 0 ? 'disabled' : ''}>${s.slot_name}（余 ${s.remaining_boxes} 箱）</option>`).join('') || '<option value="">该日期未配置时段</option>'
+      }
+      modal.querySelector('#wk-wh').onchange = loadSlots
+      modal.querySelector('#wk-date').onchange = loadSlots
+      loadSlots()
+
+      modal.querySelector('#wk-submit').onclick = async () => {
+        const msgEl2 = modal.querySelector('#wk-msg')
+        const wh = modal.querySelector('#wk-wh').value
+        const date = modal.querySelector('#wk-date').value
+        const slot = modal.querySelector('#wk-slot').value
+        const boxes = Number(modal.querySelector('#wk-boxes').value)
+        const name = modal.querySelector('#wk-driver').value.trim()
+        const phone = modal.querySelector('#wk-phone').value.trim()
+        if (!slot) return msgEl2.innerHTML = msg('请选择时段', false)
+        if (!boxes || boxes <= 0) return msgEl2.innerHTML = msg('箱数必须大于 0', false)
+        if (!name || !phone) return msgEl2.innerHTML = msg('请填写司机姓名和手机号', false)
+
+        msgEl2.innerHTML = msg('提交中...', true)
+        const { data, error } = await supabase.rpc('create_walkin_appointment', {
+          p_vendor_code: myVendorCode,
+          p_warehouse: wh,
+          p_date: date,
+          p_slot: slot,
+          p_boxes: boxes,
+          p_driver_name: name,
+          p_driver_phone: phone
+        })
+        if (error) return msgEl2.innerHTML = msg('提交失败：' + error.message, false)
+        const r = Array.isArray(data) ? data[0] : data
+        if (!r || !r.ok) return msgEl2.innerHTML = msg((r && r.message) || '提交失败', false)
+
+        const code = r.code
+        const qrUrl = `https://bill.mahui.pw/track.html?code=${code}&v=20261123`
+        const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrUrl)}`
+        modal.querySelector('div').innerHTML = `
+          <h2 style="margin-bottom:12px;">✅ 预约成功</h2>
+          <p style="font-size:14px;color:#666;">${date} ${slot} · ${boxes} 箱</p>
+          <div style="font-size:28px;font-weight:bold;color:#1677ff;margin:12px 0;">${code}</div>
+          <img src="${qrImg}" style="width:200px;height:200px;margin:0 auto;display:block;" />
+          <p style="font-size:12px;color:#888;margin-top:12px;">到仓后在「我的单据」用该预约码补单</p>
+          <button class="secondary" style="width:100%;margin-top:16px;" id="wk-done">知道了</button>`
+        modal.querySelector('#wk-done').onclick = close
+      }
+    }
+
     const btnSubmit = document.getElementById('btn-submit-all')
     if (btnSubmit) btnSubmit.onclick = async () => {
       const msgEl = document.getElementById('fill-msg')
@@ -1092,6 +1180,52 @@ async function renderFill(view) {
 
       const validIn = inRows.filter(isInRowFilled)
       const validOut = outRows.filter(isOutRowFilled)
+
+      // ★ 无单预约补单：填写了已有预约码时，并入该预约码，不新生成
+      const existingCode = (document.getElementById('existing-code')?.value || '').trim().toUpperCase()
+      if (existingCode) {
+        if (!validIn.length) return msgEl.innerHTML = msg('补单必须至少填写一条入库行', false)
+        if (validOut.length) return msgEl.innerHTML = msg('补单不支持出库行，请先清空出库单', false)
+
+        const { data: ph, error: phErr } = await supabase.from('bill_order')
+          .select('appointment_code, arrival_date, arrival_time_slot, box_qty, queue_status')
+          .eq('appointment_code', existingCode)
+          .eq('bill_type', '无单预约')
+          .maybeSingle()
+
+        if (phErr || !ph) return msgEl.innerHTML = msg('预约码不存在或已补单，请检查', false)
+
+        const rows = validIn.map(r => {
+          const mult = Number(String(r.spec || '').split('*').pop())
+          return {
+            bill_type: r.bill_type,
+            source_no: r.source_no || null,
+            owner_code: r.owner_code,
+            location_code: r.location_code,
+            product_code: r.product_code,
+            product_name: r.product_name || '',
+            spec: r.spec,
+            quantity: (Number(r.quantity) || 0) * (isNaN(mult) || mult === 0 ? 1 : mult),
+            price: 1,
+            box_qty: Number(r.quantity) || 0
+          }
+        })
+
+        msgEl.innerHTML = msg('正在补单...', true)
+        const { data: ret, error } = await supabase.rpc('submit_walkin_orders', {
+          p_code: existingCode,
+          p_rows: rows
+        })
+        if (error) return msgEl.innerHTML = msg('补单失败：' + error.message, false)
+        const res = Array.isArray(ret) ? ret[0] : ret
+        if (!res || !res.ok) return msgEl.innerHTML = msg((res && res.message) || '补单失败', false)
+
+        msgEl.innerHTML = msg(`${res.message}（时段 ${ph.arrival_time_slot}）`, true)
+        inRows = [newInRowForVendor(myVendorCode)]
+        outRows = [newOutRowForVendor(myVendorCode)]
+        setTimeout(() => render(), 1200)
+        return
+      }
 
       // 2. DSP 出库前置校验
       const dspOutRows = validOut.filter(r =>
@@ -1844,8 +1978,8 @@ async function renderMy(view) {
 
     tbody.innerHTML = (data||[]).map(b => `<tr>
       <td>${b.id}</td><td>${b.vendor_code||''}</td><td>${b.bill_type}</td><td>${b.product_code}</td>
-      <td>${b.quantity}</td><td>${b.warehouse_code}</td>
-      <td>${b.appointment_code ? `<b>${b.appointment_code}</b><br><span style="font-size:12px;color:#666;">${b.arrival_time_slot || ''} ${({ pending: '待签到', waiting: '排队中', calling: '叫号中', done: '已完成' })[b.queue_status] || ''}</span><br><a href="https://bill.mahui.pw/track.html?code=${b.appointment_code}&v=20261123" target="_blank" style="font-size:12px;">排队进度</a>` : '—'}</td>
+      <td>${b.bill_type === '无单预约' ? (b.box_qty || 0) : b.quantity}</td><td>${b.warehouse_code}</td>
+      <td>${b.appointment_code ? `<b>${b.appointment_code}</b><br><span style="font-size:12px;color:#666;">${b.arrival_time_slot || ''} ${({ pending: '待签到', waiting: '排队中', calling: '叫号中', done: '已完成' })[b.queue_status] || ''}</span><br><a href="https://bill.mahui.pw/track.html?code=${b.appointment_code}&v=20261123" target="_blank" style="font-size:12px;">排队进度</a>${b.bill_type === '无单预约' ? '<br><span style="font-size:12px;color:#d46b08;">到「管理填报」填此码补单</span>' : ''}` : '—'}</td>
       <td>${b.exported ? '是' : '否'}</td>
       <td>${new Date(b.created_at).toLocaleString()}</td>
       <td>

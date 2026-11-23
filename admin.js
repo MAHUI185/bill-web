@@ -405,6 +405,7 @@ async function renderBills(v) {
 
       while (hasMore) {
         let q = ctx.supabase.from('bill_order').select('*')
+          .neq('bill_type', '无单预约')
           .eq('warehouse_code', warehouse_code)
           .gte('created_at', start_date + 'T00:00:00+08:00')
           .lte('created_at', end_date + 'T23:59:59+08:00')
@@ -534,6 +535,7 @@ async function renderBills(v) {
       // 分页拉取明细数据
       while (hasMore) {
         let q = ctx.supabase.from('bill_order').select('*')
+          .neq('bill_type', '无单预约')
           .eq('warehouse_code', warehouse_code)
           .gte('created_at', start_date + 'T00:00:00+08:00')
           .lte('created_at', end_date + 'T23:59:59+08:00')
@@ -637,6 +639,7 @@ async function renderBills(v) {
     const ex = document.getElementById('b-exported').value
 
     let countQuery = ctx.supabase.from('bill_order').select('*', { count: 'exact', head: true })
+      .neq('bill_type', '无单预约')
     if (kw) countQuery = countQuery.or(`vendor_code.ilike.%${kw}%,source_no.ilike.%${kw}%,product_code.ilike.%${kw}%`)
     if (wh) countQuery = countQuery.eq('warehouse_code', wh)
     if (ex === '0') countQuery = countQuery.eq('exported', false)
@@ -648,7 +651,7 @@ async function renderBills(v) {
       return
     }
 
-    let q = ctx.supabase.from('bill_order').select('*')
+    let q = ctx.supabase.from('bill_order').select('*').neq('bill_type', '无单预约')
     if (kw) q = q.or(`vendor_code.ilike.%${kw}%,source_no.ilike.%${kw}%,product_code.ilike.%${kw}%`)
     if (wh) q = q.eq('warehouse_code', wh)
     if (ex === '0') q = q.eq('exported', false)
@@ -4159,12 +4162,131 @@ async function logQueueAction(action, key, code, dock) {
   }
 }
 
+async function openDockManager() {
+  const { data: whs } = await ctx.supabase.from('warehouse')
+    .select('warehouse_code, warehouse_name').order('warehouse_code')
+  const { data: docks } = await ctx.supabase.from('dock')
+    .select('*').order('warehouse_code').order('sort_order')
+
+  const box = document.createElement('div')
+  box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
+  box.innerHTML = `
+    <div style="background:#fff;border-radius:8px;max-width:760px;width:100%;max-height:82vh;display:flex;flex-direction:column;padding:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h2 style="margin:0;">码头管理</h2>
+        <button class="secondary small" id="dm-close">关闭</button>
+      </div>
+      <div class="row" style="margin-bottom:12px;">
+        <select id="dm-wh" style="flex:1;">
+          ${(whs || []).map(w => `<option value="${w.warehouse_code}">${w.warehouse_name || w.warehouse_code}</option>`).join('')}
+        </select>
+        <input id="dm-name" placeholder="码头名称，如 1号冷冻口" style="flex:1;" />
+        <select id="dm-temp" style="flex:0 0 110px;">
+          <option value="冷冻">冷冻</option>
+          <option value="冷藏">冷藏</option>
+          <option value="常温">常温</option>
+        </select>
+        <button id="dm-add" style="flex:0 0 80px;">新增</button>
+      </div>
+      <div style="overflow:auto;flex:1;">
+        <table>
+          <tr><th>仓库</th><th>码头</th><th>温层</th><th>排序</th><th>状态</th><th>操作</th></tr>
+          <tbody>${(docks || []).map(d => `<tr>
+            <td>${d.warehouse_code}</td><td><b>${d.dock_name}</b></td><td>${d.temp_layer || '-'}</td>
+            <td>${d.sort_order || 0}</td><td>${d.status === 1 ? '启用' : '停用'}</td>
+            <td><button class="small danger" data-dm-del="${d.id}">删除</button></td>
+          </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#999;">暂无码头</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`
+
+  document.body.appendChild(box)
+  box.querySelector('#dm-close').onclick = () => box.remove()
+
+  box.querySelector('#dm-add').onclick = async () => {
+    const wh = box.querySelector('#dm-wh').value
+    const name = box.querySelector('#dm-name').value.trim()
+    const temp = box.querySelector('#dm-temp').value
+    if (!name) return alert('请输入码头名称')
+    const { error } = await ctx.supabase.from('dock').insert({
+      warehouse_code: wh, dock_name: name, temp_layer: temp, sort_order: 0, status: 1
+    })
+    if (error) return alert('新增失败：' + error.message)
+    box.remove()
+    openDockManager()
+  }
+
+  box.querySelectorAll('[data-dm-del]').forEach(b => {
+    b.onclick = async () => {
+      if (!confirm('确定删除该码头？')) return
+      const { error } = await ctx.supabase.from('dock').delete().eq('id', b.dataset.dmDel)
+      if (error) return alert('删除失败：' + error.message)
+      box.remove()
+      openDockManager()
+    }
+  })
+}
+
+function pickDock(wh) {
+  return new Promise(async (resolve) => {
+    let docks = []
+    let busy = new Set()
+    try {
+      if (wh) {
+        const { data } = await ctx.supabase.from('dock')
+          .select('*').eq('warehouse_code', wh).eq('status', 1)
+          .order('sort_order').order('dock_name')
+        docks = data || []
+        const { data: occupied } = await ctx.supabase.from('bill_order')
+          .select('assigned_dock').eq('warehouse_code', wh).eq('queue_status', 'calling')
+        busy = new Set((occupied || []).map(x => x.assigned_dock).filter(Boolean))
+      }
+    } catch (e) { /* 码头表未建时退回手输 */ }
+
+    const box = document.createElement('div')
+    box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
+    box.innerHTML = `
+      <div style="background:#fff;border-radius:8px;max-width:460px;width:100%;padding:20px;">
+        <h2 style="margin:0 0 12px;">分配码头</h2>
+        <div style="display:flex;flex-direction:column;gap:8px;max-height:50vh;overflow:auto;">
+          ${docks.map(d => {
+            const used = busy.has(d.dock_name)
+            return `<button class="dock-pick" data-name="${d.dock_name}" ${used ? 'disabled' : ''}
+              style="text-align:left;padding:10px 12px;border-radius:6px;border:1px solid ${used ? '#eee' : '#91caff'};
+              background:${used ? '#f5f5f5' : '#f0f7ff'};color:${used ? '#999' : '#1677ff'};cursor:${used ? 'not-allowed' : 'pointer'};">
+              <b>${d.dock_name}</b> ${d.temp_layer ? `<span style="font-size:12px;">(${d.temp_layer})</span>` : ''}
+              ${used ? '<span style="font-size:12px;">占用中</span>' : ''}
+            </button>`
+          }).join('') || '<div style="color:#999;font-size:13px;">该仓库还没有配置码头，可在下方手动输入</div>'}
+        </div>
+        <div style="margin-top:12px;">
+          <input id="dp-custom" placeholder="或手动输入码头名称，如 1号冷冻口" style="margin:0;" />
+        </div>
+        <div style="text-align:right;margin-top:12px;display:flex;gap:8px;justify-content:flex-end;">
+          <button class="secondary" id="dp-cancel">取消</button>
+          <button id="dp-custom-ok">确认输入</button>
+        </div>
+      </div>`
+    document.body.appendChild(box)
+
+    const done = (v) => { box.remove(); resolve(v) }
+    box.querySelectorAll('.dock-pick').forEach(btn => {
+      btn.onclick = () => done(btn.dataset.name)
+    })
+    box.querySelector('#dp-cancel').onclick = () => done(null)
+    box.querySelector('#dp-custom-ok').onclick = () => {
+      const v = box.querySelector('#dp-custom').value.trim()
+      if (v) done(v)
+    }
+  })
+}
+
 async function renderDockQueue(v) {
   const keyOf = r => r.vehicle_key || ('AP|' + r.appointment_code)
 
   const loadList = async () => {
     const { data, error } = await ctx.supabase.from('bill_order')
-      .select('appointment_code, vehicle_key, vendor_name, logistics_code, driver_name, driver_phone, box_qty, arrival_time_slot, check_in_time, queue_status, assigned_dock')
+      .select('appointment_code, vehicle_key, vendor_name, logistics_code, driver_name, driver_phone, box_qty, arrival_time_slot, check_in_time, queue_status, assigned_dock, warehouse_code')
       .in('queue_status', ['waiting', 'calling'])
       .order('check_in_time', { ascending: true })
 
@@ -4181,7 +4303,7 @@ async function renderDockQueue(v) {
           checkIn: r.check_in_time, slot: r.arrival_time_slot,
           status: r.queue_status, dock: r.assigned_dock,
           driver: r.driver_name, phone: r.driver_phone,
-          logistics: r.logistics_code
+          logistics: r.logistics_code, warehouse: r.warehouse_code
         }
         groups.set(k, g)
       }
@@ -4207,6 +4329,7 @@ async function renderDockQueue(v) {
           合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车；签到 / 叫号 / 完成按整车联动，只占一个码头。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
+          <button class="secondary small" id="btn-dock-manage">码头管理</button>
           <button class="secondary small" id="btn-dock-board">码头看板</button>
           <button class="secondary small" id="btn-queue-log">排队日志</button>
         </div>
@@ -4227,7 +4350,7 @@ async function renderDockQueue(v) {
               <td>${g.status === 'calling' ? `<span style="color:#cf1322;">📢 ${g.dock || ''} 卸货中</span>` : '<span style="color:#389e0d;">🚚 排队中</span>'}</td>
               <td>
                 ${g.status === 'waiting'
-                  ? `<button class="small" data-act="call" data-key="${g.key}" data-code="${g.codes[0]}">叫号分配码头</button>`
+                  ? `<button class="small" data-act="call" data-key="${g.key}" data-code="${g.codes[0]}" data-wh="${g.warehouse || ''}">叫号分配码头</button>`
                   : `<button class="small secondary" data-act="finish" data-key="${g.key}" data-code="${g.codes[0]}">完成卸货</button>`}
               </td>
             </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无排队车辆</td></tr>'}
@@ -4243,6 +4366,7 @@ async function renderDockQueue(v) {
     document.getElementById('btn-dock-board').onclick = () => {
       window.open('./dock.html', '_blank')
     }
+    document.getElementById('btn-dock-manage').onclick = () => openDockManager()
 
     document.getElementById('btn-queue-log').onclick = async () => {
       const { data: logs, error } = await ctx.supabase.from('dock_queue_log')
@@ -4313,7 +4437,7 @@ async function renderDockQueue(v) {
         const key = b.dataset.key
 
         if (b.dataset.act === 'call') {
-          const dock = prompt(`请为车辆 ${code} 分配码头：\n(例如：1号冷冻口、2号冷藏口)`)
+          const dock = await pickDock(b.dataset.wh)
           if (!dock) return
           const { data: updated, error } = await byKey(
             ctx.supabase.from('bill_order')

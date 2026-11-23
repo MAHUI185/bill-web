@@ -113,6 +113,43 @@
     if (el) el.innerText = '更新于 ' + new Date().toLocaleTimeString();
   }
 
+  function ensureCheckinButton() {
+    if (document.getElementById('btn-self-checkin')) return;
+    const b = document.createElement('button');
+    b.id = 'btn-self-checkin';
+    b.className = 'btn-active';
+    b.style.background = '#16a34a';
+    b.innerText = '✅ 我已到仓，签到';
+    b.onclick = async () => {
+      b.disabled = true;
+      b.innerText = '签到中...';
+      try {
+        const { data, error } = await supabase.rpc('driver_check_in', { p_code: code });
+        if (error) throw error;
+        const r = Array.isArray(data) ? data[0] : data;
+        if (!r || !r.ok) {
+          alert((r && r.message) || '签到失败');
+          b.disabled = false;
+          b.innerText = '✅ 我已到仓，签到';
+          return;
+        }
+        alert(r.message);
+        b.remove();
+        checkStatus();
+      } catch (e) {
+        alert('签到失败：' + (e.message || e));
+        b.disabled = false;
+        b.innerText = '✅ 我已到仓，签到';
+      }
+    };
+    document.getElementById('main-content').appendChild(b);
+  }
+
+  function removeCheckinButton() {
+    const b = document.getElementById('btn-self-checkin');
+    if (b) b.remove();
+  }
+
   async function checkStatus() {
     if (isDone) return;
     let res;
@@ -142,13 +179,16 @@
     markUpdated();
 
     if (info.queue_status === 'pending') {
+      ensureCheckinButton();
       statusEl().innerText = '⏳ 待签到';
       document.getElementById('disp-ahead').innerText = '-- 辆';
     } else if (info.queue_status === 'waiting') {
+      removeCheckinButton();
       const ahead = Number(info.cars_ahead || 0);
       statusEl().innerText = '🚚 已签到，排队中';
       document.getElementById('disp-ahead').innerText = ahead > 0 ? `${ahead} 辆` : '即将轮到您';
     } else if (info.queue_status === 'calling') {
+      removeCheckinButton();
       document.getElementById('disp-dock').innerText = info.assigned_dock || '--';
       if (!isCalling) {
         isCalling = true;
@@ -158,6 +198,7 @@
         speak(`请前往${info.assigned_dock || ''}卸货`);
       }
     } else if (info.queue_status === 'done') {
+      removeCheckinButton();
       isDone = true;
       isCalling = false;
       if (timer) clearInterval(timer);
