@@ -45,6 +45,9 @@
   .sheet .opt.primary { border-color: #1677ff; background: #eff6ff; color: #1677ff; font-weight: bold; }
   .sheet .cancel { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #e2e8f0; color: #475569; font-size: 16px; margin-top: 6px; }
   .sheet input { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 16px; margin-bottom: 8px; }
+  .sheet select { width: 100%; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 16px; margin-bottom: 8px; background: #fff; }
+  .sheet label.opt { display: flex; align-items: center; gap: 10px; }
+  .sheet label.opt input[type="checkbox"] { width: 22px; height: 22px; margin: 0; }
 </style>
 <script src="./supabase-js.js"></script>
 </head>
@@ -69,6 +72,9 @@
 </div>
 
 <div id="workbench" style="display:none;">
+  <section style="padding-top:12px;">
+    <button class="btn blue" id="btn-merge" style="width:100%;">合并收货（多个预约码）</button>
+  </section>
   <section>
     <h2>卸货中 <span id="calling-count">0</span></h2>
     <div id="calling-list" class="cards"></div>
@@ -177,6 +183,8 @@
     localStorage.removeItem(TOKEN_KEY);
     location.reload();
   };
+
+  $('btn-merge').onclick = () => openMerge();
 
   function minutesSince(t) {
     if (!t) return 0;
@@ -331,6 +339,69 @@
         await callVehicle(b.dataset.next, b.dataset.wh);
       };
     });
+  }
+
+  async function openMerge() {
+    const list = rows.filter(v => v.queue_status === 'waiting' || v.queue_status === 'calling');
+    if (!list.length) return alert('当前没有可合并的车辆');
+
+    let docks = [];
+    try {
+      const { data } = await sb.rpc('receiver_docks', { p_token: token });
+      docks = data || [];
+    } catch (e) {}
+
+    const mask = sheet(`
+      <h3>合并收货</h3>
+      <label style="font-size:13px;color:#64748b;">选择码头</label>
+      <select id="mg-dock">
+        ${docks.map(d => `<option value="${esc(d.dock_name)}">${esc(d.dock_name)}${d.temp_layer ? ' · ' + esc(d.temp_layer) : ''}</option>`).join('')}
+        <option value="__custom">手动输入码头…</option>
+      </select>
+      <input id="mg-custom" placeholder="手动输入码头名称" style="display:none;" />
+      <div style="margin:10px 0 6px;font-size:13px;color:#64748b;">勾选要合并的预约码（可多选）</div>
+      ${list.map(v => `<label class="opt">
+        <input type="checkbox" class="mg-code" value="${esc(v.appointment_code)}" />
+        <span>${esc(v.appointment_code)} · ${esc(v.vendor_name || '-')} · ${v.boxes} 箱 · ${v.queue_status === 'calling' ? '卸货中' : '等待中'}</span>
+      </label>`).join('')}
+      <button class="opt primary" id="mg-ok">确认合并收货</button>
+      <button class="cancel" id="mg-cancel">取消</button>
+    `);
+
+    const sel = mask.querySelector('#mg-dock');
+    const custom = mask.querySelector('#mg-custom');
+    const syncCustom = () => { custom.style.display = sel.value === '__custom' ? 'block' : 'none'; };
+    sel.onchange = syncCustom;
+    syncCustom();
+
+    mask.querySelector('#mg-cancel').onclick = () => mask.remove();
+
+    mask.querySelector('#mg-ok').onclick = async () => {
+      const dock = sel.value === '__custom' ? custom.value.trim() : sel.value;
+      if (!dock) return alert('请选择或输入码头');
+      const codes = Array.from(mask.querySelectorAll('.mg-code:checked')).map(x => x.value);
+      if (!codes.length) return alert('请至少勾选一个预约码');
+
+      const btn = mask.querySelector('#mg-ok');
+      btn.disabled = true;
+      btn.innerText = '提交中...';
+      try {
+        const r = await rpcOne('receiver_merge_finish', { p_token: token, p_codes: codes, p_dock: dock });
+        if (!r || !r.ok) {
+          alert((r && r.message) || '合并收货失败');
+          btn.disabled = false;
+          btn.innerText = '确认合并收货';
+          return;
+        }
+        mask.remove();
+        alert(r.message);
+        await load();
+      } catch (e) {
+        alert('合并收货失败：' + (e.message || e));
+        btn.disabled = false;
+        btn.innerText = '确认合并收货';
+      }
+    };
   }
 
   boot();

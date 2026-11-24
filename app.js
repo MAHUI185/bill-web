@@ -1285,7 +1285,7 @@ async function renderFill(view) {
         if (vp) lookupVendorId = vp.id
       }
 
-      const { data: existRows } = await supabase.from('bill_order')
+      let existQ = supabase.from('bill_order')
         .select('appointment_code, bill_type, arrival_time_slot, driver_name, driver_phone, queue_status, check_in_time, assigned_dock, call_time, vehicle_key, warehouse_code')
         .eq('vendor_id', lookupVendorId)
         .eq('warehouse_code', myWhs[0])
@@ -1293,6 +1293,9 @@ async function renderFill(view) {
         .not('appointment_code', 'is', null)
         .order('created_at', { ascending: false })
         .limit(1)
+      // 物流商：正常单按“同一司机”在选完时段后再合并，这里只自动识别无单预约
+      if (isLogistics) existQ = existQ.eq('bill_type', '无单预约')
+      const { data: existRows } = await existQ
 
       const existingAppt = (existRows && existRows[0]) || null
 
@@ -1422,8 +1425,26 @@ async function renderFill(view) {
           return isNaN(multiplier) || multiplier === 0 ? Number(boxQty) : Number(boxQty) * multiplier
         }
 
-        // 生成预约码：已有当日预约则沿用，不重新生成
-        let appointmentCode = existing?.appointment_code || null
+        // 物流商：同一送货司机 + 同到仓日 + 同时段 + 同仓库 共用一个预约码
+        let driverMatched = null
+        if (isLogistics && !existing && slotName && driverPhone) {
+          const { data: dm } = await supabase.from('bill_order')
+            .select('appointment_code, vehicle_key, queue_status, check_in_time, assigned_dock, call_time')
+            .eq('logistics_code', currentProfile?.vendor_code || '')
+            .eq('driver_phone', driverPhone.trim())
+            .eq('arrival_date', date)
+            .eq('warehouse_code', defaultWh)
+            .eq('arrival_time_slot', slotName)
+            .not('appointment_code', 'is', null)
+            .order('created_at', { ascending: false })
+            .limit(1)
+          driverMatched = (dm && dm[0]) || null
+        }
+
+        const inherit = existing || driverMatched
+
+        // 生成预约码：已有当日/同司机预约则沿用，不重新生成
+        let appointmentCode = inherit?.appointment_code || null
         if (slotName && !appointmentCode) {
           const dateStr = date.replace(/-/g, '').slice(4); // 如 1122
           const randomStr = Math.random().toString(36).substring(2, 6).toUpperCase();
@@ -1446,11 +1467,11 @@ async function renderFill(view) {
           driver_name: driverName,
           driver_phone: driverPhone,
           appointment_code: appointmentCode,
-          vehicle_key: existing?.vehicle_key || null,
-          queue_status: existing && existing.queue_status ? existing.queue_status : 'pending',
-          check_in_time: existing && existing.queue_status !== 'done' ? existing.check_in_time : null,
-          assigned_dock: existing && existing.queue_status !== 'done' ? existing.assigned_dock : null,
-          call_time: existing && existing.queue_status !== 'done' ? existing.call_time : null
+          vehicle_key: inherit?.vehicle_key || null,
+          queue_status: inherit && inherit.queue_status ? inherit.queue_status : 'pending',
+          check_in_time: inherit && inherit.queue_status !== 'done' ? inherit.check_in_time : null,
+          assigned_dock: inherit && inherit.queue_status !== 'done' ? inherit.assigned_dock : null,
+          call_time: inherit && inherit.queue_status !== 'done' ? inherit.call_time : null
         }))
 
         const outPayloads = validOut.map(r => ({
@@ -1469,7 +1490,7 @@ async function renderFill(view) {
         const { error } = await supabase.from('bill_order').insert([...inPayloads, ...outPayloads])
         if (error) return msgEl.innerHTML = msg(translateError(error.message), false)
 
-        msgEl.innerHTML = msg(existing ? `已并入预约 ${appointmentCode}` : `预约成功！${appointmentCode ? '预约码：' + appointmentCode : ''}`, true)
+        msgEl.innerHTML = msg(inherit ? `已并入预约 ${appointmentCode}` : `预约成功！${appointmentCode ? '预约码：' + appointmentCode : ''}`, true)
         
         // 弹出二维码
         if (appointmentCode) {
@@ -1480,7 +1501,7 @@ async function renderFill(view) {
           modalQr.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
           modalQr.innerHTML = `
             <div style="background:#fff;border-radius:12px;padding:24px;text-align:center;max-width:400px;width:100%;">
-              <h2 style="margin-bottom:12px;">${existing ? '✅ 已并入预约' : '✅ 预约成功'}</h2>
+              <h2 style="margin-bottom:12px;">${inherit ? '✅ 已并入预约' : '✅ 预约成功'}</h2>
               <p style="font-size:14px;color:#666;margin-bottom:16px;">请让司机扫码进入排队进度页（或在微信中打开）</p>
               <div style="font-size:28px;font-weight:bold;color:#1677ff;margin-bottom:16px;">${appointmentCode}</div>
               <img src="${qrImg}" style="width:200px;height:200px;margin:0 auto;display:block;" />
@@ -2133,7 +2154,7 @@ async function renderCheckin(view) {
     let g = map.get(code)
     if (!g) {
       g = {
-        code, vendor: r.vendor_name || '', warehouse: r.warehouse_code || '',
+        code, vendors: new Set(), warehouse: r.warehouse_code || '',
         date: r.arrival_date || '', slot: r.arrival_time_slot || '',
         boxes: 0, driver: r.driver_name || '', phone: r.driver_phone || '',
         status: r.queue_status || 'pending', noOrder: r.bill_type === '无单预约',
@@ -2141,6 +2162,7 @@ async function renderCheckin(view) {
       }
       map.set(code, g)
     }
+    if (r.vendor_name) g.vendors.add(r.vendor_name)
     g.boxes += Number(r.box_qty) || 0
     if (r.bill_type !== '无单预约') g.noOrder = false
     if (r.queue_status === 'calling') g.status = 'calling'
@@ -2152,7 +2174,7 @@ async function renderCheckin(view) {
 
   body.innerHTML = rows.map(g => `<tr>
     <td><b style="font-size:15px;color:#1677ff;">${g.code}</b>${g.noOrder ? '<br><span style="font-size:12px;color:#d46b08;">无单预约</span>' : ''}</td>
-    <td>${g.vendor}</td>
+    <td>${Array.from(g.vendors).join('、') || '-'}</td>
     <td>${g.warehouse}</td>
     <td>${g.date}<br><span style="font-size:12px;color:#666;">${g.slot}</span></td>
     <td>${g.boxes} 箱</td>
