@@ -2655,6 +2655,20 @@ async function renderAdmins(v) {
       if (act === 'del') {
         if (id === ctx.currentUser.id) return alert('不能删除自己')
         if (!confirm(`确定删除管理员「${nameAttr}」？`)) return
+
+        // 先封禁 auth 账号，避免残留账号还能登录
+        try {
+          const { data: { session } } = await ctx.supabase.auth.getSession()
+          await safeFetch(`/functions/v1/toggle-user-status`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.access_token}`
+            },
+            body: JSON.stringify({ user_id: id, account_type: 'admin', enable: false })
+          })
+        } catch (e) { console.warn('封禁管理员账号失败', e) }
+
         const { error } = await ctx.supabase.from('admin_users').delete().eq('id', id)
         if (error) return alert(ctx.translateError(error.message))
         await ctx.supabase.from('vendor_profile').delete().eq('id', id)
