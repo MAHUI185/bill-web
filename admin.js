@@ -2669,11 +2669,18 @@ async function renderAdmins(v) {
           })
         } catch (e) { console.warn('封禁管理员账号失败', e) }
 
-        const { error } = await ctx.supabase.from('admin_users').delete().eq('id', id)
-        if (error) return alert(ctx.translateError(error.message))
-        await ctx.supabase.from('vendor_profile').delete().eq('id', id)
+        const { data: ret, error: rpcErr } = await ctx.supabase.rpc('admin_delete_user', { p_id: id })
+        if (rpcErr) {
+          // 函数未创建时回退：至少删业务记录
+          const { error } = await ctx.supabase.from('admin_users').delete().eq('id', id)
+          if (error) return alert(ctx.translateError(error.message))
+          await ctx.supabase.from('vendor_profile').delete().eq('id', id)
+          alert('已删除业务记录（auth 账号未清理，重建同登录名需先清理 auth.users）')
+        } else {
+          const r = Array.isArray(ret) ? ret[0] : ret
+          alert((r && r.message) || '已删除')
+        }
         await logOp('delete_admin', '管理员 ' + nameAttr)
-        alert('已删除')
         renderTab('admins')
       }
     }
