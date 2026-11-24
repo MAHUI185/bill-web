@@ -46,7 +46,7 @@ export async function renderAdmin(view, context) {
   if (context.currentRole === 'super_admin') {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
-      <button data-t="dock_queue">收货排队</button> <!-- ★ 新增 -->
+      <button data-t="dock_queue">收货进度</button> <!-- ★ 新增 -->
       <button data-t="bills">单据管理</button>
       <button data-t="billing">财务对账</button>
       <button data-t="qc">质检报告</button>
@@ -61,7 +61,7 @@ export async function renderAdmin(view, context) {
   } else if (context.currentRole === 'admin') {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
-      <button data-t="dock_queue">收货排队</button> <!-- ★ 新增 -->
+      <button data-t="dock_queue">收货进度</button> <!-- ★ 新增 -->
       <button data-t="bills">单据管理</button>
       <button data-t="qc">质检报告</button>
       <button data-t="vendors">厂商管理</button>
@@ -4469,12 +4469,12 @@ async function renderDockQueue(v) {
 
     v.innerHTML = `
       <div class="card" style="padding:16px;">
-        <h2>收货签到与叫号大厅</h2>
+        <h2>收货进度</h2>
         <div style="font-size:12px;color:#888;margin:-8px 0 12px;">
           合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车；签到 / 叫号 / 完成按整车联动，只占一个码头。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
-          <button class="secondary small" id="btn-receive">手机收货</button>
+          <button class="secondary small" id="btn-receive">收货工作台</button>
           <button class="secondary small" id="btn-dock-board">码头看板</button>
         </div>
         <div class="row" style="margin-bottom:16px;">
@@ -4517,7 +4517,7 @@ async function renderDockQueue(v) {
       box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
       box.innerHTML = `
         <div style="background:#fff;border-radius:8px;max-width:360px;width:100%;padding:20px;text-align:center;">
-          <h2 style="margin:0 0 8px;">收货员手机端</h2>
+          <h2 style="margin:0 0 8px;">收货工作台</h2>
           <p style="font-size:13px;color:#666;margin-bottom:12px;">手机扫码打开，用管理员账号登录后即可叫车、完成收货。</p>
           <div id="rcv-qr" style="display:flex;justify-content:center;margin-bottom:12px;"></div>
           <input readonly value="${url}" style="font-size:12px;" onclick="this.select()" />
