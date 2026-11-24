@@ -4558,8 +4558,9 @@ async function renderDockQueue(v) {
     v.innerHTML = `
       <div class="card" style="padding:16px;">
         <h2>收货进度</h2>
-        <div style="font-size:12px;color:#888;margin:-8px 0 12px;">
-          合车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车；签到 / 叫号 / 完成按整车联动，只占一个码头。
+        <div style="font-size:12px;color:#888;margin:-8px 0 12px;line-height:1.8;">
+          一车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车（厂商自送按预约码成车）。签到、叫车、完成收货按整车联动，只占一个码头。<br>
+          司机可自助签到（限到仓当天、时段开始前 1 小时、仓库定位范围内）；收货员在「收货工作台」用姓名+手机号登录后叫车/完成收货，选择码头后可合并多个预约码一起收货。
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
           <button class="secondary small" id="btn-receive">收货工作台</button>

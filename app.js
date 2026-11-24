@@ -2112,8 +2112,9 @@ async function renderCheckin(view) {
   view.innerHTML = `
     <div class="card">
       <h2>到仓信息</h2>
-      <p style="font-size:13px;color:#666;margin:-8px 0 16px;">
-        预约码和二维码可重复下载；司机到仓后在排队页签到。无单预约到仓后，用预约码到「填报」页补单。
+      <p style="font-size:13px;color:#666;margin:-8px 0 16px;line-height:1.8;">
+        预约码和二维码可重复下载。同一厂商 + 同一到仓日 + 同一仓库共用一个预约码；物流商同一司机、同一到仓日、同一时段、同一仓库也共用一个码。<br>
+        司机只能在到仓当天、预约时段开始前 1 小时内、且在仓库定位范围内自助签到；无单预约到仓后，用预约码到「填报」页补单。
       </p>
       <div id="ck-msg"></div>
       <div class="scroll" style="max-height: calc(100vh - 280px);">
