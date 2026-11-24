@@ -2880,6 +2880,23 @@ async function renderWh(v) {
         </table>
       </div>
       <div class="card" style="box-shadow:none;padding:0 0 16px;">
+        <h2>仓库地址与签到范围</h2>
+        <p style="font-size:12px;color:#888;margin-top:-8px;line-height:1.6;">
+          司机自助签到时校验手机定位是否在该坐标半径内；未填经纬度的仓库暂不校验。默认半径 500 米。
+        </p>
+        <div class="row">
+          <input id="w-addr" placeholder="仓库地址" value="${sel?.address || ''}" style="flex:2;" />
+          <input id="w-lat" placeholder="纬度，如 36.651200" value="${sel?.latitude ?? ''}" />
+          <input id="w-lng" placeholder="经度，如 117.120100" value="${sel?.longitude ?? ''}" />
+          <input id="w-radius" type="number" min="50" placeholder="签到半径(米)" value="${sel?.geofence_radius ?? 500}" />
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button id="btn-w-geo">保存地址与范围</button>
+          <button class="secondary" id="btn-w-locate">获取当前位置</button>
+        </div>
+        <div id="w-geo-msg"></div>
+      </div>
+      <div class="card" style="box-shadow:none;padding:0 0 16px;">
         <h2>当前仓库：${sel ? sel.warehouse_code + ' ' + sel.warehouse_name : '未选择'}</h2>
         <div class="row">
           <input id="l-code" placeholder="仓位代码 *" />
@@ -2926,6 +2943,56 @@ async function renderWh(v) {
       await logOp('create_warehouse', '仓库 ' + code)
       document.getElementById('w-msg').innerHTML = ctx.msg('已新增', true)
       renderWh(v)
+    }
+
+    document.getElementById('btn-w-geo').onclick = async () => {
+      if (!selectedCode) return
+      const msgEl2 = document.getElementById('w-geo-msg')
+      const address = document.getElementById('w-addr').value.trim() || null
+      const latRaw = document.getElementById('w-lat').value.trim()
+      const lngRaw = document.getElementById('w-lng').value.trim()
+      const radius = Number(document.getElementById('w-radius').value) || 500
+
+      if ((!!latRaw) !== (!!lngRaw)) {
+        msgEl2.innerHTML = ctx.msg('纬度和经度需要同时填写', false)
+        return
+      }
+      const latitude = latRaw ? Number(latRaw) : null
+      const longitude = lngRaw ? Number(lngRaw) : null
+      if (latitude !== null && (isNaN(latitude) || latitude < -90 || latitude > 90)) {
+        msgEl2.innerHTML = ctx.msg('纬度不合法', false); return
+      }
+      if (longitude !== null && (isNaN(longitude) || longitude < -180 || longitude > 180)) {
+        msgEl2.innerHTML = ctx.msg('经度不合法', false); return
+      }
+
+      const { error } = await ctx.supabase.from('warehouse').update({
+        address, latitude, longitude, geofence_radius: radius
+      }).eq('warehouse_code', selectedCode)
+      if (error) { msgEl2.innerHTML = ctx.msg('保存失败：' + error.message, false); return }
+
+      if (sel) {
+        sel.address = address
+        sel.latitude = latitude
+        sel.longitude = longitude
+        sel.geofence_radius = radius
+      }
+
+      await logOp('update_warehouse_geo', '仓库 ' + selectedCode, { latitude, longitude, radius })
+      msgEl2.innerHTML = ctx.msg('已保存', true)
+    }
+
+    document.getElementById('btn-w-locate').onclick = () => {
+      const msgEl2 = document.getElementById('w-geo-msg')
+      if (!navigator.geolocation) { msgEl2.innerHTML = ctx.msg('当前浏览器不支持定位', false); return }
+      msgEl2.innerHTML = ctx.msg('正在获取当前位置...', true)
+      navigator.geolocation.getCurrentPosition((p) => {
+        document.getElementById('w-lat').value = p.coords.latitude.toFixed(6)
+        document.getElementById('w-lng').value = p.coords.longitude.toFixed(6)
+        msgEl2.innerHTML = ctx.msg('已填入当前位置，确认后点保存', true)
+      }, (err) => {
+        msgEl2.innerHTML = ctx.msg('定位失败：' + (err.message || '请允许定位权限'), false)
+      }, { enableHighAccuracy: true, timeout: 15000 })
     }
 
     document.getElementById('btn-l-add').onclick = async () => {
@@ -4539,7 +4606,7 @@ async function renderDockQueue(v) {
       box.innerHTML = `
         <div style="background:#fff;border-radius:8px;max-width:360px;width:100%;padding:20px;text-align:center;">
           <h2 style="margin:0 0 8px;">收货工作台</h2>
-          <p style="font-size:13px;color:#666;margin-bottom:12px;">手机扫码打开，用管理员账号登录后即可叫车、完成收货。</p>
+          <p style="font-size:13px;color:#666;margin-bottom:12px;">手机扫码打开，收货员输入姓名和手机号登录后即可叫车、完成收货。</p>
           <div id="rcv-qr" style="display:flex;justify-content:center;margin-bottom:12px;"></div>
           <input readonly value="${url}" style="font-size:12px;" onclick="this.select()" />
           <button class="secondary" id="rcv-close" style="width:100%;">关闭</button>

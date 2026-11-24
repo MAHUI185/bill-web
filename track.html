@@ -113,6 +113,17 @@
     if (el) el.innerText = '更新于 ' + new Date().toLocaleTimeString();
   }
 
+  function getLocation() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error('当前浏览器不支持定位'));
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        (err) => reject(new Error('定位失败：' + (err.message || '请允许定位权限'))),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+  }
+
   function ensureCheckinButton() {
     if (document.getElementById('btn-self-checkin')) return;
     const b = document.createElement('button');
@@ -122,9 +133,19 @@
     b.innerText = '✅ 我已到仓，签到';
     b.onclick = async () => {
       b.disabled = true;
+      b.innerText = '定位中...';
+      let pos;
+      try {
+        pos = await getLocation();
+      } catch (e) {
+        alert(e.message || '定位失败，请开启手机定位后重试');
+        b.disabled = false;
+        b.innerText = '✅ 我已到仓，签到';
+        return;
+      }
       b.innerText = '签到中...';
       try {
-        const { data, error } = await supabase.rpc('driver_check_in', { p_code: code });
+        const { data, error } = await supabase.rpc('driver_check_in', { p_code: code, p_lat: pos.lat, p_lng: pos.lng });
         if (error) throw error;
         const r = Array.isArray(data) ? data[0] : data;
         if (!r || !r.ok) {
