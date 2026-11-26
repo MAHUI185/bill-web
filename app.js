@@ -2075,21 +2075,29 @@ async function renderMy(view) {
 async function renderCheckin(view) {
   view.innerHTML = `
     <div class="card">
-      <h2>到仓信息</h2>
-      <div class="row" style="margin-bottom:12px;align-items:center;">
-        <input id="ck-search" placeholder="搜索预约码 / 厂商 / 司机 / 手机号 / 仓库" style="flex:1;margin:0;" />
-        <select id="ck-status" style="flex:0 0 140px;margin:0;">
-          <option value="pending">待签到</option>
-          <option value="all">全部状态</option>
-        </select>
+      <div class="tabs" id="ck-tabs" style="margin-bottom:16px;">
+        <button data-t="list" class="active">到仓信息</button>
+        ${isAdmin ? '<button data-t="progress">收货进度</button>' : ''}
       </div>
-      <div class="scroll" style="max-height: calc(100vh - 300px);">
-        <table>
-          <tr><th>预约码</th><th>厂商</th><th>仓库</th><th>到仓日 / 时段</th><th>箱数</th><th>司机</th><th>状态</th><th>操作</th></tr>
-          <tbody id="ck-body"><tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
-        </table>
+      <div id="ck-list-wrap">
+        <h2>到仓信息</h2>
+        <div class="row" style="margin-bottom:12px;align-items:center;">
+          <input id="ck-date" type="date" value="${todayBj()}" style="flex:0 0 160px;margin:0;" />
+          <input id="ck-search" placeholder="搜索预约码 / 厂商 / 司机 / 手机号 / 仓库" style="flex:1;margin:0;" />
+          <select id="ck-status" style="flex:0 0 140px;margin:0;">
+            <option value="pending">待签到</option>
+            <option value="all">全部状态</option>
+          </select>
+        </div>
+        <div class="scroll" style="max-height: calc(100vh - 340px);">
+          <table>
+            <tr><th>预约码</th><th>厂商</th><th>仓库</th><th>到仓日 / 时段</th><th>箱数</th><th>司机</th><th>状态</th><th>操作</th></tr>
+            <tbody id="ck-body"><tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
+          </table>
+        </div>
+        <div id="ck-pagination" style="display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:12px;"></div>
       </div>
-      <div id="ck-pagination" style="display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:12px;"></div>
+      <div id="ck-progress-wrap" style="display:none;"></div>
     </div>`
 
   const body = document.getElementById('ck-body')
@@ -2144,10 +2152,12 @@ async function renderCheckin(view) {
   const pageSize = 20
   let keyword = ''
   let statusFilter = 'pending'
+  let dateFilter = todayBj()
 
   function filtered() {
     const kw = keyword.trim().toLowerCase()
     return groups.filter(g => {
+      if (dateFilter && g.date !== dateFilter) return false
       if (statusFilter !== 'all' && g.status !== statusFilter) return false
       if (!kw) return true
       const hay = [g.code, Array.from(g.vendors).join(' '), g.warehouse, g.driver, g.phone].join(' ').toLowerCase()
@@ -2232,6 +2242,39 @@ async function renderCheckin(view) {
     page = 0
     renderRows()
   }
+  document.getElementById('ck-date').onchange = (e) => {
+    dateFilter = e.target.value
+    page = 0
+    renderRows()
+  }
+
+  const ckTabs = document.querySelectorAll('#ck-tabs button')
+  ckTabs.forEach(b => {
+    b.onclick = async () => {
+      ckTabs.forEach(x => x.classList.remove('active'))
+      b.classList.add('active')
+      const listWrap = document.getElementById('ck-list-wrap')
+      const progWrap = document.getElementById('ck-progress-wrap')
+      if (b.dataset.t === 'list') {
+        listWrap.style.display = 'block'
+        progWrap.style.display = 'none'
+        return
+      }
+      listWrap.style.display = 'none'
+      progWrap.style.display = 'block'
+      progWrap.innerHTML = '<p style="color:#999;">加载中...</p>'
+      try {
+        const mod = await import('./admin.js')
+        await mod.renderDockQueuePage(progWrap, {
+          supabase, currentUser, currentProfile, isAdmin, currentRole,
+          msg, SUPABASE_URL, translateError
+        })
+      } catch (e) {
+        console.error('收货进度加载失败', e)
+        progWrap.innerHTML = msg('收货进度加载失败', false)
+      }
+    }
+  })
 
   renderRows()
 }

@@ -46,7 +46,6 @@ export async function renderAdmin(view, context) {
   if (context.currentRole === 'super_admin') {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
-      <button data-t="dock_queue">收货进度</button> <!-- ★ 新增 -->
       <button data-t="bills">单据管理</button>
       <button data-t="billing">财务对账</button>
       <button data-t="qc">质检报告</button>
@@ -61,7 +60,6 @@ export async function renderAdmin(view, context) {
   } else if (context.currentRole === 'admin') {
     menuHtml = `
       <button data-t="progress" class="active">提报进度</button>
-      <button data-t="dock_queue">收货进度</button> <!-- ★ 新增 -->
       <button data-t="bills">单据管理</button>
       <button data-t="qc">质检报告</button>
       <button data-t="vendors">厂商管理</button>
@@ -4512,6 +4510,20 @@ function pickDock(wh) {
       if (v) done(v)
     }
   })
+}
+
+export async function renderDockQueuePage(view, context) {
+  ctx = context
+  if (context.currentRole) {
+    const { data: au } = await context.supabase.from('admin_users')
+      .select('name').eq('id', context.currentUser.id).maybeSingle()
+    operatorName = au?.name || context.currentProfile?.contact_name || '管理员'
+  } else {
+    operatorName = context.currentProfile?.contact_name
+      || context.currentProfile?.vendor_name || '未知'
+  }
+  ctx.operatorName = operatorName
+  await renderDockQueue(view)
 }
 
 async function renderDockQueue(v) {
