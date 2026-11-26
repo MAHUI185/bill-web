@@ -778,10 +778,6 @@ async function renderFill(view) {
         <h3 style="margin:24px 0 8px;">预览</h3>
         <div id="preview-box"></div>
 
-        <div style="margin-top:16px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-          <input id="existing-code" placeholder="已有预约码（无单预约补单，选填）" style="max-width:300px; margin:0;" />
-          <span style="font-size:12px; color:#888;">填写后本次入库行会并入该预约码，不再新生成</span>
-        </div>
         <div style="margin-top:12px;">
           <button id="btn-submit-all">提交预约</button>
           <button class="secondary" id="btn-clear-all">清空</button>
@@ -1051,7 +1047,7 @@ async function renderFill(view) {
       render()
     }
 
-    // ★ 无单预约：先占时段，到仓后补单
+    // ★ 无单预约：先占时段，到仓后正常填报自动并入
     const btnWalkin = document.getElementById('btn-walkin')
     if (btnWalkin) btnWalkin.onclick = () => {
       const modal = document.createElement('div')
@@ -1059,7 +1055,7 @@ async function renderFill(view) {
       modal.innerHTML = `
         <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:24px;">
           <h2 style="margin-bottom:8px;">无单预约</h2>
-          <p style="font-size:13px;color:#666;margin-bottom:16px;">没有商品单据也能先占时段；到仓后在「我的单据」用预约码补单。</p>
+          <p style="font-size:13px;color:#666;margin-bottom:16px;">没有商品单据也能先占时段；到仓后正常填报，入库行会自动并入该预约。</p>
           <div class="row">
             <div><label>仓库 *</label><select id="wk-wh">${myWhs.map(w => `<option value="${w}">${w}</option>`).join('')}</select></div>
             <div><label>到仓日期 *</label><input id="wk-date" type="date" value="${addDays(todayBj(), 1)}" /></div>
@@ -1128,7 +1124,7 @@ async function renderFill(view) {
           <p style="font-size:14px;color:#666;">${date} ${slot} · ${boxes} 箱</p>
           <div style="font-size:28px;font-weight:bold;color:#1677ff;margin:12px 0;">${code}</div>
           <img src="${qrImg}" style="width:200px;height:200px;margin:0 auto;display:block;" />
-          <p style="font-size:12px;color:#888;margin-top:12px;">到仓后在「我的单据」用该预约码补单</p>
+          <p style="font-size:12px;color:#888;margin-top:12px;">到仓后正常填报，入库行会自动并入该预约</p>
           <button class="secondary" style="width:100%;margin-top:16px;" id="wk-done">知道了</button>`
         modal.querySelector('#wk-done').onclick = close
       }
@@ -1197,38 +1193,6 @@ async function renderFill(view) {
           box_qty: Number(r.quantity) || 0
         }
       })
-
-      // ★ 无单预约补单：填写了已有预约码时，并入该预约码，不新生成
-      const existingCode = (document.getElementById('existing-code')?.value || '').trim().toUpperCase()
-      if (existingCode) {
-        if (!validIn.length) return msgEl.innerHTML = msg('补单必须至少填写一条入库行', false)
-        if (validOut.length) return msgEl.innerHTML = msg('补单不支持出库行，请先清空出库单', false)
-
-        const { data: ph, error: phErr } = await supabase.from('bill_order')
-          .select('appointment_code, arrival_date, arrival_time_slot, box_qty, queue_status')
-          .eq('appointment_code', existingCode)
-          .eq('bill_type', '无单预约')
-          .maybeSingle()
-
-        if (phErr || !ph) return msgEl.innerHTML = msg('预约码不存在或已补单，请检查', false)
-
-        const rows = buildWalkinRows()
-
-        msgEl.innerHTML = msg('正在补单...', true)
-        const { data: ret, error } = await supabase.rpc('submit_walkin_orders', {
-          p_code: existingCode,
-          p_rows: rows
-        })
-        if (error) return msgEl.innerHTML = msg('补单失败：' + error.message, false)
-        const res = Array.isArray(ret) ? ret[0] : ret
-        if (!res || !res.ok) return msgEl.innerHTML = msg((res && res.message) || '补单失败', false)
-
-        msgEl.innerHTML = msg(`${res.message}（时段 ${ph.arrival_time_slot}）`, true)
-        inRows = [newInRowForVendor(myVendorCode)]
-        outRows = [newOutRowForVendor(myVendorCode)]
-        setTimeout(() => render(), 1200)
-        return
-      }
 
       // 2. DSP 出库前置校验
       const dspOutRows = validOut.filter(r =>
@@ -1300,18 +1264,18 @@ async function renderFill(view) {
       const existingAppt = (existRows && existRows[0]) || null
 
       if (existingAppt && existingAppt.bill_type === '无单预约') {
-        if (validOut.length) return msgEl.innerHTML = msg('该到仓日已有无单预约，请先清空出库行并补单入库', false)
-        const ok = confirm(`该到仓日已有无单预约 ${existingAppt.appointment_code}（时段 ${existingAppt.arrival_time_slot}），本次 ${totalBoxes} 箱将作为补单并入，是否继续？`)
+        if (validOut.length) return msgEl.innerHTML = msg('该到仓日已有无单预约，请先清空出库行，入库会自动并入该预约', false)
+        const ok = confirm(`该到仓日已有无单预约 ${existingAppt.appointment_code}（时段 ${existingAppt.arrival_time_slot}），本次 ${totalBoxes} 箱将自动并入，是否继续？`)
         if (!ok) return
 
-        msgEl.innerHTML = msg('正在补单...', true)
+        msgEl.innerHTML = msg('正在并入预约...', true)
         const { data: ret, error } = await supabase.rpc('submit_walkin_orders', {
           p_code: existingAppt.appointment_code,
           p_rows: buildWalkinRows()
         })
-        if (error) return msgEl.innerHTML = msg('补单失败：' + error.message, false)
+        if (error) return msgEl.innerHTML = msg('并入失败：' + error.message, false)
         const res = Array.isArray(ret) ? ret[0] : ret
-        if (!res || !res.ok) return msgEl.innerHTML = msg((res && res.message) || '补单失败', false)
+        if (!res || !res.ok) return msgEl.innerHTML = msg((res && res.message) || '并入失败', false)
         msgEl.innerHTML = msg(`${res.message}（时段 ${existingAppt.arrival_time_slot}）`, true)
         inRows = [newInRowForVendor(myVendorCode)]
         outRows = [newOutRowForVendor(myVendorCode)]
@@ -2209,7 +2173,6 @@ async function renderCheckin(view) {
         <button class="small secondary" data-copy="${g.code}">复制码</button>
         <button class="small" data-qr="${g.code}">下载二维码</button>
         <a href="https://bill.mahui.pw/track.html?code=${g.code}&v=20261123" target="_blank" style="font-size:12px;margin-left:6px;">排队进度</a>
-        ${g.noOrder ? '<div style="font-size:12px;color:#d46b08;margin-top:4px;">到仓后在「填报」填此码补单</div>' : ''}
         ${g.noOrder ? (g.status === 'pending'
           ? `<button class="small danger" data-del-appt="${g.code}" style="margin-top:6px;">删除预约</button>`
           : '<div style="font-size:12px;color:#999;margin-top:4px;">已签到，不能删除</div>') : ''}
