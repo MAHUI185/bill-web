@@ -2112,17 +2112,20 @@ async function renderCheckin(view) {
   view.innerHTML = `
     <div class="card">
       <h2>到仓信息</h2>
-      <p style="font-size:13px;color:#666;margin:-8px 0 16px;line-height:1.8;">
-        预约码和二维码可重复下载。同一厂商 + 同一到仓日 + 同一仓库共用一个预约码；物流商同一司机、同一到仓日、同一时段、同一仓库也共用一个码。<br>
-        司机只能在到仓当天、预约时段开始前 1 小时内、且在仓库定位范围内自助签到；无单预约到仓后，用预约码到「填报」页补单。
-      </p>
-      <div id="ck-msg"></div>
-      <div class="scroll" style="max-height: calc(100vh - 280px);">
+      <div class="row" style="margin-bottom:12px;align-items:center;">
+        <input id="ck-search" placeholder="搜索预约码 / 厂商 / 司机 / 手机号 / 仓库" style="flex:1;margin:0;" />
+        <select id="ck-status" style="flex:0 0 140px;margin:0;">
+          <option value="pending">待签到</option>
+          <option value="all">全部状态</option>
+        </select>
+      </div>
+      <div class="scroll" style="max-height: calc(100vh - 300px);">
         <table>
           <tr><th>预约码</th><th>厂商</th><th>仓库</th><th>到仓日 / 时段</th><th>箱数</th><th>司机</th><th>状态</th><th>操作</th></tr>
           <tbody id="ck-body"><tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr></tbody>
         </table>
       </div>
+      <div id="ck-pagination" style="display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:12px;"></div>
     </div>`
 
   const body = document.getElementById('ck-body')
@@ -2130,7 +2133,7 @@ async function renderCheckin(view) {
     .select('appointment_code, vendor_name, warehouse_code, arrival_date, arrival_time_slot, box_qty, driver_name, driver_phone, queue_status, bill_type, created_at')
     .not('appointment_code', 'is', null)
     .order('created_at', { ascending: false })
-    .limit(500)
+    .limit(2000)
 
   if (isLogistics) {
     const codes = (myVendors || []).map(v => v.vendor_code).filter(Boolean)
@@ -2170,62 +2173,105 @@ async function renderCheckin(view) {
     else if (g.status !== 'calling') g.status = r.queue_status || g.status
   })
 
+  const groups = Array.from(map.values()).sort((a, b) => new Date(b.created) - new Date(a.created))
   const statusText = { pending: '待签到', waiting: '排队中', calling: '叫号中', done: '已完成' }
-  const rows = Array.from(map.values()).sort((a, b) => new Date(b.created) - new Date(a.created))
 
-  body.innerHTML = rows.map(g => `<tr>
-    <td><b style="font-size:15px;color:#1677ff;">${g.code}</b>${g.noOrder ? '<br><span style="font-size:12px;color:#d46b08;">无单预约</span>' : ''}</td>
-    <td>${Array.from(g.vendors).join('、') || '-'}</td>
-    <td>${g.warehouse}</td>
-    <td>${g.date}<br><span style="font-size:12px;color:#666;">${g.slot}</span></td>
-    <td>${g.boxes} 箱</td>
-    <td>${g.driver}<br><span style="font-size:12px;color:#999;">${g.phone}</span></td>
-    <td>${statusText[g.status] || g.status}</td>
-    <td style="white-space:nowrap;">
-      <button class="small secondary" data-copy="${g.code}">复制码</button>
-      <button class="small" data-qr="${g.code}">下载二维码</button>
-      <a href="https://bill.mahui.pw/track.html?code=${g.code}&v=20261123" target="_blank" style="font-size:12px;margin-left:6px;">排队进度</a>
-      ${g.noOrder ? '<div style="font-size:12px;color:#d46b08;margin-top:4px;">到仓后在「填报」填此码补单</div>' : ''}
-      ${g.noOrder ? (g.status === 'pending'
-        ? `<button class="small danger" data-del-appt="${g.code}" style="margin-top:6px;">删除预约</button>`
-        : '<div style="font-size:12px;color:#999;margin-top:4px;">已签到，不能删除</div>') : ''}
-    </td>
-  </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无预约记录</td></tr>'
+  let page = 0
+  const pageSize = 20
+  let keyword = ''
+  let statusFilter = 'pending'
 
-  view.querySelectorAll('[data-copy]').forEach(b => {
-    b.onclick = async () => {
-      const code = b.dataset.copy
-      try {
-        await navigator.clipboard.writeText(code)
-        b.innerText = '已复制'
-        setTimeout(() => { b.innerText = '复制码' }, 1500)
-      } catch (e) {
-        prompt('复制预约码', code)
+  function filtered() {
+    const kw = keyword.trim().toLowerCase()
+    return groups.filter(g => {
+      if (statusFilter !== 'all' && g.status !== statusFilter) return false
+      if (!kw) return true
+      const hay = [g.code, Array.from(g.vendors).join(' '), g.warehouse, g.driver, g.phone].join(' ').toLowerCase()
+      return hay.indexOf(kw) >= 0
+    })
+  }
+
+  function renderRows() {
+    const list = filtered()
+    const totalPages = Math.max(1, Math.ceil(list.length / pageSize))
+    if (page >= totalPages) page = totalPages - 1
+    const slice = list.slice(page * pageSize, page * pageSize + pageSize)
+
+    body.innerHTML = slice.map(g => `<tr>
+      <td><b style="font-size:15px;color:#1677ff;">${g.code}</b>${g.noOrder ? '<br><span style="font-size:12px;color:#d46b08;">无单预约</span>' : ''}</td>
+      <td>${Array.from(g.vendors).join('、') || '-'}</td>
+      <td>${g.warehouse}</td>
+      <td>${g.date}<br><span style="font-size:12px;color:#666;">${g.slot}</span></td>
+      <td>${g.boxes} 箱</td>
+      <td>${g.driver}<br><span style="font-size:12px;color:#999;">${g.phone}</span></td>
+      <td>${statusText[g.status] || g.status}</td>
+      <td style="white-space:nowrap;">
+        <button class="small secondary" data-copy="${g.code}">复制码</button>
+        <button class="small" data-qr="${g.code}">下载二维码</button>
+        <a href="https://bill.mahui.pw/track.html?code=${g.code}&v=20261123" target="_blank" style="font-size:12px;margin-left:6px;">排队进度</a>
+        ${g.noOrder ? '<div style="font-size:12px;color:#d46b08;margin-top:4px;">到仓后在「填报」填此码补单</div>' : ''}
+        ${g.noOrder ? (g.status === 'pending'
+          ? `<button class="small danger" data-del-appt="${g.code}" style="margin-top:6px;">删除预约</button>`
+          : '<div style="font-size:12px;color:#999;margin-top:4px;">已签到，不能删除</div>') : ''}
+      </td>
+    </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无记录</td></tr>'
+
+    const el = document.getElementById('ck-pagination')
+    el.innerHTML = `
+      <span style="font-size:13px;color:#666;">共 ${list.length} 条，第 ${page + 1} / ${totalPages} 页</span>
+      <button class="secondary small" id="ck-prev" ${page === 0 ? 'disabled' : ''} style="${page === 0 ? 'opacity:.5;' : ''}">上一页</button>
+      <button class="secondary small" id="ck-next" ${page >= totalPages - 1 ? 'disabled' : ''} style="${page >= totalPages - 1 ? 'opacity:.5;' : ''}">下一页</button>`
+    document.getElementById('ck-prev').onclick = () => { if (page > 0) { page--; renderRows() } }
+    document.getElementById('ck-next').onclick = () => { if (page + 1 < totalPages) { page++; renderRows() } }
+
+    view.querySelectorAll('[data-copy]').forEach(b => {
+      b.onclick = async () => {
+        const code = b.dataset.copy
+        try {
+          await navigator.clipboard.writeText(code)
+          b.innerText = '已复制'
+          setTimeout(() => { b.innerText = '复制码' }, 1500)
+        } catch (e) {
+          prompt('复制预约码', code)
+        }
       }
-    }
-  })
+    })
 
-  view.querySelectorAll('[data-qr]').forEach(b => {
-    b.onclick = () => downloadQrCode(b.dataset.qr)
-  })
+    view.querySelectorAll('[data-qr]').forEach(b => {
+      b.onclick = () => downloadQrCode(b.dataset.qr)
+    })
 
-  view.querySelectorAll('[data-del-appt]').forEach(b => {
-    b.onclick = async () => {
-      if (!confirm('确定删除该无单预约？删除后释放该时段产能，且不可恢复。')) return
-      b.disabled = true
-      const { error } = await supabase.from('bill_order').delete()
-        .eq('appointment_code', b.dataset.delAppt)
-        .eq('bill_type', '无单预约')
-      if (error) {
-        alert('删除失败：' + error.message)
-        b.disabled = false
-        return
+    view.querySelectorAll('[data-del-appt]').forEach(b => {
+      b.onclick = async () => {
+        if (!confirm('确定删除该无单预约？删除后释放该时段产能，且不可恢复。')) return
+        b.disabled = true
+        const { error } = await supabase.from('bill_order').delete()
+          .eq('appointment_code', b.dataset.delAppt)
+          .eq('bill_type', '无单预约')
+        if (error) {
+          alert('删除失败：' + error.message)
+          b.disabled = false
+          return
+        }
+        groups.splice(groups.findIndex(g => g.code === b.dataset.delAppt), 1)
+        renderRows()
       }
-      renderCheckin(view)
-    }
-  })
+    })
+  }
+
+  document.getElementById('ck-search').oninput = (e) => {
+    keyword = e.target.value
+    page = 0
+    renderRows()
+  }
+  document.getElementById('ck-status').onchange = (e) => {
+    statusFilter = e.target.value
+    page = 0
+    renderRows()
+  }
+
+  renderRows()
 }
-
 function downloadQrCode(code) {
   const url = `https://bill.mahui.pw/track.html?code=${code}&v=20261123`
   if (!window.QRCode) {

@@ -4518,6 +4518,7 @@ async function renderDockQueue(v) {
   const pageSize = 20
   let keyword = ''
   let currentDate = bjDate()
+  let statusFilter = 'waiting'
   let page = 0
   let rows = []
   let total = 0
@@ -4538,6 +4539,7 @@ async function renderDockQueue(v) {
       ctx.supabase.rpc('get_receive_progress', {
         p_date: currentDate,
         p_search: keyword || null,
+        p_status: statusFilter === 'all' ? null : statusFilter,
         p_limit: pageSize,
         p_offset: page * pageSize
       })
@@ -4583,13 +4585,14 @@ async function renderDockQueue(v) {
 
         <div class="row" style="margin-bottom:12px;align-items:center;">
           <input id="dock-date" type="date" value="${currentDate}" style="flex:0 0 160px;margin:0;" />
+          <select id="dock-status" style="flex:0 0 130px;margin:0;">
+            <option value="waiting" ${statusFilter === 'waiting' ? 'selected' : ''}>排队中</option>
+            <option value="calling" ${statusFilter === 'calling' ? 'selected' : ''}>卸货中</option>
+            <option value="done" ${statusFilter === 'done' ? 'selected' : ''}>已完成</option>
+            <option value="all" ${statusFilter === 'all' ? 'selected' : ''}>全部状态</option>
+          </select>
           <input id="dock-search" placeholder="搜索预约码 / 厂商 / 物流商 / 司机 / 手机号" value="${keyword}" style="flex:1;margin:0;" />
           <button class="secondary" id="btn-dock-search" style="flex:0 0 80px;">查询</button>
-        </div>
-
-        <div class="row" style="margin-bottom:16px;">
-          <input id="checkin-code" placeholder="扫描或输入司机提供的预约码，回车签到..." style="flex:1;" />
-          <button id="btn-checkin" style="flex:0 0 100px;">确认签到</button>
         </div>
 
         <table>
@@ -4607,7 +4610,7 @@ async function renderDockQueue(v) {
 
               let action = '—'
               if (r.status === 'pending') {
-                action = `<button class="small" data-act="checkin" data-key="${r.vehicle_key}" data-code="${first}">签到</button>`
+                action = '<span style="font-size:12px;color:#999;">待司机签到</span>'
               } else if (r.status === 'waiting') {
                 action = `<button class="small" data-act="call" data-key="${r.vehicle_key}" data-code="${first}" data-wh="${r.warehouse_code || ''}">叫车</button>`
               } else if (r.status === 'calling') {
@@ -4649,20 +4652,20 @@ async function renderDockQueue(v) {
     document.getElementById('btn-dock-search').onclick = doSearch
     document.getElementById('dock-search').onkeydown = (e) => { if (e.key === 'Enter') doSearch() }
 
-    document.getElementById('btn-receive').onclick = openReceiveQr
-    document.getElementById('btn-dock-board').onclick = () => window.open('./dock.html', '_blank')
-
-    document.getElementById('btn-checkin').onclick = () => checkIn(document.getElementById('checkin-code').value.trim().toUpperCase())
-    document.getElementById('checkin-code').onkeydown = (e) => {
-      if (e.key === 'Enter') checkIn(e.target.value.trim().toUpperCase())
+    document.getElementById('dock-status').onchange = (e) => {
+      statusFilter = e.target.value
+      page = 0
+      loadData()
     }
 
     document.getElementById('btn-prev').onclick = () => { if (page > 0) { page--; loadData() } }
     document.getElementById('btn-next').onclick = () => { if (page + 1 < totalPages) { page++; loadData() } }
 
+    document.getElementById('btn-receive').onclick = openReceiveQr
+    document.getElementById('btn-dock-board').onclick = () => window.open('./dock.html', '_blank')
+
     v.querySelectorAll('button[data-act]').forEach(b => {
       b.onclick = () => {
-        if (b.dataset.act === 'checkin') return checkIn(b.dataset.code)
         if (b.dataset.act === 'call') return callVehicle(b.dataset.key, b.dataset.code, b.dataset.wh)
         if (b.dataset.act === 'finish') return finishVehicle(b.dataset.key, b.dataset.code)
       }
