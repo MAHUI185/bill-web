@@ -4607,6 +4607,11 @@ async function renderDockQueue(v) {
           <button class="secondary" id="btn-dock-search" style="flex:0 0 80px;">查询</button>
         </div>
 
+        <div class="row" style="margin-bottom:12px;align-items:center;">
+          <input id="manual-checkin" placeholder="手工输入预约码，为司机签到..." style="flex:1;margin:0;" />
+          <button id="btn-manual-checkin" style="flex:0 0 110px;">手动签到</button>
+        </div>
+
         <table>
           <tr><th>签到时间</th><th>车辆 / 预约码</th><th>物流商 / 厂商</th><th>司机</th><th>本车货量</th><th>预约时段</th><th>状态 / 码头</th><th>操作</th></tr>
           <tbody>
@@ -4670,6 +4675,18 @@ async function renderDockQueue(v) {
       loadData()
     }
 
+    const manualCheckin = () => {
+      const el = document.getElementById('manual-checkin')
+      const code = (el.value || '').trim().toUpperCase()
+      if (!code) return
+      el.value = ''
+      checkIn(code)
+    }
+    document.getElementById('btn-manual-checkin').onclick = manualCheckin
+    document.getElementById('manual-checkin').onkeydown = (e) => {
+      if (e.key === 'Enter') manualCheckin()
+    }
+
     document.getElementById('btn-prev').onclick = () => { if (page > 0) { page--; loadData() } }
     document.getElementById('btn-next').onclick = () => { if (page + 1 < totalPages) { page++; loadData() } }
 
@@ -4705,6 +4722,7 @@ async function renderDockQueue(v) {
     if (upErr) return alert('签到失败：' + upErr.message)
     if (!updated || !updated.length) return alert('签到失败：状态已变化，请刷新')
     await logQueueAction('checkin', key, code, null)
+    alert('✅ 已签到：' + code)
     loadData()
   }
 
