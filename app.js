@@ -1055,7 +1055,7 @@ async function renderFill(view) {
       modal.innerHTML = `
         <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:24px;">
           <h2 style="margin-bottom:8px;">越库排队</h2>
-          <p style="font-size:13px;color:#666;margin-bottom:16px;">仅用于司机排队（越库），不会生成商品单据；到仓后正常填报，入库行会自动并入该预约。</p>
+          <p style="font-size:13px;color:#666;margin-bottom:16px;">仅用于司机排队（越库），不会生成商品单据。</p>
           <div class="row">
             <div><label>仓库 *</label><select id="wk-wh">${myWhs.map(w => `<option value="${w}">${w}</option>`).join('')}</select></div>
             <div><label>到仓日期 *</label><input id="wk-date" type="date" value="${addDays(todayBj(), 1)}" /></div>
