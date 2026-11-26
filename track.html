@@ -49,6 +49,7 @@
 
   <div class="footer">
     <span id="disp-updated">--</span>
+    <a href="./track.html">我的排队</a>
     <a href="javascript:location.reload()">刷新页面</a>
   </div>
 </div>
@@ -59,6 +60,27 @@
   <div class="calling-text">请前往</div>
   <div class="calling-text" id="disp-dock" style="color: #fde047; font-size: 56px; margin: 20px 0;">--</div>
   <div class="calling-text" style="font-size: 32px;">卸货！</div>
+</div>
+
+<!-- 司机免扫码：按手机号查看名下预约 -->
+<div class="container" id="phone-view" style="display:none;">
+  <h1 style="font-size: 26px; margin-bottom: 20px;">🚚 我的排队</h1>
+
+  <div class="card">
+    <div class="title">绑定手机号</div>
+    <p style="font-size:13px;color:#94a3b8;margin:6px 0 12px;line-height:1.6;">绑定后再次打开免扫码，直接查看名下预约和排队状态。</p>
+    <input id="drv-phone" inputmode="numeric" placeholder="请输入司机手机号"
+      style="width:100%;padding:12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:16px;margin-bottom:10px;" />
+    <button class="btn-active" id="drv-bind" style="margin-top:0;">查看我的排队</button>
+    <div id="drv-msg" style="font-size:13px;color:#fbbf24;margin-top:10px;"></div>
+  </div>
+
+  <div id="drv-list"></div>
+
+  <div class="footer" style="position:static;margin-top:16px;">
+    <span id="drv-updated">--</span>
+    <a href="javascript:void(0)" id="drv-switch">切换手机号</a>
+  </div>
 </div>
 
 <script>
@@ -83,7 +105,9 @@
   let timer = null;
 
   if (!code) {
-    statusEl().innerText = '❌ 缺少预约码参数';
+    document.getElementById('main-content').style.display = 'none';
+    document.getElementById('phone-view').style.display = 'block';
+    initPhoneView();
     return;
   }
 
@@ -122,6 +146,70 @@
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     });
+  }
+
+  function initPhoneView() {
+    const KEY = 'dock_driver_phone';
+    const phoneEl = document.getElementById('drv-phone');
+    const msgEl = document.getElementById('drv-msg');
+    const listEl = document.getElementById('drv-list');
+    let phone = localStorage.getItem(KEY) || '';
+    let refreshTimer = null;
+
+    const statusText = { pending: '⏳ 待签到', waiting: '🚚 排队中', calling: '📢 已叫号', done: '✅ 已完成' };
+
+    async function load() {
+      if (!phone) return;
+      const { data, error } = await supabase.rpc('driver_appointments', { p_phone: phone });
+      if (error) { msgEl.innerText = '加载失败：' + error.message; return; }
+      msgEl.innerText = '';
+      document.getElementById('drv-updated').innerText = '更新于 ' + new Date().toLocaleTimeString();
+
+      const rows = data || [];
+      if (!rows.length) {
+        listEl.innerHTML = '<div class="card" style="text-align:center;color:#94a3b8;">未找到该手机号的预约，请确认手机号或扫预约码</div>';
+        return;
+      }
+
+      listEl.innerHTML = rows.map(r => `
+        <a class="card" href="?code=${encodeURIComponent(r.appointment_code)}" style="display:block;text-decoration:none;color:#fff;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <span style="font-size:22px;font-weight:bold;color:#38bdf8;">${r.appointment_code}</span>
+            <span style="font-size:13px;color:#fbbf24;">${statusText[r.status] || r.status}</span>
+          </div>
+          <div style="font-size:13px;color:#94a3b8;margin-top:8px;line-height:1.7;">
+            ${r.arrival_date || ''} ${r.slot || ''} · ${r.boxes || 0} 箱<br>
+            ${r.vendor_names || ''}${r.assigned_dock ? ' · ' + r.assigned_dock : ''}
+          </div>
+        </a>`).join('');
+    }
+
+    function bindPhone(p) {
+      phone = p;
+      localStorage.setItem(KEY, p);
+      phoneEl.value = p;
+      load();
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(load, 10000);
+    }
+
+    phoneEl.value = phone;
+    document.getElementById('drv-bind').onclick = () => {
+      const p = phoneEl.value.trim();
+      if (p.length < 6) { msgEl.innerText = '请输入正确的手机号'; return; }
+      bindPhone(p);
+    };
+    document.getElementById('drv-switch').onclick = () => {
+      localStorage.removeItem(KEY);
+      phone = '';
+      phoneEl.value = '';
+      listEl.innerHTML = '';
+      msgEl.innerText = '';
+      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+      phoneEl.focus();
+    };
+
+    if (phone) bindPhone(phone);
   }
 
   function ensureCheckinButton() {
