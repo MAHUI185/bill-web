@@ -781,7 +781,7 @@ async function renderFill(view) {
         <div style="margin-top:12px;">
           <button id="btn-submit-all">提交预约</button>
           <button class="secondary" id="btn-clear-all">清空</button>
-          <button class="secondary" id="btn-walkin">无单预约</button>
+          <button class="secondary" id="btn-walkin" title="仅用于司机排队，不生成单据">越库排队</button>
         </div>
       </div>`
 
@@ -1047,15 +1047,15 @@ async function renderFill(view) {
       render()
     }
 
-    // ★ 无单预约：先占时段，到仓后正常填报自动并入
+    // ★ 越库排队：仅用于司机排队，先占时段，到仓后正常填报自动并入
     const btnWalkin = document.getElementById('btn-walkin')
     if (btnWalkin) btnWalkin.onclick = () => {
       const modal = document.createElement('div')
       modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
       modal.innerHTML = `
         <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:24px;">
-          <h2 style="margin-bottom:8px;">无单预约</h2>
-          <p style="font-size:13px;color:#666;margin-bottom:16px;">没有商品单据也能先占时段；到仓后正常填报，入库行会自动并入该预约。</p>
+          <h2 style="margin-bottom:8px;">越库排队</h2>
+          <p style="font-size:13px;color:#666;margin-bottom:16px;">仅用于司机排队（越库），不会生成商品单据；到仓后正常填报，入库行会自动并入该预约。</p>
           <div class="row">
             <div><label>仓库 *</label><select id="wk-wh">${myWhs.map(w => `<option value="${w}">${w}</option>`).join('')}</select></div>
             <div><label>到仓日期 *</label><input id="wk-date" type="date" value="${addDays(todayBj(), 1)}" /></div>
@@ -1120,11 +1120,11 @@ async function renderFill(view) {
         const qrUrl = `https://bill.mahui.pw/track.html?code=${code}&v=20261123`
         const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrUrl)}`
         modal.querySelector('div').innerHTML = `
-          <h2 style="margin-bottom:12px;">✅ 预约成功</h2>
+          <h2 style="margin-bottom:12px;">✅ 越库排队成功</h2>
           <p style="font-size:14px;color:#666;">${date} ${slot} · ${boxes} 箱</p>
           <div style="font-size:28px;font-weight:bold;color:#1677ff;margin:12px 0;">${code}</div>
           <img src="${qrImg}" style="width:200px;height:200px;margin:0 auto;display:block;" />
-          <p style="font-size:12px;color:#888;margin-top:12px;">到仓后正常填报，入库行会自动并入该预约</p>
+          <p style="font-size:12px;color:#888;margin-top:12px;">司机排队使用</p>
           <button class="secondary" style="width:100%;margin-top:16px;" id="wk-done">知道了</button>`
         modal.querySelector('#wk-done').onclick = close
       }
@@ -1264,8 +1264,8 @@ async function renderFill(view) {
       const existingAppt = (existRows && existRows[0]) || null
 
       if (existingAppt && existingAppt.bill_type === '无单预约') {
-        if (validOut.length) return msgEl.innerHTML = msg('该到仓日已有无单预约，请先清空出库行，入库会自动并入该预约', false)
-        const ok = confirm(`该到仓日已有无单预约 ${existingAppt.appointment_code}（时段 ${existingAppt.arrival_time_slot}），本次 ${totalBoxes} 箱将自动并入，是否继续？`)
+        if (validOut.length) return msgEl.innerHTML = msg('该到仓日已有越库排队，请先清空出库行，入库会自动并入该预约', false)
+        const ok = confirm(`该到仓日已有越库排队 ${existingAppt.appointment_code}（时段 ${existingAppt.arrival_time_slot}），本次 ${totalBoxes} 箱将自动并入，是否继续？`)
         if (!ok) return
 
         msgEl.innerHTML = msg('正在并入预约...', true)
@@ -2162,7 +2162,7 @@ async function renderCheckin(view) {
     const slice = list.slice(page * pageSize, page * pageSize + pageSize)
 
     body.innerHTML = slice.map(g => `<tr>
-      <td><b style="font-size:15px;color:#1677ff;">${g.code}</b>${g.noOrder ? '<br><span style="font-size:12px;color:#d46b08;">无单预约</span>' : ''}</td>
+      <td><b style="font-size:15px;color:#1677ff;">${g.code}</b>${g.noOrder ? '<br><span style="font-size:12px;color:#d46b08;">越库排队</span>' : ''}</td>
       <td>${Array.from(g.vendors).join('、') || '-'}</td>
       <td>${g.warehouse}</td>
       <td>${g.date}<br><span style="font-size:12px;color:#666;">${g.slot}</span></td>
@@ -2206,7 +2206,7 @@ async function renderCheckin(view) {
 
     view.querySelectorAll('[data-del-appt]').forEach(b => {
       b.onclick = async () => {
-        if (!confirm('确定删除该无单预约？删除后释放该时段产能，且不可恢复。')) return
+        if (!confirm('确定删除该越库排队？删除后释放该时段产能，且不可恢复。')) return
         b.disabled = true
         const { error } = await supabase.from('bill_order').delete()
           .eq('appointment_code', b.dataset.delAppt)
