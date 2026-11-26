@@ -4515,177 +4515,239 @@ function pickDock(wh) {
 }
 
 async function renderDockQueue(v) {
-  const keyOf = r => r.vehicle_key || ('AP|' + r.appointment_code)
+  const pageSize = 20
+  let keyword = ''
+  let currentDate = bjDate()
+  let page = 0
+  let rows = []
+  let total = 0
+  let stats = { pending: 0, waiting: 0, calling: 0, done: 0, late: 0 }
 
-  const loadList = async () => {
-    const { data, error } = await ctx.supabase.from('bill_order')
-      .select('appointment_code, vehicle_key, vendor_name, logistics_code, driver_name, driver_phone, box_qty, arrival_time_slot, check_in_time, queue_status, assigned_dock, warehouse_code')
-      .in('queue_status', ['waiting', 'calling'])
-      .order('check_in_time', { ascending: true })
+  function bjDate() {
+    return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).toISOString().slice(0, 10)
+  }
 
-    if (error) return v.innerHTML = ctx.msg('加载失败：' + error.message, false)
+  const byKey = (q, key, code) => key && key.indexOf('AP|') === 0
+    ? q.eq('appointment_code', code)
+    : q.eq('vehicle_key', key)
 
-    // 按车组键聚合：一车多码只显示一行
-    const groups = new Map()
-    ;(data || []).forEach(r => {
-      const k = keyOf(r)
-      let g = groups.get(k)
-      if (!g) {
-        g = {
-          key: k, codes: [], vendors: new Set(), boxes: 0,
-          checkIn: r.check_in_time, slot: r.arrival_time_slot,
-          status: r.queue_status, dock: r.assigned_dock,
-          driver: r.driver_name, phone: r.driver_phone,
-          logistics: r.logistics_code, warehouse: r.warehouse_code
-        }
-        groups.set(k, g)
-      }
-      g.codes.push(r.appointment_code)
-      if (r.vendor_name) g.vendors.add(r.vendor_name)
-      g.boxes += Number(r.box_qty) || 0
-      if (r.check_in_time && (!g.checkIn || r.check_in_time < g.checkIn)) g.checkIn = r.check_in_time
-      if (r.queue_status === 'calling') {
-        g.status = 'calling'
-        if (r.assigned_dock) g.dock = r.assigned_dock
-      }
-      if (!g.driver && r.driver_name) g.driver = r.driver_name
-      if (!g.phone && r.driver_phone) g.phone = r.driver_phone
-    })
+  async function loadData() {
+    v.innerHTML = '<p style="color:#999;">加载中...</p>'
+    const [statsRes, listRes] = await Promise.all([
+      ctx.supabase.rpc('get_receive_stats', { p_date: currentDate }),
+      ctx.supabase.rpc('get_receive_progress', {
+        p_date: currentDate,
+        p_search: keyword || null,
+        p_limit: pageSize,
+        p_offset: page * pageSize
+      })
+    ])
 
-    const list = Array.from(groups.values())
-      .sort((a, b) => new Date(a.checkIn || 0) - new Date(b.checkIn || 0))
+    if (statsRes.error) {
+      v.innerHTML = ctx.msg('统计加载失败：' + statsRes.error.message, false)
+      return
+    }
+    if (listRes.error) {
+      v.innerHTML = ctx.msg('列表加载失败：' + listRes.error.message, false)
+      return
+    }
+
+    const s = Array.isArray(statsRes.data) ? statsRes.data[0] : statsRes.data
+    stats = s || { pending: 0, waiting: 0, calling: 0, done: 0, late: 0 }
+    rows = listRes.data || []
+    total = rows.length ? Number(rows[0].total_count || 0) : 0
+    renderPage()
+  }
+
+  function renderPage() {
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
     v.innerHTML = `
       <div class="card" style="padding:16px;">
-        <h2>收货进度</h2>
-        <div style="font-size:12px;color:#888;margin:-8px 0 12px;line-height:1.8;">
-          一车规则：同一物流商 + 同一司机手机号 + 同一到仓日 + 同一时段 + 同一仓库 = 一车（厂商自送按预约码成车）。签到、叫车、完成收货按整车联动，只占一个码头。<br>
-          司机可自助签到（限到仓当天、时段开始前 1 小时、仓库定位范围内）；收货员在「收货工作台」用姓名+手机号登录后叫车/完成收货，选择码头后可合并多个预约码一起收货。
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+          <h2 style="margin:0;">收货进度</h2>
+          <div style="display:flex;gap:8px;">
+            <button class="secondary small" id="btn-receive">收货工作台</button>
+            <button class="secondary small" id="btn-dock-board">码头看板</button>
+          </div>
         </div>
-        <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:12px;">
-          <button class="secondary small" id="btn-receive">收货工作台</button>
-          <button class="secondary small" id="btn-dock-board">码头看板</button>
+
+        <div style="display:flex;gap:18px;font-size:13px;color:#666;margin-bottom:12px;flex-wrap:wrap;">
+          <span>今日预约 <b>${total}</b></span>
+          <span>待签到 <b style="color:#1677ff;">${stats.pending || 0}</b></span>
+          <span>待叫车 <b style="color:#d46b08;">${stats.waiting || 0}</b></span>
+          <span>卸货中 <b style="color:#cf1322;">${stats.calling || 0}</b></span>
+          <span>已完成 <b>${stats.done || 0}</b></span>
+          <span>迟到 <b style="color:#cf1322;">${stats.late || 0}</b></span>
         </div>
+
+        <div class="row" style="margin-bottom:12px;align-items:center;">
+          <input id="dock-date" type="date" value="${currentDate}" style="flex:0 0 160px;margin:0;" />
+          <input id="dock-search" placeholder="搜索预约码 / 厂商 / 物流商 / 司机 / 手机号" value="${keyword}" style="flex:1;margin:0;" />
+          <button class="secondary" id="btn-dock-search" style="flex:0 0 80px;">查询</button>
+        </div>
+
         <div class="row" style="margin-bottom:16px;">
           <input id="checkin-code" placeholder="扫描或输入司机提供的预约码，回车签到..." style="flex:1;" />
           <button id="btn-checkin" style="flex:0 0 100px;">确认签到</button>
         </div>
+
         <table>
           <tr><th>签到时间</th><th>车辆 / 预约码</th><th>物流商 / 厂商</th><th>司机</th><th>本车货量</th><th>预约时段</th><th>状态 / 码头</th><th>操作</th></tr>
           <tbody>
-            ${list.map(g => `<tr>
-              <td>${g.checkIn ? new Date(g.checkIn).toLocaleTimeString() : '-'}</td>
-              <td><strong>${g.codes[0]}</strong>${g.codes.length > 1 ? `<br><span style="font-size:12px;color:#1677ff;">同车 ${g.codes.length} 个码</span>` : ''}</td>
-              <td>${g.logistics ? `<div style="color:#722ed1;font-size:12px;">物流商 ${g.logistics}</div>` : ''}${Array.from(g.vendors).join('、') || '-'}</td>
-              <td>${g.driver || '-'}<br><span style="font-size:12px;color:#999;">${g.phone || ''}</span></td>
-              <td><span style="color:#cf1322;font-weight:bold;">${g.boxes}</span> 箱</td>
-              <td>${g.slot || '-'}</td>
-              <td>${g.status === 'calling' ? `<span style="color:#cf1322;">📢 ${g.dock || ''} 卸货中</span>` : '<span style="color:#389e0d;">🚚 排队中</span>'}</td>
-              <td>
-                ${g.status === 'waiting'
-                  ? `<button class="small" data-act="call" data-key="${g.key}" data-code="${g.codes[0]}" data-wh="${g.warehouse || ''}">叫车</button>`
-                  : `<button class="small secondary" data-act="finish" data-key="${g.key}" data-code="${g.codes[0]}">完成收货</button>`}
-              </td>
-            </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无排队车辆</td></tr>'}
+            ${rows.map(r => {
+              const codes = String(r.codes || '').split(',').filter(Boolean)
+              const first = r.first_code || codes[0] || ''
+              let statusHtml = ''
+              if (r.status === 'calling') statusHtml = `<span style="color:#cf1322;">📢 ${r.assigned_dock || ''} 卸货中</span>`
+              else if (r.status === 'waiting') statusHtml = '<span style="color:#389e0d;">🚚 排队中</span>'
+              else if (r.status === 'pending') statusHtml = '<span style="color:#1677ff;">⏳ 待签到</span>'
+              else statusHtml = '<span style="color:#999;">✅ 已完成</span>'
+              if (r.is_late) statusHtml += ' <span class="stat no">迟到</span>'
+
+              let action = '—'
+              if (r.status === 'pending') {
+                action = `<button class="small" data-act="checkin" data-key="${r.vehicle_key}" data-code="${first}">签到</button>`
+              } else if (r.status === 'waiting') {
+                action = `<button class="small" data-act="call" data-key="${r.vehicle_key}" data-code="${first}" data-wh="${r.warehouse_code || ''}">叫车</button>`
+              } else if (r.status === 'calling') {
+                action = `<button class="small secondary" data-act="finish" data-key="${r.vehicle_key}" data-code="${first}">完成收货</button>`
+              }
+
+              return `<tr>
+                <td>${r.check_in_time ? new Date(r.check_in_time).toLocaleTimeString() : '-'}</td>
+                <td><strong>${first}</strong>${codes.length > 1 ? `<br><span style="font-size:12px;color:#1677ff;">同车 ${codes.length} 个码</span>` : ''}</td>
+                <td>${r.logistics_code ? `<div style="color:#722ed1;font-size:12px;">物流商 ${r.logistics_code}</div>` : ''}${r.vendor_names || '-'}</td>
+                <td>${r.driver_name || '-'}<br><span style="font-size:12px;color:#999;">${r.driver_phone || ''}</span></td>
+                <td><span style="color:#cf1322;font-weight:bold;">${r.boxes || 0}</span> 箱</td>
+                <td>${r.slot || '-'}</td>
+                <td>${statusHtml}</td>
+                <td>${action}</td>
+              </tr>`
+            }).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">当天暂无预约</td></tr>'}
           </tbody>
         </table>
+
+        <div style="display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:12px;">
+          <span style="font-size:13px;color:#666;">共 ${total} 车，第 ${page + 1} / ${totalPages} 页</span>
+          <button class="secondary small" id="btn-prev" ${page === 0 ? 'disabled' : ''}>上一页</button>
+          <button class="secondary small" id="btn-next" ${page >= totalPages - 1 ? 'disabled' : ''}>下一页</button>
+        </div>
       </div>`
 
-    // 有 vehicle_key 时按车更新，老数据（无键）按单码更新
-    const byKey = (q, key, code) => key.startsWith('AP|')
-      ? q.eq('appointment_code', code || key.slice(3))
-      : q.eq('vehicle_key', key)
-
-    document.getElementById('btn-dock-board').onclick = () => {
-      window.open('./dock.html', '_blank')
+    document.getElementById('dock-date').onchange = (e) => {
+      currentDate = e.target.value || bjDate()
+      page = 0
+      loadData()
     }
 
-    document.getElementById('btn-receive').onclick = () => {
-      const url = 'https://bill.mahui.pw/receive.html'
-      const box = document.createElement('div')
-      box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
-      box.innerHTML = `
-        <div style="background:#fff;border-radius:8px;max-width:360px;width:100%;padding:20px;text-align:center;">
-          <h2 style="margin:0 0 8px;">收货工作台</h2>
-          <p style="font-size:13px;color:#666;margin-bottom:12px;">手机扫码打开，收货员输入姓名和手机号登录后即可叫车、完成收货。</p>
-          <div id="rcv-qr" style="display:flex;justify-content:center;margin-bottom:12px;"></div>
-          <input readonly value="${url}" style="font-size:12px;" onclick="this.select()" />
-          <button class="secondary" id="rcv-close" style="width:100%;">关闭</button>
-        </div>`
-      document.body.appendChild(box)
-      box.querySelector('#rcv-close').onclick = () => box.remove()
-      box.onclick = (e) => { if (e.target === box) box.remove() }
-      const qrEl = box.querySelector('#rcv-qr')
-      if (window.QRCode) {
-        new window.QRCode(qrEl, { text: url, width: 220, height: 220, correctLevel: window.QRCode.CorrectLevel.M })
-      } else {
-        qrEl.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}" />`
-      }
+    const doSearch = () => {
+      keyword = document.getElementById('dock-search').value.trim()
+      page = 0
+      loadData()
     }
-    document.getElementById('btn-checkin').onclick = async () => {
-      const code = document.getElementById('checkin-code').value.trim().toUpperCase()
-      if (!code) return
+    document.getElementById('btn-dock-search').onclick = doSearch
+    document.getElementById('dock-search').onkeydown = (e) => { if (e.key === 'Enter') doSearch() }
 
-      const { data: rows, error: readErr } = await ctx.supabase.from('bill_order')
-        .select('id, appointment_code, vehicle_key, queue_status')
-        .eq('appointment_code', code)
+    document.getElementById('btn-receive').onclick = openReceiveQr
+    document.getElementById('btn-dock-board').onclick = () => window.open('./dock.html', '_blank')
 
-      if (readErr) return alert('查询失败：' + readErr.message)
-      if (!rows || !rows.length) return alert('预约码不存在')
-      if (!rows.some(r => r.queue_status === 'pending')) return alert('该预约码已签到或已过号')
-
-      const key = keyOf(rows[0])
-      const nowIso = new Date().toISOString()
-
-      const { data: updated, error } = await byKey(
-        ctx.supabase.from('bill_order')
-          .update({ queue_status: 'waiting', check_in_time: nowIso })
-          .eq('queue_status', 'pending'),
-        key, code
-      ).select('id')
-
-      if (error) return alert('签到失败：' + error.message)
-      if (!updated || !updated.length) return alert('签到失败：车辆状态已变化，请刷新')
-      await logQueueAction('checkin', key, code, null)
-      alert(`✅ 签到成功，本车 ${updated.length} 行已入队`)
-      document.getElementById('checkin-code').value = ''
-      loadList()
+    document.getElementById('btn-checkin').onclick = () => checkIn(document.getElementById('checkin-code').value.trim().toUpperCase())
+    document.getElementById('checkin-code').onkeydown = (e) => {
+      if (e.key === 'Enter') checkIn(e.target.value.trim().toUpperCase())
     }
+
+    document.getElementById('btn-prev').onclick = () => { if (page > 0) { page--; loadData() } }
+    document.getElementById('btn-next').onclick = () => { if (page + 1 < totalPages) { page++; loadData() } }
 
     v.querySelectorAll('button[data-act]').forEach(b => {
-      b.onclick = async () => {
-        const code = b.dataset.code
-        const key = b.dataset.key
-
-        if (b.dataset.act === 'call') {
-          const dock = await pickDock(b.dataset.wh)
-          if (!dock) return
-          const { data: updated, error } = await byKey(
-            ctx.supabase.from('bill_order')
-              .update({ queue_status: 'calling', assigned_dock: dock.trim(), call_time: new Date().toISOString() })
-              .eq('queue_status', 'waiting'),
-            key, code
-          ).select('id')
-          if (error) return alert('操作失败：' + error.message)
-          if (!updated || !updated.length) return alert('该车已被叫号或已不在排队中，请刷新')
-          await logQueueAction('call', key, code, dock.trim())
-          loadList()
-        } else if (b.dataset.act === 'finish') {
-          if (!confirm('确认该车已完成收货？')) return
-          const { data: updated, error } = await byKey(
-            ctx.supabase.from('bill_order')
-              .update({ queue_status: 'done', done_time: new Date().toISOString() })
-              .eq('queue_status', 'calling'),
-            key, code
-          ).select('id')
-          if (error) return alert('操作失败：' + error.message)
-          if (!updated || !updated.length) return alert('状态已变化，请刷新')
-          await logQueueAction('done', key, code, null)
-          loadList()
-        }
+      b.onclick = () => {
+        if (b.dataset.act === 'checkin') return checkIn(b.dataset.code)
+        if (b.dataset.act === 'call') return callVehicle(b.dataset.key, b.dataset.code, b.dataset.wh)
+        if (b.dataset.act === 'finish') return finishVehicle(b.dataset.key, b.dataset.code)
       }
     })
   }
 
-  loadList()
+  async function checkIn(code) {
+    if (!code) return
+    const { data: rws, error } = await ctx.supabase.from('bill_order')
+      .select('id, appointment_code, vehicle_key, queue_status')
+      .eq('appointment_code', code)
+
+    if (error) return alert('查询失败：' + error.message)
+    if (!rws || !rws.length) return alert('预约码不存在')
+    if (!rws.some(r => r.queue_status === 'pending')) return alert('该预约码已签到或已过号')
+
+    const key = rws[0].vehicle_key || ('AP|' + rws[0].appointment_code)
+    const { data: updated, error: upErr } = await byKey(
+      ctx.supabase.from('bill_order')
+        .update({ queue_status: 'waiting', check_in_time: new Date().toISOString() })
+        .eq('queue_status', 'pending'),
+      key, code
+    ).select('id')
+
+    if (upErr) return alert('签到失败：' + upErr.message)
+    if (!updated || !updated.length) return alert('签到失败：状态已变化，请刷新')
+    await logQueueAction('checkin', key, code, null)
+    loadData()
+  }
+
+  async function callVehicle(key, code, wh) {
+    const dock = await pickDock(wh)
+    if (!dock) return
+
+    const { data: updated, error } = await byKey(
+      ctx.supabase.from('bill_order')
+        .update({ queue_status: 'calling', assigned_dock: dock, call_time: new Date().toISOString() })
+        .eq('queue_status', 'waiting'),
+      key, code
+    ).select('id')
+
+    if (error) return alert('操作失败：' + error.message)
+    if (!updated || !updated.length) return alert('该车已被叫号或不在等待中，请刷新')
+    await logQueueAction('call', key, code, dock)
+    loadData()
+  }
+
+  async function finishVehicle(key, code) {
+    if (!confirm('确认该车已完成收货？')) return
+
+    const { data: updated, error } = await byKey(
+      ctx.supabase.from('bill_order')
+        .update({ queue_status: 'done', done_time: new Date().toISOString() })
+        .eq('queue_status', 'calling'),
+      key, code
+    ).select('id')
+
+    if (error) return alert('操作失败：' + error.message)
+    if (!updated || !updated.length) return alert('状态已变化，请刷新')
+    await logQueueAction('done', key, code, null)
+    loadData()
+  }
+
+  function openReceiveQr() {
+    const url = 'https://bill.mahui.pw/receive.html'
+    const box = document.createElement('div')
+    box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
+    box.innerHTML = `
+      <div style="background:#fff;border-radius:8px;max-width:360px;width:100%;padding:20px;text-align:center;">
+        <h2 style="margin:0 0 8px;">收货工作台</h2>
+        <p style="font-size:13px;color:#666;margin-bottom:12px;">手机扫码打开，收货员输入姓名和手机号登录后即可叫车、完成收货。</p>
+        <div id="rcv-qr" style="display:flex;justify-content:center;margin-bottom:12px;"></div>
+        <input readonly value="${url}" style="font-size:12px;" onclick="this.select()" />
+        <button class="secondary" id="rcv-close" style="width:100%;">关闭</button>
+      </div>`
+    document.body.appendChild(box)
+    box.querySelector('#rcv-close').onclick = () => box.remove()
+    box.onclick = (e) => { if (e.target === box) box.remove() }
+    const qrEl = box.querySelector('#rcv-qr')
+    if (window.QRCode) {
+      new window.QRCode(qrEl, { text: url, width: 220, height: 220, correctLevel: window.QRCode.CorrectLevel.M })
+    } else {
+      qrEl.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}" />`
+    }
+  }
+
+  loadData()
 }
