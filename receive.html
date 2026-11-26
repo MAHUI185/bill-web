@@ -271,7 +271,7 @@
       const r = await rpcOne('receiver_finish', { p_token: token, p_code: code });
       if (!r || !r.ok) return alert((r && r.message) || '操作失败');
       await load();
-      openNextCall();
+      pushNext();
     } catch (e) {
       alert('操作失败：' + (e.message || e));
     }
@@ -318,6 +318,25 @@
         if (v) done(v);
       };
     });
+  }
+
+  async function pushNext() {
+    try {
+      const { data, error } = await sb.rpc('receiver_next', { p_token: token });
+      if (error) throw error;
+      const r = (data || [])[0];
+      if (!r) return;
+
+      if (!confirm(`系统推送下一辆：${r.appointment_code}\n${r.vendor_names || ''} · ${r.boxes || 0} 箱\n请选择码头`)) return;
+      const dock = await pickDock(r.warehouse_code);
+      if (!dock) return;
+
+      const call = await rpcOne('receiver_call', { p_token: token, p_code: r.appointment_code, p_dock: dock });
+      if (!call || !call.ok) return alert((call && call.message) || '推送叫车失败');
+      await load();
+    } catch (e) {
+      alert('系统推送失败：' + (e.message || e));
+    }
   }
 
   function openNextCall() {

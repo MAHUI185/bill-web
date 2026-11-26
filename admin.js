@@ -4581,6 +4581,7 @@ async function renderDockQueue(v) {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
           <h2 style="margin:0;">收货进度</h2>
           <div style="display:flex;gap:8px;">
+            <button class="secondary small" id="btn-push-next">推送下一辆</button>
             <button class="secondary small" id="btn-receive">收货工作台</button>
             <button class="secondary small" id="btn-dock-board">码头看板</button>
           </div>
@@ -4631,7 +4632,7 @@ async function renderDockQueue(v) {
               } else if (r.status === 'waiting') {
                 action = `<button class="small" data-act="call" data-key="${r.vehicle_key}" data-code="${first}" data-wh="${r.warehouse_code || ''}">叫车</button>`
               } else if (r.status === 'calling') {
-                action = `<button class="small secondary" data-act="finish" data-key="${r.vehicle_key}" data-code="${first}">完成收货</button>`
+                action = `<button class="small secondary" data-act="finish" data-key="${r.vehicle_key}" data-code="${first}" data-wh="${r.warehouse_code || ''}">完成收货</button>`
               }
 
               return `<tr>
@@ -4692,11 +4693,12 @@ async function renderDockQueue(v) {
 
     document.getElementById('btn-receive').onclick = openReceiveQr
     document.getElementById('btn-dock-board').onclick = () => window.open('./dock.html', '_blank')
+    document.getElementById('btn-push-next').onclick = () => pushNext(null)
 
     v.querySelectorAll('button[data-act]').forEach(b => {
       b.onclick = () => {
         if (b.dataset.act === 'call') return callVehicle(b.dataset.key, b.dataset.code, b.dataset.wh)
-        if (b.dataset.act === 'finish') return finishVehicle(b.dataset.key, b.dataset.code)
+        if (b.dataset.act === 'finish') return finishVehicle(b.dataset.key, b.dataset.code, b.dataset.wh)
       }
     })
   }
@@ -4743,7 +4745,7 @@ async function renderDockQueue(v) {
     loadData()
   }
 
-  async function finishVehicle(key, code) {
+  async function finishVehicle(key, code, wh) {
     if (!confirm('确认该车已完成收货？')) return
 
     const { data: updated, error } = await byKey(
@@ -4756,6 +4758,30 @@ async function renderDockQueue(v) {
     if (error) return alert('操作失败：' + error.message)
     if (!updated || !updated.length) return alert('状态已变化，请刷新')
     await logQueueAction('done', key, code, null)
+    loadData()
+    pushNext(wh || null)
+  }
+
+  async function pushNext(wh) {
+    const { data, error } = await ctx.supabase.rpc('next_waiting_vehicle', { p_warehouse: wh || null })
+    if (error) return alert('系统推送失败：' + error.message)
+    const r = (data || [])[0]
+    if (!r) return
+
+    if (!confirm(`系统推送下一辆：${r.appointment_code}\n${r.vendor_names || ''} · ${r.boxes || 0} 箱\n请选择码头`)) return
+    const dock = await pickDock(r.warehouse_code)
+    if (!dock) return
+
+    const { data: updated, error: upErr } = await byKey(
+      ctx.supabase.from('bill_order')
+        .update({ queue_status: 'calling', assigned_dock: dock, call_time: new Date().toISOString() })
+        .eq('queue_status', 'waiting'),
+      r.vehicle_key, r.appointment_code
+    ).select('id')
+
+    if (upErr) return alert('推送叫车失败：' + upErr.message)
+    if (!updated || !updated.length) return alert('该车已被叫号或不在等待中，请刷新')
+    await logQueueAction('call', r.vehicle_key, r.appointment_code, dock)
     loadData()
   }
 
