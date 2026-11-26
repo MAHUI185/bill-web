@@ -2082,12 +2082,13 @@ async function renderCheckin(view) {
       <div id="ck-list-wrap">
         <h2>到仓信息</h2>
         <div class="row" style="margin-bottom:12px;align-items:center;">
-          <input id="ck-date" type="date" value="${todayBj()}" style="flex:0 0 160px;margin:0;" />
-          <input id="ck-search" placeholder="搜索预约码 / 厂商 / 司机 / 手机号 / 仓库" style="flex:1;margin:0;" />
-          <select id="ck-status" style="flex:0 0 140px;margin:0;">
+          <input id="ck-date" type="date" value="${todayBj()}" style="flex:0 0 150px;margin:0;" />
+          <select id="ck-status" style="flex:0 0 130px;margin:0;">
             <option value="pending">待签到</option>
             <option value="all">全部状态</option>
           </select>
+          <input id="ck-search" placeholder="搜索预约码 / 厂商 / 司机 / 手机号 / 仓库" style="flex:1;margin:0;" />
+          <button class="secondary" id="btn-ck-search" style="flex:0 0 80px;">查询</button>
         </div>
         <div class="scroll" style="max-height: calc(100vh - 340px);">
           <table>
@@ -2232,20 +2233,16 @@ async function renderCheckin(view) {
     })
   }
 
-  document.getElementById('ck-search').oninput = (e) => {
-    keyword = e.target.value
+  const applyFilters = () => {
+    dateFilter = document.getElementById('ck-date').value
+    statusFilter = document.getElementById('ck-status').value
+    keyword = document.getElementById('ck-search').value
     page = 0
     renderRows()
   }
-  document.getElementById('ck-status').onchange = (e) => {
-    statusFilter = e.target.value
-    page = 0
-    renderRows()
-  }
-  document.getElementById('ck-date').onchange = (e) => {
-    dateFilter = e.target.value
-    page = 0
-    renderRows()
+  document.getElementById('btn-ck-search').onclick = applyFilters
+  document.getElementById('ck-search').onkeydown = (e) => {
+    if (e.key === 'Enter') applyFilters()
   }
 
   const ckTabs = document.querySelectorAll('#ck-tabs button')
