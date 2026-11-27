@@ -60,6 +60,8 @@
   <div class="calling-text">请前往</div>
   <div class="calling-text" id="disp-dock" style="color: #fde047; font-size: 56px; margin: 20px 0;">--</div>
   <div class="calling-text" style="font-size: 32px;">卸货！</div>
+  <div id="ack-note" style="font-size: 16px; color: #4ade80; margin-top: 14px; display: none;">已确认收到，请前往码头</div>
+  <button id="btn-ack" style="margin-top: 28px; padding: 16px 30px; border: none; border-radius: 12px; background: #fff; color: #b91c1c; font-size: 20px; font-weight: bold;">✅ 已收到，前往码头</button>
 </div>
 
 <!-- 司机免扫码：按手机号查看名下预约 -->
@@ -102,6 +104,7 @@
   let isVoiceEnabled = false;
   let isCalling = false;
   let isDone = false;
+  let acked = false;
   let timer = null;
 
   if (!code) {
@@ -112,6 +115,7 @@
   }
 
   document.getElementById('disp-code').innerText = code;
+  try { acked = localStorage.getItem('dock_ack_' + code) === '1' } catch (e) {}
 
   // 微信/iOS 必须用户手势解锁音频
   const btn = document.createElement('button');
@@ -120,9 +124,17 @@
   btn.onclick = () => {
     isVoiceEnabled = true;
     btn.remove();
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {})
+    }
     speak('语音已激活，正在为您排队');
   };
   document.getElementById('main-content').appendChild(btn);
+
+  const voiceNote = document.createElement('div');
+  voiceNote.style.cssText = 'font-size:12px;color:#64748b;margin-top:10px;line-height:1.6;';
+  voiceNote.innerText = '请保持页面前台；允许通知后，叫号时可在后台弹出提醒';
+  document.getElementById('main-content').appendChild(voiceNote);
 
   function speak(text) {
     if (!('speechSynthesis' in window) || !isVoiceEnabled) return;
@@ -132,13 +144,32 @@
     window.speechSynthesis.speak(u);
   }
 
+  function notify(title, body) {
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        const n = new Notification(title, { body, tag: code, requireInteraction: true })
+        n.onclick = () => { try { window.focus() } catch (e) {} ; n.close() }
+      }
+    } catch (e) { /* 微信等环境不支持系统通知 */ }
+  }
+
+  function applyAcked() {
+    const cs = document.getElementById('calling-screen')
+    cs.classList.remove('calling-mode')
+    cs.style.background = '#0f172a'
+    const ackBtn = document.getElementById('btn-ack')
+    if (ackBtn) ackBtn.style.display = 'none'
+    const note = document.getElementById('ack-note')
+    if (note) note.style.display = 'block'
+    document.title = '✅ 已确认，请前往码头'
+  }
+
   function markUpdated() {
     const el = document.getElementById('disp-updated');
     if (el) el.innerText = '更新于 ' + new Date().toLocaleTimeString();
   }
 
-  function getLocation() {
-    return new Promise((resolve, reject) => {
+  function getLocation() {    return new Promise((resolve, reject) => {
       if (!navigator.geolocation) return reject(new Error('当前浏览器不支持定位'));
       navigator.geolocation.getCurrentPosition(
         (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
@@ -303,11 +334,18 @@
         isCalling = true;
         document.getElementById('main-content').style.display = 'none';
         document.getElementById('calling-screen').style.display = 'flex';
-        if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500, 1000]);
-        speak(`请前往${info.assigned_dock || ''}卸货`);
+        document.title = '📢 请前往' + (info.assigned_dock || '') + ' 卸货';
+        if (acked) {
+          applyAcked();
+        } else {
+          if (document.hidden) notify('仓库叫号', '请前往 ' + (info.assigned_dock || '') + ' 卸货');
+          if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500, 1000]);
+          speak(`请前往${info.assigned_dock || ''}卸货`);
+        }
       }
     } else if (info.queue_status === 'done') {
       removeCheckinButton();
+      document.title = '✅ 已完成';
       isDone = true;
       isCalling = false;
       if (timer) clearInterval(timer);
@@ -320,8 +358,39 @@
     }
   }
 
+  // 司机确认收到叫号
+  document.getElementById('btn-ack').onclick = async () => {
+    const ackBtn = document.getElementById('btn-ack')
+    ackBtn.disabled = true
+    ackBtn.innerText = '确认中...'
+    try {
+      const { data, error } = await supabase.rpc('driver_ack', { p_code: code })
+      if (error) throw error
+      const r = Array.isArray(data) ? data[0] : data
+      if (!r || !r.ok) {
+        alert((r && r.message) || '确认失败')
+        ackBtn.disabled = false
+        ackBtn.innerText = '✅ 已收到，前往码头'
+        return
+      }
+      acked = true
+      try { localStorage.setItem('dock_ack_' + code, '1') } catch (e) {}
+      applyAcked()
+    } catch (e) {
+      alert('确认失败：' + (e.message || e))
+      ackBtn.disabled = false
+      ackBtn.innerText = '✅ 已收到，前往码头'
+    }
+  }
+
   checkStatus();
   timer = setInterval(checkStatus, 5000);
+
+  try {
+    supabase.channel('queue-' + code)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'bill_order', filter: 'appointment_code=eq.' + code }, () => checkStatus())
+      .subscribe()
+  } catch (e) { console.warn('realtime 订阅失败', e) }
 })();
 </script>
 </body>
