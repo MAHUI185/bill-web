@@ -4728,9 +4728,20 @@ async function renderDockQueue(v) {
     loadData()
   }
 
+  async function sweepPending(key, code) {
+    await byKey(
+      ctx.supabase.from('bill_order')
+        .update({ queue_status: 'waiting', check_in_time: new Date().toISOString() })
+        .eq('queue_status', 'pending'),
+      key, code
+    )
+  }
+
   async function callVehicle(key, code, wh) {
     const dock = await pickDock(wh)
     if (!dock) return
+
+    await sweepPending(key, code)
 
     const { data: updated, error } = await byKey(
       ctx.supabase.from('bill_order')
@@ -4771,6 +4782,8 @@ async function renderDockQueue(v) {
     if (!confirm(`系统推送下一辆：${r.appointment_code}\n${r.vendor_names || ''} · ${r.boxes || 0} 箱\n请选择码头`)) return
     const dock = await pickDock(r.warehouse_code)
     if (!dock) return
+
+    await sweepPending(r.vehicle_key, r.appointment_code)
 
     const { data: updated, error: upErr } = await byKey(
       ctx.supabase.from('bill_order')
