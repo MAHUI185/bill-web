@@ -1249,45 +1249,28 @@ async function renderFill(view) {
       const date = validIn[0]?.arrival_date;
       if (!date) return msgEl.innerHTML = msg('请先填写到仓日期', false);
 
-      // ★ 同一厂商 + 同一到仓日 + 同一仓库只保留一个预约码（物流商同规则）
-      let lookupVendorId = currentUser.id
-      if (isLogistics || isAdminDelegate) {
-        const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
-        if (vp) lookupVendorId = vp.id
-      }
+      // ★ 厂商自送：同一厂商 + 同一到仓日 + 同一仓库复用预约码
+      // 物流商不在这里复用，选完时段后按“同一司机”合并；
+      // 越库排队（上午）与入库单（下午）时段规则不同，不再并入入库单
+      let existingAppt = null
+      if (!isLogistics) {
+        let lookupVendorId = currentUser.id
+        if (isAdminDelegate) {
+          const { data: vp } = await supabase.from('vendor_profile').select('id').eq('vendor_code', myVendorCode).maybeSingle()
+          if (vp) lookupVendorId = vp.id
+        }
 
-      let existQ = supabase.from('bill_order')
-        .select('appointment_code, bill_type, arrival_time_slot, driver_name, driver_phone, queue_status, check_in_time, assigned_dock, call_time, vehicle_key, warehouse_code')
-        .eq('vendor_id', lookupVendorId)
-        .eq('warehouse_code', myWhs[0])
-        .eq('arrival_date', date)
-        .not('appointment_code', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(1)
-      // 物流商：正常单按“同一司机”在选完时段后再合并，这里只自动识别无单预约
-      if (isLogistics) existQ = existQ.eq('bill_type', '无单预约')
-      const { data: existRows } = await existQ
+        const { data: existRows } = await supabase.from('bill_order')
+          .select('appointment_code, bill_type, arrival_time_slot, driver_name, driver_phone, queue_status, check_in_time, assigned_dock, call_time, vehicle_key, warehouse_code')
+          .eq('vendor_id', lookupVendorId)
+          .eq('warehouse_code', myWhs[0])
+          .eq('arrival_date', date)
+          .neq('bill_type', '无单预约')
+          .not('appointment_code', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(1)
 
-      const existingAppt = (existRows && existRows[0]) || null
-
-      if (existingAppt && existingAppt.bill_type === '无单预约') {
-        if (validOut.length) return msgEl.innerHTML = msg('该到仓日已有越库排队，请先清空出库行，入库会自动并入该预约', false)
-        const ok = confirm(`该到仓日已有越库排队 ${existingAppt.appointment_code}（时段 ${existingAppt.arrival_time_slot}），本次 ${totalBoxes} 箱将自动并入，是否继续？`)
-        if (!ok) return
-
-        msgEl.innerHTML = msg('正在并入预约...', true)
-        const { data: ret, error } = await supabase.rpc('submit_walkin_orders', {
-          p_code: existingAppt.appointment_code,
-          p_rows: buildWalkinRows()
-        })
-        if (error) return msgEl.innerHTML = msg('并入失败：' + error.message, false)
-        const res = Array.isArray(ret) ? ret[0] : ret
-        if (!res || !res.ok) return msgEl.innerHTML = msg((res && res.message) || '并入失败', false)
-        msgEl.innerHTML = msg(`${res.message}（时段 ${existingAppt.arrival_time_slot}）`, true)
-        inRows = [newInRowForVendor(myVendorCode)]
-        outRows = [newOutRowForVendor(myVendorCode)]
-        setTimeout(() => render(), 1200)
-        return
+        existingAppt = (existRows && existRows[0]) || null
       }
 
       if (existingAppt) {
