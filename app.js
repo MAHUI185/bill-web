@@ -1082,9 +1082,9 @@ async function renderFill(view) {
         const sel = modal.querySelector('#wk-slot')
         if (!wh || !d) { sel.innerHTML = '<option value="">请选择仓库和日期</option>'; return }
         sel.innerHTML = '<option value="">加载中...</option>'
-        const { data, error } = await supabase.rpc('get_available_slots', { p_warehouse: wh, p_date: d })
+        const { data, error } = await supabase.rpc('get_available_slots', { p_warehouse: wh, p_date: d, p_kind: 'walkin' })
         if (error) { sel.innerHTML = '<option value="">时段加载失败</option>'; return }
-        sel.innerHTML = (data || []).map(s => `<option value="${s.slot_name}" ${Number(s.remaining_boxes) <= 0 ? 'disabled' : ''}>${s.slot_name}（余 ${s.remaining_boxes} 箱）</option>`).join('') || '<option value="">该日期未配置时段</option>'
+        sel.innerHTML = (data || []).map(s => `<option value="${s.slot_name}" ${Number(s.remaining_boxes) <= 0 ? 'disabled' : ''}>${s.slot_name}（余 ${s.remaining_boxes} 箱）</option>`).join('') || '<option value="">该日期无可预约时段（仅限 12:00 前）</option>'
       }
       modal.querySelector('#wk-wh').onchange = loadSlots
       modal.querySelector('#wk-date').onchange = loadSlots
@@ -1295,11 +1295,12 @@ async function renderFill(view) {
       // 4. 请求可用时间段
       const { data: slots, error: slotErr } = await supabase.rpc('get_available_slots', {
         p_warehouse: myWhs[0],
-        p_date: date
+        p_date: date,
+        p_kind: 'inbound'
       });
 
       if (slotErr || !slots || slots.length === 0) {
-        msgEl.innerHTML = msg('该日期未配置月台产能，或加载失败。', false)
+        msgEl.innerHTML = msg('该日期无可预约时段（入库单仅限 12:00 之后），或加载失败。', false)
         return
       }
 
