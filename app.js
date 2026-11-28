@@ -1058,7 +1058,14 @@ async function renderFill(view) {
           <p style="font-size:13px;color:#666;margin-bottom:16px;">仅用于司机排队（越库），不会生成商品单据。</p>
           <div class="row">
             <div><label>仓库 *</label><select id="wk-wh">${myWhs.map(w => `<option value="${w}">${w}</option>`).join('')}</select></div>
-            <div><label>到仓日期 *</label><input id="wk-date" type="date" value="${addDays(todayBj(), 1)}" /></div>
+            <div><label>到仓日期 *</label>
+              <select id="wk-date">
+                ${[1, 2, 3].map(n => {
+                  const d = addDays(todayBj(), n)
+                  return `<option value="${d}">${d}（T+${n}）</option>`
+                }).join('')}
+              </select>
+            </div>
           </div>
           <div><label>时段 *</label><select id="wk-slot"><option value="">加载中...</option></select></div>
           <div class="row">

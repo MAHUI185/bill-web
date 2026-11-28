@@ -64,24 +64,33 @@
   <button id="btn-ack" style="margin-top: 28px; padding: 16px 30px; border: none; border-radius: 12px; background: #fff; color: #b91c1c; font-size: 20px; font-weight: bold;">✅ 已收到，前往码头</button>
 </div>
 
-<!-- 司机免扫码：按手机号查看名下预约 -->
+<!-- 司机免扫码：姓名 + 手机号查看名下预约 -->
 <div class="container" id="phone-view" style="display:none;">
-  <h1 style="font-size: 26px; margin-bottom: 20px;">🚚 我的排队</h1>
-
-  <div class="card">
-    <div class="title">绑定手机号</div>
-    <p style="font-size:13px;color:#94a3b8;margin:6px 0 12px;line-height:1.6;">绑定后再次打开免扫码，直接查看名下预约和排队状态。</p>
-    <input id="drv-phone" inputmode="numeric" placeholder="请输入司机手机号"
-      style="width:100%;padding:12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:16px;margin-bottom:10px;" />
-    <button class="btn-active" id="drv-bind" style="margin-top:0;">查看我的排队</button>
-    <div id="drv-msg" style="font-size:13px;color:#fbbf24;margin-top:10px;"></div>
+  <div id="drv-main" style="display:none;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <a href="javascript:void(0)" id="drv-back" style="color:#38bdf8;font-size:15px;text-decoration:none;">← 返回</a>
+      <a href="javascript:void(0)" id="drv-exit" style="color:#fca5a5;font-size:15px;text-decoration:none;">退出</a>
+    </div>
+    <h1 style="font-size: 26px; margin-bottom: 20px;">🚚 我的排队</h1>
+    <div id="drv-list"></div>
+    <div class="footer" style="position:static;margin-top:16px;">
+      <span id="drv-updated">--</span>
+      <span id="drv-who"></span>
+    </div>
   </div>
 
-  <div id="drv-list"></div>
-
-  <div class="footer" style="position:static;margin-top:16px;">
-    <span id="drv-updated">--</span>
-    <a href="javascript:void(0)" id="drv-switch">切换手机号</a>
+  <div id="drv-login">
+    <h1 style="font-size: 26px; margin-bottom: 20px;">🚚 我的排队</h1>
+    <div class="card">
+      <div class="title">绑定司机</div>
+      <p style="font-size:13px;color:#94a3b8;margin:6px 0 12px;line-height:1.6;">输入姓名和手机号，绑定后再次打开免扫码，直接查看名下预约和排队状态。</p>
+      <input id="drv-name" placeholder="司机姓名"
+        style="width:100%;padding:12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:16px;margin-bottom:10px;" />
+      <input id="drv-phone" inputmode="numeric" placeholder="司机手机号"
+        style="width:100%;padding:12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:16px;margin-bottom:10px;" />
+      <button class="btn-active" id="drv-bind" style="margin-top:0;">进入我的排队</button>
+      <div id="drv-msg" style="font-size:13px;color:#fbbf24;margin-top:10px;"></div>
+    </div>
   </div>
 </div>
 
@@ -180,25 +189,54 @@
   }
 
   function initPhoneView() {
-    const KEY = 'dock_driver_phone';
+    const KEY_PHONE = 'dock_driver_phone';
+    const KEY_NAME = 'dock_driver_name';
+    const nameEl = document.getElementById('drv-name');
     const phoneEl = document.getElementById('drv-phone');
     const msgEl = document.getElementById('drv-msg');
     const listEl = document.getElementById('drv-list');
-    let phone = localStorage.getItem(KEY) || '';
+    const loginEl = document.getElementById('drv-login');
+    const mainEl = document.getElementById('drv-main');
+    let name = localStorage.getItem(KEY_NAME) || '';
+    let phone = localStorage.getItem(KEY_PHONE) || '';
     let refreshTimer = null;
 
     const statusText = { pending: '⏳ 待签到', waiting: '🚚 排队中', calling: '📢 已叫号', done: '✅ 已完成' };
 
-    async function load() {
-      if (!phone) return;
-      const { data, error } = await supabase.rpc('driver_appointments', { p_phone: phone });
-      if (error) { msgEl.innerText = '加载失败：' + error.message; return; }
+    function stopTimer() {
+      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    }
+
+    function showLogin() {
+      stopTimer();
+      loginEl.style.display = 'block';
+      mainEl.style.display = 'none';
+      nameEl.value = name;
+      phoneEl.value = phone;
       msgEl.innerText = '';
+    }
+
+    function showMain() {
+      loginEl.style.display = 'none';
+      mainEl.style.display = 'block';
+      document.getElementById('drv-who').innerText = name + ' · ' + phone;
+      load();
+      stopTimer();
+      refreshTimer = setInterval(load, 10000);
+    }
+
+    async function load() {
+      if (!phone || !name) return;
+      const { data, error } = await supabase.rpc('driver_appointments', { p_phone: phone, p_name: name });
+      if (error) {
+        listEl.innerHTML = '<div class="card" style="text-align:center;color:#f87171;">加载失败：' + error.message + '</div>';
+        return;
+      }
       document.getElementById('drv-updated').innerText = '更新于 ' + new Date().toLocaleTimeString();
 
       const rows = data || [];
       if (!rows.length) {
-        listEl.innerHTML = '<div class="card" style="text-align:center;color:#94a3b8;">未找到该手机号的预约，请确认手机号或扫预约码</div>';
+        listEl.innerHTML = '<div class="card" style="text-align:center;color:#94a3b8;">未找到该姓名和手机号的预约，请核对或扫预约码</div>';
         return;
       }
 
@@ -215,32 +253,34 @@
         </a>`).join('');
     }
 
-    function bindPhone(p) {
+    function bind() {
+      const n = nameEl.value.trim();
+      const p = phoneEl.value.trim();
+      if (!n) { msgEl.innerText = '请输入司机姓名'; return; }
+      if (p.length < 6) { msgEl.innerText = '请输入正确的手机号'; return; }
+      name = n;
       phone = p;
-      localStorage.setItem(KEY, p);
-      phoneEl.value = p;
-      load();
-      if (refreshTimer) clearInterval(refreshTimer);
-      refreshTimer = setInterval(load, 10000);
+      localStorage.setItem(KEY_NAME, n);
+      localStorage.setItem(KEY_PHONE, p);
+      showMain();
     }
 
-    phoneEl.value = phone;
-    document.getElementById('drv-bind').onclick = () => {
-      const p = phoneEl.value.trim();
-      if (p.length < 6) { msgEl.innerText = '请输入正确的手机号'; return; }
-      bindPhone(p);
-    };
-    document.getElementById('drv-switch').onclick = () => {
-      localStorage.removeItem(KEY);
+    document.getElementById('drv-bind').onclick = bind;
+    document.getElementById('drv-back').onclick = () => showLogin();
+    document.getElementById('drv-exit').onclick = () => {
+      localStorage.removeItem(KEY_NAME);
+      localStorage.removeItem(KEY_PHONE);
+      name = '';
       phone = '';
+      nameEl.value = '';
       phoneEl.value = '';
       listEl.innerHTML = '';
-      msgEl.innerText = '';
-      if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-      phoneEl.focus();
+      showLogin();
+      nameEl.focus();
     };
 
-    if (phone) bindPhone(phone);
+    if (name && phone) showMain();
+    else showLogin();
   }
 
   function ensureCheckinButton() {
