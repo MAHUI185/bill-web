@@ -4588,7 +4588,7 @@ async function renderDockQueue(v) {
         </div>
 
         <div style="display:flex;gap:18px;font-size:13px;color:#666;margin-bottom:12px;flex-wrap:wrap;">
-          <span>排队中 <b>${total}</b></span>
+          <span>排队中 <b>${stats.waiting || 0}</b></span>
           <span>待签到 <b style="color:#1677ff;">${stats.pending || 0}</b></span>
           <span>待叫车 <b style="color:#d46b08;">${stats.waiting || 0}</b></span>
           <span>卸货中 <b style="color:#cf1322;">${stats.calling || 0}</b></span>

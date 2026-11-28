@@ -2093,58 +2093,90 @@ async function renderCheckin(view) {
     </div>`
 
   const body = document.getElementById('ck-body')
-  let q = supabase.from('bill_order')
-    .select('appointment_code, vendor_name, warehouse_code, arrival_date, arrival_time_slot, box_qty, driver_name, driver_phone, queue_status, bill_type, created_at')
-    .not('appointment_code', 'is', null)
-    .order('created_at', { ascending: false })
-    .limit(2000)
-
-  if (isLogistics) {
-    const codes = (myVendors || []).map(v => v.vendor_code).filter(Boolean)
-    if (!codes.length) {
-      body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>'
-      return
-    }
-    q = q.in('vendor_code', codes)
-  } else if (!isAdmin) {
-    q = q.eq('vendor_id', currentUser.id)
-  }
-
-  const { data, error } = await q
-  if (error) {
-    body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
-    return
-  }
-
-  const map = new Map()
-  ;(data || []).forEach(r => {
-    const code = r.appointment_code
-    let g = map.get(code)
-    if (!g) {
-      g = {
-        code, vendors: new Set(), warehouse: r.warehouse_code || '',
-        date: r.arrival_date || '', slot: r.arrival_time_slot || '',
-        boxes: 0, driver: r.driver_name || '', phone: r.driver_phone || '',
-        status: r.queue_status || 'pending', noOrder: r.bill_type === '无单预约',
-        created: r.created_at
-      }
-      map.set(code, g)
-    }
-    if (r.vendor_name) g.vendors.add(r.vendor_name)
-    g.boxes += Number(r.box_qty) || 0
-    if (r.bill_type !== '无单预约') g.noOrder = false
-    if (r.queue_status === 'calling') g.status = 'calling'
-    else if (g.status !== 'calling') g.status = r.queue_status || g.status
-  })
-
-  const groups = Array.from(map.values()).sort((a, b) => new Date(b.created) - new Date(a.created))
   const statusText = { pending: '待签到', waiting: '排队中', calling: '叫号中', done: '已完成' }
+  const rank = { done: 0, pending: 1, waiting: 2, calling: 3 }
 
   let page = 0
   const pageSize = 20
   let keyword = ''
   let statusFilter = 'pending'
   let dateFilter = todayBj()
+  let groups = []
+
+  async function fetchData() {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">加载中...</td></tr>'
+
+    let q = supabase.from('bill_order')
+      .select('appointment_code, vehicle_key, vendor_name, warehouse_code, arrival_date, arrival_time_slot, box_qty, driver_name, driver_phone, queue_status, bill_type, created_at')
+      .not('appointment_code', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(2000)
+
+    if (isLogistics) {
+      const codes = (myVendors || []).map(v => v.vendor_code).filter(Boolean)
+      if (!codes.length) {
+        body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#cf1322;">未配置负责厂商。</td></tr>'
+        return
+      }
+      q = q.in('vendor_code', codes)
+    } else if (!isAdmin) {
+      q = q.eq('vendor_id', currentUser.id)
+    }
+
+    const { data, error } = await q
+    if (error) {
+      body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#cf1322;">加载失败：${error.message}</td></tr>`
+      return
+    }
+
+    // 先按预约码聚合，再按车辆（同车 N 个码）聚合
+    const codeMap = new Map()
+    ;(data || []).forEach(r => {
+      const code = r.appointment_code
+      let cg = codeMap.get(code)
+      if (!cg) {
+        cg = {
+          code, vehicleKey: r.vehicle_key || ('AP|' + code),
+          vendors: new Set(), warehouse: r.warehouse_code || '',
+          date: r.arrival_date || '', slot: r.arrival_time_slot || '',
+          boxes: 0, driver: r.driver_name || '', phone: r.driver_phone || '',
+          status: r.queue_status || 'pending', noOrder: r.bill_type === '无单预约',
+          created: r.created_at
+        }
+        codeMap.set(code, cg)
+      }
+      if (r.vendor_name) cg.vendors.add(r.vendor_name)
+      cg.boxes += Number(r.box_qty) || 0
+      if (r.bill_type !== '无单预约') cg.noOrder = false
+      if (r.queue_status === 'calling') cg.status = 'calling'
+      else if (cg.status !== 'calling') cg.status = r.queue_status || cg.status
+    })
+
+    const vMap = new Map()
+    codeMap.forEach(cg => {
+      let vg = vMap.get(cg.vehicleKey)
+      if (!vg) {
+        vg = {
+          key: cg.vehicleKey, codes: [], vendors: new Set(),
+          warehouse: cg.warehouse, date: cg.date, slots: new Set(),
+          boxes: 0, driver: cg.driver, phone: cg.phone,
+          status: cg.status, created: cg.created
+        }
+        vMap.set(cg.vehicleKey, vg)
+      }
+      vg.codes.push(cg)
+      cg.vendors.forEach(v => vg.vendors.add(v))
+      if (cg.slot) vg.slots.add(cg.slot)
+      vg.boxes += cg.boxes
+      if (!vg.driver && cg.driver) vg.driver = cg.driver
+      if (!vg.phone && cg.phone) vg.phone = cg.phone
+      if ((rank[cg.status] || 0) > (rank[vg.status] || 0)) vg.status = cg.status
+      if (new Date(cg.created) > new Date(vg.created)) vg.created = cg.created
+    })
+
+    groups = Array.from(vMap.values()).sort((a, b) => new Date(b.created) - new Date(a.created))
+    renderRows()
+  }
 
   function filtered() {
     const kw = keyword.trim().toLowerCase()
@@ -2152,7 +2184,7 @@ async function renderCheckin(view) {
       if (dateFilter && g.date !== dateFilter) return false
       if (statusFilter !== 'all' && g.status !== statusFilter) return false
       if (!kw) return true
-      const hay = [g.code, Array.from(g.vendors).join(' '), g.warehouse, g.driver, g.phone].join(' ').toLowerCase()
+      const hay = [g.codes.map(c => c.code).join(' '), Array.from(g.vendors).join(' '), g.warehouse, g.driver, g.phone].join(' ').toLowerCase()
       return hay.indexOf(kw) >= 0
     })
   }
@@ -2163,27 +2195,36 @@ async function renderCheckin(view) {
     if (page >= totalPages) page = totalPages - 1
     const slice = list.slice(page * pageSize, page * pageSize + pageSize)
 
-    body.innerHTML = slice.map(g => `<tr>
-      <td><b style="font-size:15px;color:#1677ff;">${g.code}</b>${g.noOrder ? '<br><span style="font-size:12px;color:#d46b08;">越库排队</span>' : ''}</td>
-      <td>${Array.from(g.vendors).join('、') || '-'}</td>
-      <td>${g.warehouse}</td>
-      <td>${g.date}<br><span style="font-size:12px;color:#666;">${g.slot}</span></td>
-      <td>${g.boxes} 箱</td>
-      <td>${g.driver}<br><span style="font-size:12px;color:#999;">${g.phone}</span></td>
-      <td>${statusText[g.status] || g.status}</td>
-      <td style="white-space:nowrap;">
-        <button class="small secondary" data-copy="${g.code}">复制码</button>
-        <button class="small" data-qr="${g.code}">下载二维码</button>
-        <a href="https://bill.mahui.pw/track.html?code=${g.code}&v=20261123" target="_blank" style="font-size:12px;margin-left:6px;">排队进度</a>
-        ${g.noOrder ? (g.status === 'pending'
-          ? `<button class="small danger" data-del-appt="${g.code}" style="margin-top:6px;">删除预约</button>`
-          : '<div style="font-size:12px;color:#999;margin-top:4px;">已签到，不能删除</div>') : ''}
-      </td>
-    </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无记录</td></tr>'
+    body.innerHTML = slice.map(g => {
+      const codes = g.codes.map(c => c.code)
+      const first = codes[0]
+      const multi = codes.length > 1
+      const allWalkin = g.codes.every(c => c.noOrder)
+      const someWalkin = g.codes.some(c => c.noOrder)
+      const slot = g.slots.size > 1 ? '多个时段' : (codes.length ? g.codes[0].slot : '')
+
+      const del = g.codes.find(c => c.noOrder && c.status === 'pending')
+
+      return `<tr>
+        <td><b style="font-size:15px;color:#1677ff;">${first}</b>${multi ? `<br><span style="font-size:12px;color:#1677ff;">同车 ${codes.length} 个码</span>` : ''}${allWalkin ? '<br><span style="font-size:12px;color:#d46b08;">越库排队</span>' : (someWalkin ? '<br><span style="font-size:12px;color:#d46b08;">含越库</span>' : '')}</td>
+        <td>${Array.from(g.vendors).join('、') || '-'}</td>
+        <td>${g.warehouse}</td>
+        <td>${g.date}<br><span style="font-size:12px;color:#666;">${slot}</span></td>
+        <td>${g.boxes} 箱</td>
+        <td>${g.driver || '-'}<br><span style="font-size:12px;color:#999;">${g.phone || ''}</span></td>
+        <td>${statusText[g.status] || g.status}</td>
+        <td style="white-space:nowrap;">
+          <button class="small secondary" data-copy="${first}">复制码</button>
+          <button class="small" data-qr="${first}">下载二维码</button>
+          <a href="https://bill.mahui.pw/track.html?code=${first}&v=20261123" target="_blank" style="font-size:12px;margin-left:6px;">排队进度</a>
+          ${del ? `<button class="small danger" data-del-appt="${del.code}" style="margin-top:6px;">删除越库码</button>` : ''}
+        </td>
+      </tr>`
+    }).join('') || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无记录</td></tr>'
 
     const el = document.getElementById('ck-pagination')
     el.innerHTML = `
-      <span style="font-size:13px;color:#666;">共 ${list.length} 条，第 ${page + 1} / ${totalPages} 页</span>
+      <span style="font-size:13px;color:#666;">共 ${list.length} 车，第 ${page + 1} / ${totalPages} 页</span>
       <button class="secondary small" id="ck-prev" ${page === 0 ? 'disabled' : ''} style="${page === 0 ? 'opacity:.5;' : ''}">上一页</button>
       <button class="secondary small" id="ck-next" ${page >= totalPages - 1 ? 'disabled' : ''} style="${page >= totalPages - 1 ? 'opacity:.5;' : ''}">下一页</button>`
     document.getElementById('ck-prev').onclick = () => { if (page > 0) { page--; renderRows() } }
@@ -2191,13 +2232,12 @@ async function renderCheckin(view) {
 
     view.querySelectorAll('[data-copy]').forEach(b => {
       b.onclick = async () => {
-        const code = b.dataset.copy
         try {
-          await navigator.clipboard.writeText(code)
+          await navigator.clipboard.writeText(b.dataset.copy)
           b.innerText = '已复制'
           setTimeout(() => { b.innerText = '复制码' }, 1500)
         } catch (e) {
-          prompt('复制预约码', code)
+          prompt('复制预约码', b.dataset.copy)
         }
       }
     })
@@ -2208,7 +2248,7 @@ async function renderCheckin(view) {
 
     view.querySelectorAll('[data-del-appt]').forEach(b => {
       b.onclick = async () => {
-        if (!confirm('确定删除该越库排队？删除后释放该时段产能，且不可恢复。')) return
+        if (!confirm('确定删除该越库排队码？删除后释放该时段产能，且不可恢复。')) return
         b.disabled = true
         const { error } = await supabase.from('bill_order').delete()
           .eq('appointment_code', b.dataset.delAppt)
@@ -2218,8 +2258,7 @@ async function renderCheckin(view) {
           b.disabled = false
           return
         }
-        groups.splice(groups.findIndex(g => g.code === b.dataset.delAppt), 1)
-        renderRows()
+        fetchData()
       }
     })
   }
@@ -2229,7 +2268,7 @@ async function renderCheckin(view) {
     statusFilter = document.getElementById('ck-status').value
     keyword = document.getElementById('ck-search').value
     page = 0
-    renderRows()
+    fetchData()
   }
   document.getElementById('btn-ck-search').onclick = applyFilters
   document.getElementById('ck-search').onkeydown = (e) => {
@@ -2264,8 +2303,10 @@ async function renderCheckin(view) {
     }
   })
 
-  renderRows()
+  fetchData()
 }
+
+
 function downloadQrCode(code) {
   const url = `https://bill.mahui.pw/track.html?code=${code}&v=20261123`
   if (!window.QRCode) {
