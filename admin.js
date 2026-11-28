@@ -4304,6 +4304,11 @@ async function renderDockCapacity(v) {
   const { data: whs } = await ctx.supabase.from('warehouse').select('*').eq('status', 1)
   const { data: list } = await ctx.supabase.from('dock_capacity').select('*').order('warehouse_code').order('start_time')
 
+  const hhmm = (t) => {
+    const m = String(t || '').match(/^(\d{1,2}):(\d{2})/)
+    return m ? `${m[1].padStart(2, '0')}:${m[2]}` : ''
+  }
+
   v.innerHTML = `
     <div class="card" style="box-shadow:none;padding:16px; margin-bottom:16px;">
       <h2>新增月台产能配置</h2>
@@ -4335,9 +4340,12 @@ async function renderDockCapacity(v) {
             ${(list||[]).map(r => `<tr>
               <td>${r.warehouse_code}</td>
               <td>${r.day_type === 'all' ? '全部' : r.day_type === 'weekday' ? '工作日' : '周末'}</td>
-              <td>${r.start_time} - ${r.end_time}</td>
+              <td>${hhmm(r.start_time)} - ${hhmm(r.end_time)}</td>
               <td style="font-weight:bold; color:#1677ff;">${r.max_boxes}</td>
-              <td>${isSuper() ? `<button class="small danger" data-del="${r.id}">删除</button>` : ''}</td>
+              <td style="white-space:nowrap;">
+                <button class="small secondary" data-edit="${r.id}" data-start="${hhmm(r.start_time)}" data-end="${hhmm(r.end_time)}" data-max="${r.max_boxes}">编辑</button>
+                ${isSuper() ? `<button class="small danger" data-del="${r.id}" style="margin-left:6px;">删除</button>` : ''}
+              </td>
             </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:#999;">无配置</td></tr>'}
           </tbody>
         </table>
@@ -4372,6 +4380,48 @@ async function renderDockCapacity(v) {
       const { error } = await ctx.supabase.from('dock_capacity').delete().eq('id', b.dataset.del)
       if (error) return alert(ctx.translateError(error.message))
       renderDockCapacity(v)
+    }
+  })
+
+  v.querySelectorAll('[data-edit]').forEach(b => {
+    b.onclick = () => {
+      const modal = document.createElement('div')
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;'
+      modal.innerHTML = `
+        <div style="background:#fff;border-radius:12px;padding:24px;width:380px;max-width:100%;">
+          <h3 style="margin-bottom:16px;">编辑产能配置</h3>
+          <div class="row">
+            <div><label>开始时间</label><input type="time" id="ec-start" value="${b.dataset.start}" /></div>
+            <div><label>结束时间</label><input type="time" id="ec-end" value="${b.dataset.end}" /></div>
+          </div>
+          <div><label>最大接收量(箱)</label><input type="number" id="ec-max" min="1" value="${b.dataset.max}" /></div>
+          <div id="ec-msg" style="margin-top:8px;"></div>
+          <div style="text-align:right;margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+            <button class="secondary" id="ec-cancel">取消</button>
+            <button id="ec-save">保存</button>
+          </div>
+        </div>`
+      document.body.appendChild(modal)
+      const close = () => modal.remove()
+      modal.querySelector('#ec-cancel').onclick = close
+
+      modal.querySelector('#ec-save').onclick = async () => {
+        const start = modal.querySelector('#ec-start').value
+        const end = modal.querySelector('#ec-end').value
+        const max = Number(modal.querySelector('#ec-max').value)
+        const msgEl = modal.querySelector('#ec-msg')
+        if (!start || !end || !max) return msgEl.innerHTML = ctx.msg('必填项不能为空', false)
+        if (start >= end) return msgEl.innerHTML = ctx.msg('开始时间必须早于结束时间', false)
+
+        msgEl.innerHTML = ctx.msg('保存中...', true)
+        const { error } = await ctx.supabase.from('dock_capacity')
+          .update({ start_time: start, end_time: end, max_boxes: max })
+          .eq('id', b.dataset.edit)
+        if (error) return msgEl.innerHTML = ctx.msg(ctx.translateError(error.message), false)
+
+        close()
+        renderDockCapacity(v)
+      }
     }
   })
 }
